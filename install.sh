@@ -890,7 +890,9 @@ ok "pnpm $(pnpm --version) ready."
 # ── Install OpenClaude ────────────────────────────────────────────────────────
 if ! command -v openclaude &>/dev/null; then
     step "Installing OpenClaude coding agent..."
-    npm install -g @gitlawb/openclaude
+    mkdir -p ~/.local/lib ~/.local/bin
+    npm install @gitlawb/openclaude --prefix ~/.local
+    export PATH="$HOME/.local/bin:$PATH"
     if command -v openclaude &>/dev/null; then
         ok "OpenClaude installed."
     else
