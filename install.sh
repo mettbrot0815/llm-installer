@@ -206,10 +206,11 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
         register_tmp "/tmp/cuda-keyring.deb"
         sudo dpkg -i /tmp/cuda-keyring.deb
         sudo apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-4
         ok "CUDA toolkit 12.6 installed."
     fi
     export CUDA_HOME="/usr/local/cuda"
+    export CUDA_PATH="/usr/local/cuda"
     export PATH="/usr/local/cuda/bin:${PATH}"
     export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 fi
