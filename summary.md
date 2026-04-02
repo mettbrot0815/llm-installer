@@ -199,6 +199,15 @@ Services automatically restart on failure and start on system boot.
 - ✅ Process monitoring works
 - ✅ Manual control commands work
 
+## Video Generation Removal
+
+**Removed entire text-to-video generation section** as requested:
+- **Size reduction**: ~258 lines removed (1956 → 1698 lines)
+- **Dependencies removed**: No longer installs diffusers, torch, opencv-python, imageio, etc.
+- **Scripts removed**: generate_video.py, generate-video wrapper, genvideo symlink
+- **PATH cleanup**: Removed llm-video from system PATH
+- **Faster installs**: No more 2GB+ video dependency downloads
+
 ## Files Modified
 
 - `install.sh`: Main installation script with all fixes
