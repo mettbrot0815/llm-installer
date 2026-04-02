@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes Agent + Qwen Code
+#  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes Agent
 #
 #  Replicates @sudoingX setup (RTX 3060 12GB, Qwen3.5 9B Q4_K_M):
 #    - llama.cpp CUDA build: Flash Attention + KV cache quantisation
 #    - GGUF model from HuggingFace (optional HF token)
 #    - llama-server: -ngl 99 -fa on -c <ctx> -np 1
 #      --cache-type-k q4_0 --cache-type-v q4_0
-#    - Hermes Agent + Qwen Code → http://localhost:8080/v1
+#    - Hermes Agent → http://localhost:8080/v1
 #    - SOUL.md identity, local compression, ccache, AGENTS.md scaffold
 #
 #  CUDA note: GPU driver lives in Windows. NEVER install cuda-drivers or the
