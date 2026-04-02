@@ -865,29 +865,27 @@ else
     git clone https://github.com/outsourc-e/hermes-workspace.git "${WORKSPACE_DIR}" 2>&1 | tail -3
 fi
 
-# ── pnpm installation (local, robust) ────────────────────────────────────────
-step "Installing pnpm locally..."
-export PNPM_HOME="${HOME}/.local/share/pnpm"
-export PATH="${PNPM_HOME}:${PATH}"
-if ! command -v pnpm &>/dev/null; then
-    curl -fsSL https://get.pnpm.io/install.sh | env PNPM_HOME="$PNPM_HOME" bash -
-    # Re-export PATH after installation
-    export PATH="${PNPM_HOME}:${PATH}"
-fi
-if ! command -v pnpm &>/dev/null; then
-    die "pnpm installation failed – please install manually."
-fi
-ok "pnpm $(pnpm --version) ready."
-
 # ── Node.js 24 LTS ────────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]] || [[ "$(node --version 2>/dev/null | sed 's/v//')" != "24."* ]]; then
-    step "Installing Node.js 24 LTS for Workspace..."
+    step "Installing Node.js 24 LTS..."
     curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - 2>/dev/null
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
 else
     ok "Node.js $(node --version) already installed"
 fi
+
+# ── pnpm installation ─────────────────────────────────────────────────────────
+step "Installing pnpm..."
+if ! command -v pnpm &>/dev/null; then
+    npm install -g pnpm
+    export PNPM_HOME="${HOME}/.local/share/pnpm"
+    export PATH="${PNPM_HOME}:${PATH}"
+fi
+if ! command -v pnpm &>/dev/null; then
+    die "pnpm installation failed – please install manually."
+fi
+ok "pnpm $(pnpm --version) ready."
 
 # ── Install OpenClaude ────────────────────────────────────────────────────────
 if ! command -v openclaude &>/dev/null; then
