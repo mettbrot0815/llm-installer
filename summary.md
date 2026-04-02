@@ -199,14 +199,15 @@ Services automatically restart on failure and start on system boot.
 - ✅ Process monitoring works
 - ✅ Manual control commands work
 
-## Video Generation Removal
+## Video Generation (Optional, CUDA-enabled)
 
-**Removed entire text-to-video generation section** as requested:
-- **Size reduction**: ~258 lines removed (1956 → 1698 lines)
-- **Dependencies removed**: No longer installs diffusers, torch, opencv-python, imageio, etc.
-- **Scripts removed**: generate_video.py, generate-video wrapper, genvideo symlink
-- **PATH cleanup**: Removed llm-video from system PATH
-- **Faster installs**: No more 2GB+ video dependency downloads
+**Re-added text-to-video generation** with CUDA support for NVIDIA GPUs:
+- **CUDA acceleration**: Uses GPU for faster video generation
+- **Smart detection**: Only installs if NVIDIA GPU detected + user approval
+- **Dependencies**: diffusers, torch, opencv-python, imageio with CUDA wheels
+- **Scripts included**: generate_video.py with Stable Video Diffusion
+- **PATH integration**: llm-video added to PATH when installed
+- **Command**: `generate-video "your prompt here"`
 
 ## Files Modified
 
