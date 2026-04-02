@@ -232,6 +232,7 @@ MODELS=(
     "10|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active"
     "11|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
     "12|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
+    "13|bartowski/google_gemma-4-4b-it-GGUF|google_gemma-4-4b-it-Q4_K_M.gguf|Gemma 4 4B|2.5|16K|4|0|small|chat,code|Google · latest Gemma"
 )
 
 MODEL_DIR="${HOME}/llm-models"
@@ -416,10 +417,10 @@ case "$SEL_GGUF" in
         SAFE_CTX=131072
         USE_JINJA="--jinja"
         ;;
-    *google_gemma-3*)
+    *google_gemma-3*|*google_gemma-4*)
         SAFE_CTX=131072
         USE_JINJA="--no-jinja"
-        ok "Gemma 3 detected: disabling Jinja template (strict role enforcement)"
+        ok "Gemma detected: disabling Jinja template (strict role enforcement)"
         ;;
     *)
         SAFE_CTX=32768
