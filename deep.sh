@@ -20,7 +20,7 @@ export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 step() { echo -e "\n${CYN}[*] $*${RST}"; }
 ok()   { echo -e "${GRN}[+] $*${RST}"; }
-info() { ok "$*"; }   # alias for consistency
+info() { ok "$*"; }
 warn() { echo -e "${YLW}[!] $*${RST}"; }
 die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
 
@@ -59,7 +59,6 @@ fi
 # =============================================================================
 step "HuggingFace token (optional)..."
 
-# Load HF_TOKEN from ~/.bashrc if present (for non-interactive shells)
 if [[ -f "${HOME}/.bashrc" ]]; then
     HF_TOKEN_FROM_BASH=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null | head -1 | sed 's/.*export HF_TOKEN=//' | sed "s/^[\"']//" | sed "s/[\"']$//")
     if [[ -n "$HF_TOKEN_FROM_BASH" ]]; then
@@ -71,14 +70,11 @@ fi
 
 HF_TOKEN=""
 
-# Priority 1: Environment variable
 if [[ -n "${HF_TOKEN:-}" ]]; then
     ok "HF_TOKEN already set in environment — using it."
-# Priority 2: Token cache file (most reliable)
 elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
     HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null)
     [[ -n "$HF_TOKEN" ]] && ok "HF_TOKEN found in ~/.cache/huggingface/token."
-# Priority 3: ~/.bashrc export (fallback)
 elif grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
     HF_TOKEN=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" | head -1 | \
         sed 's/.*export HF_TOKEN=//' | sed "s/^[\"']//" | sed "s/[\"']$//")
@@ -116,7 +112,6 @@ fi
 
 export HF_TOKEN
 
-# Persist HF_TOKEN to .bashrc if set and not already there
 if [[ -n "$HF_TOKEN" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
     echo "export HF_TOKEN=\"$HF_TOKEN\"" >> "${HOME}/.bashrc"
     ok "HF_TOKEN saved to ~/.bashrc."
@@ -134,7 +129,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     software-properties-common \
     python3 python3-pip python3-venv \
     pciutils wget curl ca-certificates zstd \
-    procps gettext-base   # watch command + envsubst
+    procps gettext-base
 ok "System packages ready."
 
 step "Installing Python 3.11 (Hermes requirement)..."
@@ -217,7 +212,6 @@ fi
 
 # =============================================================================
 #  5. Model selection
-#  Format: idx|hf_repo|gguf_file|display_name|size_gb|ctx|min_ram|min_vram|tier|tags|desc
 # =============================================================================
 MODELS=(
     "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
@@ -233,7 +227,6 @@ MODELS=(
     "11|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
     "12|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
     "13|bartowski/google_gemma-4-4b-it-GGUF|google_gemma-4-4b-it-Q4_K_M.gguf|Gemma 4 4B|2.5|16K|4|0|small|chat,code|Google · latest Gemma"
-    "14|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.5|16K|12|10|mid|chat,code|Google · larger Gemma 4"
 )
 
 MODEL_DIR="${HOME}/llm-models"
@@ -288,7 +281,6 @@ declare -A RECOMMENDED_SET=()
 RECOMMENDED=()
 NUM_MODELS=${#MODELS[@]}
 
-# Use /usr/bin/clear to avoid broken wrapper in ~/.local/bin
 /usr/bin/clear
 echo -e "${BLD}${CYN}"
 cat <<'HDR'
@@ -407,7 +399,6 @@ elif [[ "$GRADE_SEL" == "C" ]]; then
     warn "Grade C — tight fit, expect slow responses."
 fi
 
-# Context window and Jinja template settings per model
 case "$SEL_GGUF" in
     *Qwen3.5*)
         SAFE_CTX=262144
@@ -455,7 +446,6 @@ if ! "$HF_CLI_USED" version &>/dev/null; then
     die "'$HF_CLI_NAME' found at $HF_CLI_USED but fails to run."
 fi
 
-# Update HuggingFace CLI to latest version
 step "Updating HuggingFace CLI to latest version..."
 pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -3
 
@@ -568,13 +558,11 @@ else
 
     cd "$LLAMA_DIR"
 
-    # Don't export CC/CXX as ccache wrappers — interferes with nvcc
     unset CC CXX
 
     if [[ -f "build/bin/llama-server" ]] && [[ -f "/usr/local/bin/llama-server" ]]; then
         echo "  → llama.cpp already built and installed — skipping rebuild"
     else
-        # Wipe build dir if cmake flags differ from last run
         CMAKE_FINGERPRINT_FILE="build/.cmake_flags"
         if [[ "$HAS_NVIDIA" == "true" ]]; then
             CMAKE_FLAGS_HASH="CUDA-FA_ALL_QUANTS"
@@ -607,12 +595,10 @@ else
                 || { cat /tmp/cmake-config.log; die "CMake CPU config failed"; }
         fi
 
-        # Store fingerprint
         echo "$CMAKE_FLAGS_HASH" > "$CMAKE_FINGERPRINT_FILE"
 
         echo -e "  ${CYN}Compiling ($(nproc) cores) — live progress:${RST}"
 
-        # Build only llama-server — skips failing examples
         if ! cmake --build build --config Release \
                 --target llama-server \
                 -j"$(nproc)" 2>&1 | \
@@ -666,7 +652,6 @@ HERMES_WEBAPI_INSTALLED=false
 HERMES_WORKSPACE_INSTALLED=false
 export PATH="${HOME}/.local/bin:${PATH}"
 
-# ── Clone or update the fork ──────────────────────────────────────────────────
 if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
     ok "Hermes Agent (outsourc-e fork) already cloned — updating to latest..."
     cd "${HERMES_AGENT_DIR}"
@@ -678,7 +663,6 @@ else
     ok "Hermes Agent cloned."
 fi
 
-# ── Create / verify venv ──────────────────────────────────────────────────────
 if [[ ! -d "${HERMES_VENV}" ]]; then
     step "Creating Python virtual environment for Hermes Agent..."
     python3.11 -m venv "${HERMES_VENV}"
@@ -687,7 +671,6 @@ else
     ok "Venv already exists at ${HERMES_VENV}"
 fi
 
-# ── Install/update dependencies ───────────────────────────────────────────────
 if ! "${HERMES_VENV}/bin/python" -c "import fastapi" &>/dev/null; then
     step "Installing Hermes Agent dependencies (first time ~2-5 min)..."
     "${HERMES_VENV}/bin/pip" install -e "${HERMES_AGENT_DIR}[all]"
@@ -697,13 +680,11 @@ else
     ok "Hermes Agent dependencies already installed."
 fi
 
-# Validate fastapi installation
 if ! "${HERMES_VENV}/bin/python" -c "import fastapi" &>/dev/null; then
     warn "fastapi not found in venv — re-installing dependencies"
     "${HERMES_VENV}/bin/pip" install fastapi uvicorn
 fi
 
-# ── Symlink hermes binary to ~/.local/bin ─────────────────────────────────────
 HERMES_VENV_BIN="${HERMES_VENV}/bin/hermes"
 if [[ -x "$HERMES_VENV_BIN" ]]; then
     mkdir -p "${HOME}/.local/bin"
@@ -713,7 +694,6 @@ else
     warn "hermes binary not found in venv at ${HERMES_VENV_BIN}"
 fi
 
-# ── Update check ──────────────────────────────────────────────────────────────
 if [[ -x "$HERMES_BIN" ]] && "${HERMES_BIN}" --help &>/dev/null; then
     HERMES_VER=$("${HERMES_BIN}" --version 2>/dev/null || echo "installed")
     ok "Hermes Agent ready: ${HERMES_VER}"
@@ -739,9 +719,6 @@ if [[ -x "$HERMES_BIN" ]] && "${HERMES_BIN}" --help &>/dev/null; then
     fi
 fi
 
-# =============================================================================
-#  8c. Configure Hermes → llama-server (http://localhost:8080/v1)
-# =============================================================================
 step "Configuring Hermes for local llama-server..."
 
 HERMES_DIR="${HOME}/.hermes"
@@ -796,9 +773,6 @@ fi
 
 ok "Hermes configured → llama-server (${SEL_NAME} at http://localhost:8080/v1)"
 
-# =============================================================================
-#  8d. Hermes Workspace Integration (Web UI)
-# =============================================================================
 step "Setting up Hermes Workspace..."
 WORKSPACE_DIR="${HOME}/hermes-workspace"
 
@@ -825,7 +799,6 @@ HERMES_ENV_ADD
     fi
 fi
 
-# ── Hermes WebAPI systemd service ─────────────────────────────────────────────
 step "Configuring Hermes WebAPI service..."
 mkdir -p "${HOME}/.config/systemd/user"
 cat > "${HOME}/.config/systemd/user/hermes-webapi.service" <<WEBAPI_SERVICE
@@ -854,7 +827,6 @@ else
     warn "systemd --user unavailable — WebAPI must be started manually."
 fi
 
-# ── Install hermes-workspace ──────────────────────────────────────────────────
 step "Checking for Hermes Workspace..."
 
 if [[ -d "${WORKSPACE_DIR}/.git" ]]; then
@@ -867,7 +839,6 @@ else
     git clone https://github.com/outsourc-e/hermes-workspace.git "${WORKSPACE_DIR}" 2>&1 | tail -3
 fi
 
-# ── Node.js 24 LTS ────────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]] || [[ "$(node --version 2>/dev/null | sed 's/v//')" != "24."* ]]; then
     step "Installing Node.js 24 LTS..."
     curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - 2>/dev/null
@@ -877,7 +848,6 @@ else
     ok "Node.js $(node --version) already installed"
 fi
 
-# ── Install OpenClaude ────────────────────────────────────────────────────────
 if ! command -v openclaude &>/dev/null; then
     step "Installing OpenClaude coding agent..."
     mkdir -p ~/.npm-global
@@ -893,7 +863,6 @@ else
     ok "OpenClaude already installed."
 fi
 
-# Configure OpenClaude for local llama-server
 if command -v openclaude &>/dev/null; then
     OPENCLAUDE_DIR="${HOME}/.openclaude"
     mkdir -p "$OPENCLAUDE_DIR"
@@ -916,7 +885,6 @@ OPENCLAUDE_CFG
     ok "OpenClaude configured for local setup."
 fi
 
-# ── pnpm installation ─────────────────────────────────────────────────────────
 step "Installing pnpm..."
 if ! command -v pnpm &>/dev/null; then
     npm install -g pnpm
@@ -927,9 +895,6 @@ if ! command -v pnpm &>/dev/null; then
 fi
 ok "pnpm $(pnpm --version) ready."
 
-
-
-# ── Install workspace dependencies ────────────────────────────────────────────
 cd "${WORKSPACE_DIR}"
 if [[ ! -d "node_modules" ]]; then
     step "Installing Hermes Workspace dependencies (first time ~2-5 min)..."
@@ -942,7 +907,6 @@ else
     ok "Hermes Workspace dependencies already up to date."
 fi
 
-# ── Workspace .env ────────────────────────────────────────────────────────────
 WORKSPACE_ENV="${WORKSPACE_DIR}/.env"
 if [[ ! -f "${WORKSPACE_ENV}" ]]; then
     cat > "${WORKSPACE_ENV}" <<WORKSPACE_ENV
@@ -958,7 +922,6 @@ else
 fi
 cd - >/dev/null
 
-# ── Hermes Workspace systemd service ──────────────────────────────────────────
 step "Configuring Hermes Workspace service..."
 PNPM_BIN="$(command -v pnpm)"
 if [[ -z "$PNPM_BIN" ]]; then
@@ -996,11 +959,6 @@ HERMES_WEBAPI_INSTALLED=true
 HERMES_WORKSPACE_INSTALLED=true
 ok "Hermes Workspace integration complete."
 
-
-
-
-
-
 # =============================================================================
 #  9. Update system & Python packages
 # =============================================================================
@@ -1022,32 +980,30 @@ else
 fi
 ok "System and Python package managers updated."
 
-
-
 # =============================================================================
-#  11. Create ~/start-llm.sh (using envsubst for safety)
+#  11. Create ~/start-llm.sh (FIXED: quoted heredoc + placeholder substitution)
 # =============================================================================
 step "Creating launch script..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
 
-# Template for the launch script – direct expansion of installer variables
-cat > "$LAUNCH_SCRIPT" << LAUNCH_EOF
+# Write template with placeholders
+cat > "$LAUNCH_SCRIPT" << 'LAUNCH_EOF'
 #!/usr/bin/env bash
 # start-llm.sh – generated by install.sh
-GGUF="${GGUF_PATH}"
-MODEL_NAME="${SEL_NAME}"
-LLAMA_BIN="${LLAMA_SERVER_BIN}"
-SAFE_CTX="${SAFE_CTX}"
-USE_JINJA="${USE_JINJA}"
-HERMES_AGENT_DIR="${HERMES_AGENT_DIR}"
-HERMES_VENV="${HERMES_VENV}"
-WORKSPACE_DIR="${WORKSPACE_DIR}"
+GGUF="__GGUF_PATH__"
+MODEL_NAME="__SEL_NAME__"
+LLAMA_BIN="__LLAMA_SERVER_BIN__"
+SAFE_CTX="__SAFE_CTX__"
+USE_JINJA="__USE_JINJA__"
+HERMES_AGENT_DIR="__HERMES_AGENT_DIR__"
+HERMES_VENV="__HERMES_VENV__"
+WORKSPACE_DIR="__WORKSPACE_DIR__"
 export PNPM_HOME="${HOME}/.local/share/pnpm"
-export PATH=":${PATH}"
+export PATH="${PATH}"
 
 # Check for running services
 LLAMA_PID=$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=$(pgrep -f "hermes webapi" 2>/dev/null || true)
+WEBAPI_PID=$(pgrep -f "python -m webapi" 2>/dev/null || true)
 WORKSPACE_PID=$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
 
 if [[ -n "$LLAMA_PID" || -n "$WEBAPI_PID" || -n "$WORKSPACE_PID" ]]; then
@@ -1106,7 +1062,7 @@ for i in {1..15}; do
     sleep 1
 done
 
-# Start Hermes WebAPI (using absolute venv python)
+# Start Hermes WebAPI
 echo "[2/3] Starting Hermes WebAPI..."
 cd "${HERMES_AGENT_DIR}"
 "${HERMES_VENV}/bin/python" -m webapi &
@@ -1143,21 +1099,19 @@ echo ""
 
 wait
 LAUNCH_EOF
+
+# Replace placeholders with actual installer variables
+sed -i "s|__GGUF_PATH__|${GGUF_PATH}|g" "$LAUNCH_SCRIPT"
+sed -i "s|__SEL_NAME__|${SEL_NAME}|g" "$LAUNCH_SCRIPT"
+sed -i "s|__LLAMA_SERVER_BIN__|${LLAMA_SERVER_BIN}|g" "$LAUNCH_SCRIPT"
+sed -i "s|__SAFE_CTX__|${SAFE_CTX}|g" "$LAUNCH_SCRIPT"
+sed -i "s|__USE_JINJA__|${USE_JINJA}|g" "$LAUNCH_SCRIPT"
+sed -i "s|__HERMES_AGENT_DIR__|${HERMES_AGENT_DIR}|g" "$LAUNCH_SCRIPT"
+sed -i "s|__HERMES_VENV__|${HERMES_VENV}|g" "$LAUNCH_SCRIPT"
+sed -i "s|__WORKSPACE_DIR__|${WORKSPACE_DIR}|g" "$LAUNCH_SCRIPT"
+
 chmod +x "$LAUNCH_SCRIPT"
-
-# Validate and fix generated script
-if ! grep -q 'LLAMA_BIN="/usr/local/bin/llama-server"' "$LAUNCH_SCRIPT"; then
-    sed -i 's|LLAMA_BIN="[^"]*"|LLAMA_BIN="/usr/local/bin/llama-server"|' "$LAUNCH_SCRIPT"
-fi
-if [[ -z "$(grep 'GGUF=' "$LAUNCH_SCRIPT" | grep -v '^GGUF=""')" ]]; then
-    GGUF_REAL="${MODEL_DIR}/${SEL_GGUF}"
-    sed -i "s|GGUF=\"\"|GGUF=\"${GGUF_REAL}\"|" "$LAUNCH_SCRIPT"
-fi
-if grep -q 'if [[  -eq 20 ]]; then' "$LAUNCH_SCRIPT"; then
-    sed -i 's/if \[\[  -eq 20 \]\]; then/if [[ \$i -eq 20 ]]; then/' "$LAUNCH_SCRIPT"
-fi
-
-ok "Launch script: ~/start-llm.sh (validated)"
+ok "Launch script: ~/start-llm.sh"
 
 # =============================================================================
 #  12. systemd user service (llama-server only)
@@ -1192,7 +1146,7 @@ else
 fi
 
 # =============================================================================
-#  13. ~/.bashrc helpers
+#  13. ~/.bashrc helpers (FIXED: pgrep patterns, PATH colon)
 # =============================================================================
 step "Adding helpers to ~/.bashrc..."
 
@@ -1216,7 +1170,7 @@ show_progress() {
 export PATH="/usr/local/cuda/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 export PNPM_HOME="${HOME}/.local/share/pnpm"
-export PATH="/usr/bin:/bin:/usr/local/bin::${HOME}/.local/bin:${HOME}/.hermes/node/bin:${PATH}"
+export PATH="/usr/bin:/bin:/usr/local/bin:${HOME}/.local/bin:${HOME}/.hermes/node/bin:${PATH}"
 BASHRC_START
 
     if [[ -n "${HF_TOKEN:-}" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
@@ -1292,7 +1246,7 @@ llm-status() {
     echo -e "${BLD}${CYN}│${RST}  ──────────────────────────────────────────────────────"
     
     LLAMA_PID=$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=$(pgrep -f "hermes webapi" 2>/dev/null || true)
+    WEBAPI_PID=$(pgrep -f "python -m webapi" 2>/dev/null || true)
     WORKSPACE_PID=$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
     
     if [[ -n "$LLAMA_PID" ]]; then
