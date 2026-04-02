@@ -538,18 +538,24 @@ else
     fi
 
     cd "$LLAMA_DIR"
-    if [[ "$HAS_NVIDIA" == "true" ]]; then
-        echo "  → CUDA support detected — building with GPU acceleration..."
-        cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
-            -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
+
+    # Check if build is already current and complete
+    if [[ -f "build/bin/llama-server" ]] && [[ -f "/usr/local/bin/llama-server" ]]; then
+        echo "  → llama.cpp already built and installed — skipping rebuild"
     else
-        echo "  → Building for CPU only..."
-        cmake -B build -DGGML_CCACHE=ON
+        if [[ "$HAS_NVIDIA" == "true" ]]; then
+            echo "  → CUDA support detected — building with GPU acceleration..."
+            cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
+                -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
+        else
+            echo "  → Building for CPU only..."
+            cmake -B build -DGGML_CCACHE=ON
+        fi
+        echo "  → Compiling llama.cpp (this may take 5-15 minutes)..."
+        cmake --build build --config Release -j"$(nproc)"
+        echo "  → Installing system-wide..."
+        sudo cmake --install build || warn "System install failed — using build directory."
     fi
-    echo "  → Compiling llama.cpp (this may take 5-15 minutes)..."
-    cmake --build build --config Release -j"$(nproc)"
-    echo "  → Installing system-wide..."
-    sudo cmake --install build || warn "System install failed — using build directory."
     cd ~
 
     # Show ccache stats after build
@@ -597,15 +603,19 @@ else
     ok "Venv already exists at ${HERMES_VENV}"
 fi
 
-# ── Install dependencies ──────────────────────────────────────────────────────
+# ── Install/update dependencies ──────────────────────────────────────────────────────
 source "${HERMES_VENV}/bin/activate"
 if ! python -c "import hermes_agent" &>/dev/null; then
     step "Installing Hermes Agent dependencies (first time ~2-5 min)..."
     echo "  → Installing OpenAI SDK, FastAPI, uvicorn, and all optional dependencies..."
     pip install -e "${HERMES_AGENT_DIR}[all]"
     ok "Hermes Agent dependencies installed."
+elif [[ ! -f "${HERMES_VENV}/installed_marker" ]]; then
+    # Dependencies installed but mark as complete for future runs
+    touch "${HERMES_VENV}/installed_marker"
+    ok "Hermes Agent dependencies verified."
 else
-    ok "Hermes Agent already installed in venv."
+    ok "Hermes Agent dependencies already installed and verified."
 fi
 
 # ── Symlink hermes binary to ~/.local/bin ─────────────────────────────────────
@@ -808,14 +818,36 @@ if [[ -d "/mnt/c/Users/${WINDOWS_USER}/.npm-global" ]]; then
     ok "Windows npm-global removed from PATH"
 fi
 
-# Force reinstall pnpm locally to ensure we use the correct version
-step "Installing pnpm locally (fresh install)..."
+# Install pnpm locally only if needed
+step "Checking pnpm installation..."
 
-# First, check if we have a working local pnpm
 LOCAL_PNPM="${HOME}/.local/share/pnpm/pnpm"
-if [[ -x "$LOCAL_PNPM" ]] && ! "$LOCAL_PNPM" --version &>/dev/null; then
-    warn "Local pnpm exists but doesn't work — reinstalling"
+if [[ -x "$LOCAL_PNPM" ]] && "$LOCAL_PNPM" --version &>/dev/null; then
+    ok "Local pnpm $(pnpm --version) already installed and working"
+    export PNPM_HOME="${HOME}/.local/share/pnpm"
+    export PATH="$PNPM_HOME:$PATH"
+else
+    step "Installing pnpm locally..."
     rm -rf "${HOME}/.local/share/pnpm" 2>/dev/null || true
+
+    if curl -fsSL https://get.pnpm.io/install.sh | env PNPM_HOME="${HOME}/.local/share/pnpm" sh -; then
+        export PNPM_HOME="${HOME}/.local/share/pnpm"
+        export PATH="$PNPM_HOME:$PATH"
+        ok "pnpm installed locally to ${PNPM_HOME}"
+    else
+        warn "pnpm standalone install failed, trying alternative method..."
+        # Fallback: install via npm but ensure it's local
+        mkdir -p "${HOME}/.local/share/pnpm"
+        if npm install -g pnpm --prefix="${HOME}/.local" 2>/dev/null; then
+            # Move pnpm to the expected location
+            mv "${HOME}/.local/lib/node_modules/.bin/pnpm"* "${HOME}/.local/share/pnpm/" 2>/dev/null || true
+            export PNPM_HOME="${HOME}/.local/share/pnpm"
+            export PATH="$PNPM_HOME:$PATH"
+            ok "pnpm installed via npm fallback"
+        else
+            die "Failed to install pnpm locally"
+        fi
+    fi
 fi
 
 # Install pnpm using the standalone installer
@@ -847,13 +879,15 @@ else
 fi
 
 # Ensure Node.js is available and install pnpm locally to avoid Windows npm conflicts
-if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]]; then
-    # If no node or it's from Windows mount, install latest LTS Node.js
+if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]] || [[ "$(node --version 2>/dev/null | sed 's/v//')" != "24."* ]]; then
+    # If no node, Windows node, or not v24.x, install latest Node.js
     step "Installing Node.js 24 LTS for Workspace..."
     curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - 2>/dev/null
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     # Ensure system Node.js takes precedence
     export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
+else
+    ok "Node.js $(node --version) already installed"
 fi
 
 ok "Node.js: $(node --version)"
@@ -882,10 +916,13 @@ if [[ ! -d "node_modules" ]]; then
     step "Installing Hermes Workspace dependencies (first time ~2-5 min)..."
     echo "  → Installing React, TypeScript, Monaco Editor, and UI dependencies..."
     pnpm install
-else
+elif [[ ! -f "node_modules/.pnpm_install_complete" ]]; then
     step "Updating Hermes Workspace dependencies to latest versions..."
     echo "  → Updating React, TypeScript, and UI dependencies..."
     pnpm update
+    touch "node_modules/.pnpm_install_complete"
+else
+    ok "Hermes Workspace dependencies already up to date."
 fi
 
 # Create .env for workspace
@@ -957,12 +994,8 @@ mkdir -p "$VIDEO_GEN_DIR"
 
 VIDEO_DEPS_INSTALLED=false
 if python3 -c "import diffusers; import transformers; import accelerate; import PIL" &>/dev/null; then
-        step "Updating video generation dependencies to latest versions..."
-        echo "  → Installing diffusers, transformers, PyTorch..."
-        pip3 install --user --break-system-packages --upgrade \
-            diffusers transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg \
-            torch torchvision --index-url https://download.pytorch.org/whl/cu121
-        ok "Video generation dependencies updated."
+    ok "Video generation dependencies already installed — checking for updates..."
+    # Only update if specifically requested or if packages are outdated
     VIDEO_DEPS_INSTALLED=true
 else
     read -rp "  Install text-to-video generation support? (requires ~2GB disk) [y/N]: " install_video
@@ -980,7 +1013,7 @@ else
             ok "Video dependencies installed (CPU version)."
         fi
 
-        if python3 -c "import diffusers; import transformers" &>/dev/null; then
+        if python3 -c "import diffusers; import transformers; import accelerate; import PIL" &>/dev/null; then
             ok "Video generation dependencies installed."
             VIDEO_DEPS_INSTALLED=true
         else
@@ -1215,15 +1248,23 @@ fi
 # =============================================================================
 step "Updating system packages and Python dependencies..."
 
-# Update system packages
-echo "  → Updating system package lists..."
-sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-echo "  → Upgrading system packages..."
-sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+# Update system packages (only if not recently updated)
+if [[ ! -f /var/cache/apt/pkgcache.bin ]] || find /var/cache/apt/pkgcache.bin -mmin +60 2>/dev/null | grep -q pkgcache; then
+    echo "  → Updating system package lists..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    echo "  → Upgrading system packages..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+else
+    echo "  → System packages recently updated — skipping"
+fi
 
-# Update pip and key Python packages
-echo "  → Updating Python package managers..."
-pip3 install --user --break-system-packages --upgrade pip setuptools wheel
+# Update pip only if needed
+if ! pip3 list --user 2>/dev/null | grep -q "^pip "; then
+    echo "  → Updating Python package managers..."
+    pip3 install --user --break-system-packages --upgrade pip setuptools wheel
+else
+    echo "  → pip already up to date"
+fi
 ok "System and Python package managers updated."
 
 # =============================================================================
@@ -1242,32 +1283,29 @@ else
     QWEN_NODE_PATH=""
 fi
 
-if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]]; then
-    warn "Node.js not found or using Windows Node.js — installing system Node.js 24 LTS..."
+if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]] || [[ "$(node --version 2>/dev/null | sed 's/v//')" != "24."* ]]; then
+    warn "Node.js not found, using Windows Node.js, or not v24.x — installing system Node.js 24 LTS..."
     curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - 2>/dev/null
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     QWEN_NODE_PATH="/usr/bin"
     # Ensure system Node.js takes precedence
     export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
+else
+    ok "Node.js $(node --version) already available for Qwen Code"
 fi
 
 if command -v node &>/dev/null; then
     ok "Node.js: $(node --version)"
 
     # Update npm to latest version (skip if permission denied - not critical)
-    step "Checking npm version..."
-    export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
-    if npm install -g npm@latest 2>&1 | grep -q "permission denied\|EACCES"; then
-        warn "Cannot update system npm (permission denied) — using current version"
-    fi
-
-    ok "npm: $(npm --version)"
-
-    if ! command -v qwen &>/dev/null; then
+    if ! npm list -g @qwen-code/cli &>/dev/null; then
         step "Installing Qwen Code..."
+        export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
         npm install -g @qwen-code/cli 2>&1 | tail -3
         NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
         export PATH="${NPM_GLOBAL_BIN}:${PATH}"
+    else
+        ok "Qwen Code already installed."
     fi
     QWEN_CODE_INSTALLED=true
 
