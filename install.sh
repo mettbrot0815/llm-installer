@@ -624,6 +624,12 @@ else
     ok "Hermes Agent dependencies already installed."
 fi
 
+# Validate fastapi installation
+if ! "${HERMES_VENV}/bin/python" -c "import fastapi" &>/dev/null; then
+    warn "fastapi not found in venv — re-installing dependencies"
+    "${HERMES_VENV}/bin/pip" install fastapi uvicorn
+fi
+
 # ── Symlink hermes binary to ~/.local/bin ─────────────────────────────────────
 HERMES_VENV_BIN="${HERMES_VENV}/bin/hermes"
 if [[ -x "$HERMES_VENV_BIN" ]]; then
@@ -1032,7 +1038,20 @@ export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA HERMES_AGENT_DIR H
 envsubst < "${LAUNCH_SCRIPT}.template" > "$LAUNCH_SCRIPT"
 rm -f "${LAUNCH_SCRIPT}.template"
 chmod +x "$LAUNCH_SCRIPT"
-ok "Launch script: ~/start-llm.sh"
+
+# Validate and fix generated script
+if ! grep -q 'LLAMA_BIN="/usr/local/bin/llama-server"' "$LAUNCH_SCRIPT"; then
+    sed -i 's|LLAMA_BIN="[^"]*"|LLAMA_BIN="/usr/local/bin/llama-server"|' "$LAUNCH_SCRIPT"
+fi
+if [[ -z "$(grep 'GGUF=' "$LAUNCH_SCRIPT" | grep -v '^GGUF=""')" ]]; then
+    GGUF_REAL="${MODEL_DIR}/${SEL_GGUF}"
+    sed -i "s|GGUF=\"\"|GGUF=\"${GGUF_REAL}\"|" "$LAUNCH_SCRIPT"
+fi
+if grep -q 'if [[  -eq 20 ]]; then' "$LAUNCH_SCRIPT"; then
+    sed -i 's/if \[\[  -eq 20 \]\]; then/if [[ \$i -eq 20 ]]; then/' "$LAUNCH_SCRIPT"
+fi
+
+ok "Launch script: ~/start-llm.sh (validated)"
 
 # =============================================================================
 #  12. systemd user service (llama-server only)
