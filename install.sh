@@ -209,6 +209,7 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6
         ok "CUDA toolkit 12.6 installed."
     fi
+    export CUDA_HOME="/usr/local/cuda"
     export PATH="/usr/local/cuda/bin:${PATH}"
     export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 fi
@@ -574,7 +575,7 @@ else
     else
         if [[ "$HAS_NVIDIA" == "true" ]]; then
             echo "  → CUDA support detected — building with GPU acceleration..."
-            cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
+            cmake -B build -DGGML_CUDA=ON \
                 -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
         else
             echo "  → Building for CPU only..."
