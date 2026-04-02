@@ -106,6 +106,12 @@ fi
 
 export HF_TOKEN
 
+# Persist HF_TOKEN to .bashrc if set and not already there
+if [[ -n "$HF_TOKEN" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+    echo "export HF_TOKEN=\"$HF_TOKEN\"" >> "${HOME}/.bashrc"
+    ok "HF_TOKEN saved to ~/.bashrc."
+fi
+
 # =============================================================================
 #  2. System update + dependencies
 # =============================================================================
