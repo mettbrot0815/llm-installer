@@ -1044,22 +1044,22 @@ export PNPM_HOME="${HOME}/.local/share/pnpm"
 export PATH=":${PATH}"
 
 # Check for running services
-LLAMA_PID=$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=$(pgrep -f "python -m webapi" 2>/dev/null || true)
-WORKSPACE_PID=$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
+LLAMA_PID=\$(pgrep -f "llama-server" 2>/dev/null || true)
+WEBAPI_PID=\$(pgrep -f "python -m webapi" 2>/dev/null || true)
+WORKSPACE_PID=\$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
 
-if [[ -n "$LLAMA_PID" || -n "$WEBAPI_PID" || -n "$WORKSPACE_PID" ]]; then
+if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
     echo -e "\n⚠️  Services already running:"
-    [[ -n "$LLAMA_PID" ]] && echo "   llama-server:  $LLAMA_PID"
-    [[ -n "$WEBAPI_PID" ]] && echo "   Hermes WebAPI: $WEBAPI_PID"
-    [[ -n "$WORKSPACE_PID" ]] && echo "   Workspace:     $WORKSPACE_PID"
+    [[ -n "\$LLAMA_PID" ]] && echo "   llama-server:  \$LLAMA_PID"
+    [[ -n "\$WEBAPI_PID" ]] && echo "   Hermes WebAPI: \$WEBAPI_PID"
+    [[ -n "\$WORKSPACE_PID" ]] && echo "   Workspace:     \$WORKSPACE_PID"
     echo ""
     if [[ -t 0 ]]; then
         read -rp "Terminate and start fresh? [y/N]: " kill_choice
     else
         kill_choice="n"
     fi
-    if [[ "$kill_choice" =~ ^[Yy]$ ]]; then
+    if [[ "\$kill_choice" =~ ^[Yy]\$ ]]; then
         pkill -f "llama-server" 2>/dev/null || true
         pkill -f "python -m webapi" 2>/dev/null || true
         pkill -f "pnpm dev" 2>/dev/null || true
@@ -1098,7 +1098,7 @@ sleep 2
 
 for i in {1..15}; do
     if curl -sf http://localhost:8080/v1/models &>/dev/null; then
-        echo "✓ llama-server ready (PID: $LLAMA_PID)"
+        echo "✓ llama-server ready (PID: \$LLAMA_PID)"
         break
     fi
     sleep 1
@@ -1132,7 +1132,7 @@ pnpm dev &
 WORKSPACE_PID=$!
 sleep 2
 
-echo "✓ Hermes Workspace starting (PID: $WORKSPACE_PID)"
+echo "✓ Hermes Workspace starting (PID: \$WORKSPACE_PID)"
 echo ""
 echo "╭──────────────────────────────────────────────────────────────────╮"
 echo "│  All services started! Open http://localhost:3000 in your browser│"
