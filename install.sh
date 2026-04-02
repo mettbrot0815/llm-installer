@@ -314,8 +314,6 @@ MODELS=(
     "10|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active"
     "11|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
     "12|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
-    "13|bartowski/google_gemma-4-4b-it-GGUF|google_gemma-4-4b-it-Q4_K_M.gguf|Gemma 4 4B|2.5|16K|4|0|small|chat,code|Google · latest Gemma"
-    "14|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.5|16K|12|10|mid|chat,code|Google · larger Gemma 4"
 )
 
 MODEL_DIR="${HOME}/llm-models"
@@ -1317,7 +1315,7 @@ alias start-llm-services='systemctl --user start llama-server.service hermes-web
 alias stop-llm='systemctl --user stop llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services stopped via systemd" || (pkill -f llama-server && pkill -f "python -m webapi" && pkill -f "pnpm dev" && echo "All LLM services stopped manually.")'
 alias restart-llm='systemctl --user restart llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services restarted via systemd" || (stop-llm && sleep 2 && start-llm)'
 alias llm-log='tail -f /tmp/llama-server.log'
-alias switch-model='~/.local/bin/install.sh 2>/dev/null || echo "install.sh not found in PATH"'
+alias switch-model='find ~ -name "install.sh" -type f -executable 2>/dev/null | head -1 | xargs bash 2>/dev/null || echo "install.sh not found"'
 alias hermes-update='hermes update'
 alias hermes-doctor='hermes doctor'
 alias hermes-sessions='hermes sessions list'
