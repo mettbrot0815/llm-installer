@@ -233,6 +233,7 @@ MODELS=(
     "11|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
     "12|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
     "13|bartowski/google_gemma-4-4b-it-GGUF|google_gemma-4-4b-it-Q4_K_M.gguf|Gemma 4 4B|2.5|16K|4|0|small|chat,code|Google · latest Gemma"
+    "14|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.5|16K|12|10|mid|chat,code|Google · larger Gemma 4"
 )
 
 MODEL_DIR="${HOME}/llm-models"
