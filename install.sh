@@ -875,6 +875,45 @@ else
     ok "Node.js $(node --version) already installed"
 fi
 
+# ── Install OpenClaude ────────────────────────────────────────────────────────
+if ! command -v openclaude &>/dev/null; then
+    step "Installing OpenClaude coding agent..."
+    mkdir -p ~/.npm-global
+    npm config set prefix ~/.npm-global
+    npm install -g @gitlawb/openclaude
+    export PATH="$HOME/.npm-global/bin:$PATH"
+    if command -v openclaude &>/dev/null; then
+        ok "OpenClaude installed."
+    else
+        warn "OpenClaude installation failed."
+    fi
+else
+    ok "OpenClaude already installed."
+fi
+
+# Configure OpenClaude for local llama-server
+if command -v openclaude &>/dev/null; then
+    OPENCLAUDE_DIR="${HOME}/.openclaude"
+    mkdir -p "$OPENCLAUDE_DIR"
+    cat > "${OPENCLAUDE_DIR}/settings.json" <<OPENCLAUDE_CFG
+{
+  "modelProviders": {
+    "openai": [{
+      "id": "${SEL_NAME}",
+      "name": "${SEL_NAME}",
+      "baseUrl": "http://localhost:8080/v1",
+      "description": "Local llama-server",
+      "envKey": "LLAMA_API_KEY"
+    }]
+  },
+  "env": { "LLAMA_API_KEY": "llama" },
+  "security": { "auth": { "selectedType": "openai" } },
+  "model": { "name": "${SEL_NAME}" }
+}
+OPENCLAUDE_CFG
+    ok "OpenClaude configured for local setup."
+fi
+
 # ── pnpm installation ─────────────────────────────────────────────────────────
 step "Installing pnpm..."
 if ! command -v pnpm &>/dev/null; then
@@ -1323,7 +1362,7 @@ echo -e "${BLD}${CYN}│${RST} ${CYN}llm-log${RST} → View llama-server logs"
 echo -e "${BLD}${CYN}│${RST} ${CYN}llm-models${RST} → List downloaded models"
 echo -e "${BLD}${CYN}│${RST} ${CYN}vram${RST} → GPU/VRAM usage"
 echo -e "${BLD}${CYN}│${RST} ${CYN}hermes${RST} → Hermes AI agent"
-
+echo -e "${BLD}${CYN}│${RST} ${CYN}openclaude${RST} → OpenClaude coding agent"
 echo -e "${BLD}${CYN}╰────────────────────────────────────────────────────────────────╯${RST}"
 echo ""
 }
@@ -1424,7 +1463,8 @@ echo -e " ${CYN}switch-model${RST} change model (re-run installer)"
 echo -e " ${CYN}hermes${RST} Hermes AI agent (CLI)"
 
 echo -e " ${CYN}vram${RST} GPU/VRAM usage"
-
+echo -e " ${CYN}hermes${RST} → Hermes AI agent"
+echo -e " ${CYN}openclaude${RST} OpenClaude coding agent"
 
 echo ""
 echo -e " ${BLD}Open in Browser:${RST}"
