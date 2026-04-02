@@ -1174,6 +1174,7 @@ deactivate 2>/dev/null || true
 sleep 2
 
         # Wait for WebAPI to be ready (increased timeout)
+        timeout_reached=false
         for i in {1..20}; do
             if curl -sf http://localhost:8642/health &>/dev/null 2>&1; then
                 ok "Hermes WebAPI ready at http://localhost:8642"
@@ -1182,9 +1183,12 @@ sleep 2
                 ok "Hermes WebAPI ready at http://localhost:8642 (using /docs endpoint)"
                 break
             fi
+            if [[ $i -eq 20 ]]; then
+                timeout_reached=true
+            fi
             sleep 1
         done
-        if [[ $i -eq 20 ]]; then
+        if [[ "$timeout_reached" == "true" ]]; then
             warn "Hermes WebAPI health check timed out — may still be starting up"
         fi
 
