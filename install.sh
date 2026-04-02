@@ -563,7 +563,7 @@ else
         git -C "$LLAMA_DIR" fetch origin --quiet
         git -C "$LLAMA_DIR" reset --hard origin/HEAD --quiet
     else
-        git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+        git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$LLAMA_DIR"
     fi
 
     cd "$LLAMA_DIR"
@@ -1164,24 +1164,24 @@ ok "Launch script: ~/start-llm.sh (validated)"
 # =============================================================================
 step "Creating systemd user service for llama-server..."
 mkdir -p "${HOME}/.config/systemd/user"
-cat > "${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
+cat > "${HOME}/.config/systemd/user/llama-server.service" <<'SERVICE_EOF' | envsubst
 [Unit]
 Description=llama-server LLM inference
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${LLAMA_SERVER_BIN} -m ${GGUF_PATH} -ngl 99 -fa on -c ${SAFE_CTX} -np 1 --cache-type-k q4_0 --cache-type-v q4_0 --host 0.0.0.0 --port 8080 ${USE_JINJA}
+ExecStart=@@LLAMA_SERVER_BIN@@ -m @@GGUF_PATH@@ -ngl 99 -fa on -c @@SAFE_CTX@@ -np 1 --cache-type-k q4_0 --cache-type-v q4_0 --host 0.0.0.0 --port 8080 @@USE_JINJA@@
 Restart=on-failure
 RestartSec=5
-Environment=HOME=${HOME}
-Environment=PATH=/usr/local/cuda/bin:${HOME}/.local/bin:/usr/bin:/bin
+Environment=HOME=@@HOME@@
+Environment=PATH=/usr/local/cuda/bin:@@HOME@@/.local/bin:/usr/bin:/bin
 StandardOutput=file:/tmp/llama-server.log
 StandardError=file:/tmp/llama-server.log
 
 [Install]
 WantedBy=default.target
-SERVICE
+SERVICE_EOF
 
 if systemctl --user daemon-reload 2>/dev/null; then
     systemctl --user enable llama-server.service 2>/dev/null || true
