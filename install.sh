@@ -1042,13 +1042,17 @@ fi
 if command -v node &>/dev/null; then
     ok "Node.js: $(node --version)"
 
-    # Update npm to latest version (skip if permission denied - not critical)
-    if ! npm list -g @qwen-code/cli &>/dev/null; then
+    # Install Qwen Code using official installation script
+    if ! command -v qwen &>/dev/null; then
         step "Installing Qwen Code..."
         export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
-        npm install -g @qwen-code/cli 2>&1 | tail -3
-        NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
-        export PATH="${NPM_GLOBAL_BIN}:${PATH}"
+        # Use official Qwen Code installation script
+        if bash -c "$(curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh)" 2>/dev/null; then
+            ok "Qwen Code installed via official installer."
+        else
+            warn "Qwen Code installation failed — you can install manually with:"
+            warn "bash -c \"\$(curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh)\""
+        fi
     else
         ok "Qwen Code already installed."
     fi
