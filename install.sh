@@ -879,199 +879,13 @@ HERMES_WEBAPI_INSTALLED=true
 HERMES_WORKSPACE_INSTALLED=true
 ok "Hermes Workspace integration complete."
 
-# =============================================================================
-#  8e. Text-to-Video Generation Dependencies (Optional)
-# =============================================================================
-VIDEO_GEN_DIR="${HOME}/llm-video"
-mkdir -p "$VIDEO_GEN_DIR"
-
-VIDEO_DEPS_INSTALLED=false
-if [[ "$HAS_NVIDIA" == "true" ]]; then
-    if [[ -t 0 ]]; then
-        read -rp "  Install text-to-video generation support? (requires ~2GB disk) [y/N]: " install_video
-    else
-        install_video="n"
-    fi
-    if [[ "$install_video" =~ ^[Yy]$ ]]; then
-        step "Installing video generation dependencies..."
-        echo "  → Installing PyTorch with CUDA support..."
-        if pip3 install --user --break-system-packages \
-            diffusers transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg \
-            torch torchvision --index-url https://download.pytorch.org/whl/cu121; then
-            ok "Video dependencies installed with CUDA backend."
-            VIDEO_DEPS_INSTALLED=true
-        else
-            echo "  → CUDA installation failed, trying CPU-only version..."
-            pip3 install --user --break-system-packages \
-                "diffusers[torch]" transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg torch torchvision
-            ok "Video dependencies installed (CPU version)."
-            VIDEO_DEPS_INSTALLED=true
-        fi
-    else
-        ok "Skipping video generation support."
-    fi
-else
-    ok "Skipping video generation (no NVIDIA GPU detected)."
-fi
-
-if [[ "$VIDEO_DEPS_INSTALLED" == "true" ]]; then
-    step "Creating video generation script..."
-    cat > "${VIDEO_GEN_DIR}/generate_video.py" <<'VIDEO_PY'
-#!/usr/bin/env python3
-"""Text-to-Video Generation Script using Stable Video Diffusion."""
-
-import argparse
-import os
-import sys
-import torch
-from diffusers import StableVideoDiffusionPipeline
-from PIL import Image, ImageDraw, ImageFont
 
 
-def create_base_image(prompt: str, width: int = 1024, height: int = 576) -> Image.Image:
-    """Create a base image from text prompt using gradient background."""
-    img = Image.new('RGB', (width, height))
-    pixels = img.load()
-    prompt_lower = prompt.lower()
-
-    if any(w in prompt_lower for w in ['ocean', 'water', 'blue', 'sky']):
-        base_color = (30, 100, 180)
-    elif any(w in prompt_lower for w in ['forest', 'nature', 'green', 'tree']):
-        base_color = (50, 120, 50)
-    elif any(w in prompt_lower for w in ['sunset', 'orange', 'warm', 'fire']):
-        base_color = (200, 100, 50)
-    elif any(w in prompt_lower for w in ['night', 'dark', 'space', 'star']):
-        base_color = (20, 20, 50)
-    elif any(w in prompt_lower for w in ['desert', 'sand', 'yellow']):
-        base_color = (200, 180, 100)
-    else:
-        base_color = (80, 80, 100)
-
-    for y in range(height):
-        for x in range(width):
-            factor = y / height
-            pixels[x, y] = (int(base_color[0] * (1 - factor * 0.5)),
-                           int(base_color[1] * (1 - factor * 0.5)),
-                           int(base_color[2] * (1 - factor * 0.5) + factor * 50))
-
-    # Add text overlay
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-    except (OSError, IOError):
-        try:
-            font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 48)
-        except (OSError, IOError):
-            font = ImageFont.load_default()
-
-    draw = ImageDraw.Draw(img)
-    bbox = draw.textbbox((0, 0), prompt, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-    x = (width - text_width) // 2
-    y = (height - text_height) // 2
-
-    # Add text shadow
-    shadow_color = (0, 0, 0, 128)
-    for offset in [(1, 1), (-1, -1), (1, -1), (-1, 1)]:
-        draw.text((x + offset[0], y + offset[1]), prompt, font=font, fill=shadow_color)
-
-    # Add main text
-    draw.text((x, y), prompt, font=font, fill=(255, 255, 255))
-
-    return img
 
 
-def generate_video(prompt: str, output_path: str, fps: int = 7, num_frames: int = 25,
-                  decode_chunk_size: int = 8, seed: int = 42) -> None:
-    """Generate video from text prompt using Stable Video Diffusion."""
-    print(f"Generating video for: '{prompt}'")
-    print(f"Output: {output_path}")
-    print(f"Frames: {num_frames}, FPS: {fps}")
-
-    if not torch.cuda.is_available():
-        print("Warning: CUDA not available. Video generation will be slow on CPU.")
-
-    torch.manual_seed(seed)
-
-    print("Loading Stable Video Diffusion pipeline...")
-    pipe = StableVideoDiffusionPipeline.from_pretrained(
-        "stabilityai/stable-video-diffusion-img2vid-xt",
-        torch_dtype=torch.float16,
-        variant="fp16"
-    )
-
-    if torch.cuda.is_available():
-        pipe.to("cuda")
-        pipe.enable_model_cpu_offload()
-        pipe.enable_vae_slicing()
-    else:
-        pipe.enable_sequential_cpu_offload()
-
-    print("Creating base image from prompt...")
-    base_image = create_base_image(prompt)
-
-    print("Generating video frames...")
-    frames = pipe(base_image, decode_chunk_size=decode_chunk_size,
-                  generator=torch.manual_seed(seed), num_frames=num_frames).frames[0]
-
-    print(f"Generated {len(frames)} frames, exporting to {output_path}...")
-
-    if output_path.lower().endswith('.mp4'):
-        try:
-            import imageio
-            with imageio.get_writer(output_path, fps=fps, plugin='ffmpeg') as writer:
-                for frame in frames:
-                    writer.append_data(frame)
-            print("Exported using imageio-ffmpeg")
-        except ImportError:
-            from diffusers.utils import export_to_video
-            export_to_video(frames, output_path, fps=fps)
-            print("Exported using OpenCV")
-    else:
-        duration_ms = int(1000 / fps)
-        frames[0].save(output_path, save_all=True, append_images=frames[1:],
-                      duration=duration_ms, loop=0, format="GIF")
-
-    print(f"✓ Video saved: {output_path} ({num_frames/fps:.1f}s)")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Generate video from text using SVD")
-    parser.add_argument("prompt", nargs="?", default="a serene ocean sunset",
-                       help="Text description of the video")
-    parser.add_argument("-o", "--output", default=os.path.expanduser("~/llm-video/output_video.mp4"),
-                       help="Output path (use .gif for GIF format)")
-    parser.add_argument("--fps", type=int, default=7, help="Frames per second")
-    parser.add_argument("--frames", type=int, default=25, help="Number of frames (max 25)")
-    parser.add_argument("--chunk-size", type=int, default=8, help="Decode chunk size")
-
-    args = parser.parse_args()
-    output_dir = os.path.dirname(args.output)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    generate_video(prompt=args.prompt, output_path=args.output,
-                  fps=args.fps, num_frames=args.frames, decode_chunk_size=args.chunk_size)
-
-
-if __name__ == "__main__":
-    main()
-VIDEO_PY
-
-    cat > "${VIDEO_GEN_DIR}/generate-video" <<'VIDEO_SH'
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}" python3 "${SCRIPT_DIR}/generate_video.py" "$@"
-VIDEO_SH
-
-    chmod +x "${VIDEO_GEN_DIR}/generate_video.py"
-    chmod +x "${VIDEO_GEN_DIR}/generate-video"
-    ln -sf "${VIDEO_GEN_DIR}/generate-video" "${VIDEO_GEN_DIR}/genvideo" 2>/dev/null || true
-    ok "Video generation scripts ready."
-fi
 
 # =============================================================================
-#  9. Update system & Python packages (moved earlier for video deps)
+#  9. Update system & Python packages
 # =============================================================================
 step "Updating system packages and Python dependencies..."
 if [[ ! -f /var/cache/apt/pkgcache.bin ]] || find /var/cache/apt/pkgcache.bin -mmin +60 2>/dev/null | grep -q pkgcache; then
@@ -1558,7 +1372,7 @@ echo -e " Model → ${SEL_NAME} (context: ${SAFE_CTX})"
 [[ "$HERMES_WEBAPI_INSTALLED" == "true" ]] && echo -e " Hermes Agent → outsourc-e fork with WebAPI"
 [[ "$HERMES_WORKSPACE_INSTALLED" == "true" ]] && echo -e " Hermes Workspace → Full web UI installed"
 [[ "$QWEN_CODE_INSTALLED" == "true" ]] && echo -e " Qwen Code → coding agent"
-[[ "$VIDEO_DEPS_INSTALLED" == "true" ]] && echo -e " Video Gen → Stable Video Diffusion (CUDA)"
+
 echo ""
 echo -e " ${BLD}Usage:${RST}"
 echo -e " ${CYN}start-llm-services${RST} auto-start all services (systemd)"
@@ -1573,7 +1387,7 @@ echo -e " ${CYN}switch-model${RST} change model (re-run installer)"
 echo -e " ${CYN}hermes${RST} Hermes AI agent (CLI)"
 echo -e " ${CYN}qwen${RST} Qwen Code assistant"
 echo -e " ${CYN}vram${RST} GPU/VRAM usage"
-[[ "$VIDEO_DEPS_INSTALLED" == "true" ]] && echo -e " ${CYN}generate-video${RST} text-to-video"
+
 echo ""
 echo -e " ${BLD}Open in Browser:${RST}"
 echo -e " ${GRN}http://localhost:3000${RST} → Hermes Workspace (main UI ⭐)"
