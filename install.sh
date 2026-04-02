@@ -120,7 +120,8 @@ sudo apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     build-essential cmake git ccache \
-    libcurl4-openssl-dev software-properties-common \
+    libcurl4-openssl-dev libssl-dev libffi-dev \
+    software-properties-common \
     python3 python3-pip python3-venv \
     pciutils wget curl ca-certificates zstd \
     procps gettext-base   # watch command + envsubst
@@ -570,7 +571,17 @@ else
             cmake -B build -DGGML_CCACHE=ON
         fi
         echo "  → Compiling llama.cpp (this may take 5-15 minutes)..."
-        cmake --build build --config Release -j"$(nproc)"
+        if ! cmake --build build --config Release -j"$(nproc)"; then
+            if [[ "$HAS_NVIDIA" == "true" ]]; then
+                warn "CUDA build failed — falling back to CPU-only build..."
+                rm -rf build
+                cmake -B build -DGGML_CCACHE=ON
+                cmake --build build --config Release -j"$(nproc)" || die "CPU build also failed."
+                HAS_NVIDIA=false
+            else
+                die "Build failed."
+            fi
+        fi
         echo "  → Installing system-wide..."
         sudo cmake --install build || warn "System install failed — using build directory."
     fi
