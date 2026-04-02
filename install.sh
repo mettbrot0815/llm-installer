@@ -744,6 +744,35 @@ if [[ -x "$HERMES_BIN" ]] && "${HERMES_BIN}" --help &>/dev/null; then
     fi
 fi
 
+# ── Apply Hermes WebAPI patches ───────────────────────────────────────────────
+step "Applying Hermes WebAPI patches..."
+
+# Patch chat.py to handle dict content
+CHAT_PY="${HERMES_AGENT_DIR}/hermes/webapi/chat.py"
+if [[ -f "$CHAT_PY" ]]; then
+    if grep -q "content.lower()" "$CHAT_PY" && ! grep -q "isinstance(content, str)" "$CHAT_PY"; then
+        sed -i 's/content\.lower()/content = content if isinstance(content, str) else str(content)\n    content.lower()/g' "$CHAT_PY"
+        ok "Patched chat.py for dict content handling."
+    else
+        ok "chat.py already patched or not applicable."
+    fi
+else
+    warn "chat.py not found at $CHAT_PY"
+fi
+
+# Patch deps.py to handle model config dict
+DEPS_PY="${HERMES_AGENT_DIR}/hermes/webapi/deps.py"
+if [[ -f "$DEPS_PY" ]]; then
+    if grep -q "config.get(\"model\")" "$DEPS_PY" && ! grep -q "model.get(\"default\")" "$DEPS_PY"; then
+        sed -i 's/model = config\.get("model")/model = config.get("model")\n    if isinstance(model, dict):\n        model = model.get("default", model)/g' "$DEPS_PY"
+        ok "Patched deps.py for model config dict handling."
+    else
+        ok "deps.py already patched or not applicable."
+    fi
+else
+    warn "deps.py not found at $DEPS_PY"
+fi
+
 # =============================================================================
 #  8c. Configure Hermes → llama-server (http://localhost:8080/v1)
 # =============================================================================
