@@ -411,6 +411,11 @@ fi
 if ! "$HF_CLI_USED" version &>/dev/null; then
     die "'$HF_CLI_NAME' found at $HF_CLI_USED but fails to run."
 fi
+
+# Update HuggingFace CLI to latest version
+step "Updating HuggingFace CLI to latest version..."
+pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -3
+
 ok "$HF_CLI_NAME ready: $( "$HF_CLI_USED" version 2>/dev/null || echo 'ok' )"
 
 HF_CLI="$HF_CLI_USED"
@@ -566,9 +571,9 @@ export PATH="${HOME}/.local/bin:${PATH}"
 
 # ── Clone or update the fork ──────────────────────────────────────────────────
 if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
-    ok "Hermes Agent (outsourc-e fork) already cloned — checking for updates..."
+    ok "Hermes Agent (outsourc-e fork) already cloned — updating to latest..."
     cd "${HERMES_AGENT_DIR}"
-    git pull --quiet 2>/dev/null || warn "Hermes git pull failed (continuing with existing code)"
+    git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || warn "Hermes git update failed (continuing with existing code)"
     cd - >/dev/null
 else
     step "Cloning outsourc-e/hermes-agent (WebAPI fork)..."
@@ -766,9 +771,9 @@ fi
 step "Checking for Hermes Workspace..."
 
 if [[ -d "${WORKSPACE_DIR}/.git" ]]; then
-    ok "Hermes Workspace already cloned."
+    ok "Hermes Workspace already cloned — updating to latest."
     cd "${WORKSPACE_DIR}"
-    git pull --quiet 2>/dev/null || true
+    git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
     cd - >/dev/null
 else
     step "Cloning outsourc-e/hermes-workspace..."
@@ -835,9 +840,9 @@ fi
 
 # Ensure Node.js is available and install pnpm locally to avoid Windows npm conflicts
 if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]]; then
-    # If no node or it's from Windows mount, install system Node.js
-    step "Installing Node.js 22 for Workspace..."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
+    # If no node or it's from Windows mount, install latest LTS Node.js
+    step "Installing Node.js 24 LTS for Workspace..."
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - 2>/dev/null
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     # Ensure system Node.js takes precedence
     export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
@@ -856,11 +861,19 @@ if ! pnpm --version &>/dev/null; then
     die "pnpm installation failed - cannot run pnpm --version"
 fi
 
+# Update pnpm to latest version
+step "Ensuring pnpm is up to date..."
+pnpm add -g pnpm 2>&1 | tail -3 || pnpm install -g pnpm 2>&1 | tail -3 || true
+ok "pnpm updated: $(pnpm --version)"
+
 # Install workspace dependencies
 cd "${WORKSPACE_DIR}"
 if [[ ! -d "node_modules" ]]; then
     step "Installing Hermes Workspace dependencies (first time ~2-5 min)..."
     pnpm install 2>&1 | tail -5
+else
+    step "Updating Hermes Workspace dependencies to latest versions..."
+    pnpm update 2>&1 | tail -3
 fi
 
 # Create .env for workspace
@@ -932,7 +945,11 @@ mkdir -p "$VIDEO_GEN_DIR"
 
 VIDEO_DEPS_INSTALLED=false
 if python3 -c "import diffusers; import transformers; import accelerate; import PIL" &>/dev/null; then
-    ok "Video generation dependencies already installed."
+    step "Updating video generation dependencies to latest versions..."
+    pip3 install --quiet --user --break-system-packages --upgrade \
+        diffusers transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg \
+        torch torchvision --index-url https://download.pytorch.org/whl/cu121 2>&1 | tail -3
+    ok "Video generation dependencies updated."
     VIDEO_DEPS_INSTALLED=true
 else
     read -rp "  Install text-to-video generation support? (requires ~2GB disk) [y/N]: " install_video
@@ -1180,7 +1197,20 @@ PROFILE_VIDEO
 fi
 
 # =============================================================================
-#  9. Qwen Code
+#  0. Update System and Python Packages
+# =============================================================================
+step "Updating system packages and Python dependencies..."
+
+# Update system packages
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && \
+sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq 2>&1 | tail -3
+
+# Update pip and key Python packages
+pip3 install --quiet --user --break-system-packages --upgrade pip setuptools wheel 2>&1 | tail -3
+ok "System and Python package managers updated."
+
+# =============================================================================
+#  1. WSL Environment Check
 # =============================================================================
 step "Checking for Qwen Code..."
 QWEN_CODE_INSTALLED=false
@@ -1196,8 +1226,8 @@ else
 fi
 
 if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]]; then
-    warn "Node.js not found or using Windows Node.js — installing system Node.js 22..."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
+    warn "Node.js not found or using Windows Node.js — installing system Node.js 24 LTS..."
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - 2>/dev/null
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     QWEN_NODE_PATH="/usr/bin"
     # Ensure system Node.js takes precedence
@@ -1206,10 +1236,16 @@ fi
 
 if command -v node &>/dev/null; then
     ok "Node.js: $(node --version)"
+
+    # Update npm to latest version
+    step "Updating npm to latest version..."
+    export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
+    npm install -g npm@latest 2>&1 | tail -3
+
+    ok "npm: $(npm --version)"
+
     if ! command -v qwen &>/dev/null; then
         step "Installing Qwen Code..."
-        # Use npm install -g but ensure it uses the local npm, not Windows npm
-        export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
         npm install -g @qwen-code/cli 2>&1 | tail -3
         NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
         export PATH="${NPM_GLOBAL_BIN}:${PATH}"
@@ -1799,7 +1835,13 @@ cat <<'EOF'
  ╚══════════════════════════════════════════════════════════╝
 EOF
 echo -e "${RST}"
-echo -e " ${BLD}Installed:${RST}"
+echo -e " ${BLD}Versions Installed:${RST}"
+echo -e "  Node.js          →  $(node --version 2>/dev/null || echo 'Not installed')"
+echo -e "  npm              →  $(npm --version 2>/dev/null || echo 'Not installed')"
+echo -e "  pnpm             →  $(pnpm --version 2>/dev/null || echo 'Not installed')"
+echo -e "  Python           →  $(python3 --version 2>/dev/null || echo 'Not installed')"
+echo -e "  llama.cpp        →  $(llama-server --version 2>&1 | head -1 || echo 'Latest')"
+echo -e "  ${BLD}Services:${RST}"
 echo -e "  llama-server     →  http://localhost:8080/v1"
 echo -e "  llama.cpp Web UI →  http://localhost:8080"
 echo -e "  Hermes WebAPI    →  http://localhost:8642"
