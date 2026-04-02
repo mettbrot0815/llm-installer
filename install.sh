@@ -739,7 +739,8 @@ mkdir -p "${HOME}/.config/systemd/user"
 cat > "${HOME}/.config/systemd/user/hermes-webapi.service" <<WEBAPI_SERVICE
 [Unit]
 Description=Hermes Agent WebAPI
-After=default.target
+After=llama-server.service network.target
+Requires=llama-server.service
 
 [Service]
 Type=simple
@@ -825,7 +826,8 @@ PNPM_BIN=$(command -v pnpm)
 cat > "${HOME}/.config/systemd/user/hermes-workspace.service" <<WORKSPACE_SERVICE
 [Unit]
 Description=Hermes Workspace Web UI
-After=hermes-webapi.service default.target
+After=hermes-webapi.service network.target
+Requires=hermes-webapi.service
 
 [Service]
 Type=simple
@@ -1451,58 +1453,36 @@ mkdir -p "${HOME}/.config/systemd/user"
 cat > "${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
 [Unit]
 Description=llama-server LLM inference
-After=default.target
+After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -c 'echo n | bash ${LAUNCH_SCRIPT}'
+ExecStart=${LLAMA_SERVER_BIN} -m ${GGUF_PATH} -ngl 99 -fa on -c ${SAFE_CTX} -np 1 --cache-type-k q4_0 --cache-type-v q4_0 --host 0.0.0.0 --port 8080 ${USE_JINJA}
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${HOME}
-Environment=PATH=/usr/local/cuda/bin:${HOME}/hermes-agent/.venv/bin:${HOME}/.local/bin:/usr/bin:/bin
+Environment=PATH=/usr/local/cuda/bin:${HOME}/.local/bin:/usr/bin:/bin
+StandardOutput=file:/tmp/llama-server.log
+StandardError=file:/tmp/llama-server.log
 
 [Install]
 WantedBy=default.target
 SERVICE
 
 if systemctl --user daemon-reload 2>/dev/null; then
-    systemctl --user enable --now llama-server.service 2>/dev/null || true
-    ok "systemd service enabled."
+    systemctl --user enable llama-server.service 2>/dev/null || true
+    ok "systemd services configured for auto-start."
+    info "Services will auto-start on next login. Use 'start-llm' for immediate start."
 else
-    warn "systemd --user unavailable — using ~/.bashrc auto-start."
+    warn "systemd --user unavailable — services must be started manually with 'start-llm'"
 fi
 
 # =============================================================================
 #  12b. Start all services after installation
 # =============================================================================
 if [[ "$HERMES_WEBAPI_INSTALLED" == "true" && "$HERMES_WORKSPACE_INSTALLED" == "true" ]]; then
-    step "Starting all services for first use..."
-    
-    # Start Hermes WebAPI if systemd is available
     if systemctl --user daemon-reload 2>/dev/null; then
-        systemctl --user start hermes-webapi.service 2>/dev/null && ok "Hermes WebAPI started." || warn "WebAPI start failed."
-        sleep 2
-        
-        # Wait for WebAPI to be ready
-        for i in {1..10}; do
-            if curl -sf http://localhost:8642/health &>/dev/null; then
-                ok "Hermes WebAPI ready at http://localhost:8642"
-                break
-            fi
-            sleep 1
-        done
-        
-        systemctl --user start hermes-workspace.service 2>/dev/null && ok "Hermes Workspace started." || warn "Workspace start failed."
-        sleep 3
-        
-        # Wait for Workspace to be ready
-        for i in {1..15}; do
-            if curl -sf http://localhost:3000 &>/dev/null; then
-                ok "Hermes Workspace ready at http://localhost:3000 ⭐"
-                break
-            fi
-            sleep 1
-        done
+        info "Services configured for auto-start. Use 'start-llm' to start immediately."
     else
         warn "systemd unavailable — services must be started manually with 'start-llm'"
     fi
@@ -1542,7 +1522,9 @@ BASHRC_START
 
 # LLM aliases
 alias start-llm='bash ~/start-llm.sh'
-alias stop-llm='pkill -f llama-server && pkill -f "hermes webapi" && pkill -f "pnpm dev" && echo "All LLM services stopped."'
+alias start-llm-services='systemctl --user start llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services started via systemd" || bash ~/start-llm.sh'
+alias stop-llm='systemctl --user stop llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services stopped via systemd" || (pkill -f llama-server && pkill -f "hermes webapi" && pkill -f "pnpm dev" && echo "All LLM services stopped manually.")'
+alias restart-llm='systemctl --user restart llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services restarted via systemd" || (stop-llm && sleep 2 && start-llm)'
 alias llm-log='tail -f /tmp/llama-server.log'
 alias switch-model='install.sh'
 alias hermes-update='hermes update'
@@ -1577,6 +1559,25 @@ llm-models() {
         grep -q "$name" ~/start-llm.sh 2>/dev/null && active=" ${GRN}← active${RST}"
         echo -e "  ${size}  ${name}${active}"
     done
+    echo ""
+}
+
+llm-services() {
+    echo -e "\n  ${BLD}Systemd Services Status:${RST}"
+    echo "  ─────────────────────────────────────────────────"
+    if command -v systemctl &>/dev/null; then
+        for service in llama-server hermes-webapi hermes-workspace; do
+            status=$(systemctl --user is-active "$service.service" 2>/dev/null || echo "inactive")
+            enabled=$(systemctl --user is-enabled "$service.service" 2>/dev/null || echo "disabled")
+            case $status in
+                active) color=$GRN; icon="✓" ;;
+                *) color=$RED; icon="✗" ;;
+            esac
+            printf "  %s %-20s %s (%s)\n" "$icon" "$service.service" "$status" "$enabled"
+        done
+    else
+        echo "  systemd not available"
+    fi
     echo ""
 }
 
@@ -1646,19 +1647,16 @@ show_llm_summary() {
     echo -e "${BLD}${CYN}╭────────────────────────────────────────────────────────────────╮${RST}"
     echo -e "${BLD}${CYN}│${RST}  ${BLD}LLM Quick Commands${RST}"
     echo -e "${BLD}${CYN}│${RST}  ──────────────────────────────────────────────────────"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}start-llm${RST}        → Start full LLM stack"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}stop-llm${RST}         → Stop all services"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-status${RST}       → Check service status"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-log${RST}          → View llama-server logs"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-models${RST}       → List downloaded models"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}start-workspace${RST}  → Start Workspace (manual)"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}vram${RST}             → GPU/VRAM usage"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}hermes${RST}           → Hermes AI agent"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}qwen${RST}             → Qwen Code assistant"
-    echo -e "${BLD}${CYN}│${RST}  ──────────────────────────────────────────────────────"
-    echo -e "${BLD}${CYN}│${RST}  ${BLD}Web UIs:${RST}"
-    echo -e "${BLD}${CYN}│${RST}  ${GRN}http://localhost:3000${RST}  → Hermes Workspace ⭐"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}http://localhost:8080${RST}  → llama-server"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}start-llm-services${RST} → Auto-start via systemd"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}start-llm${RST}          → Start full stack manually"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}stop-llm${RST}           → Stop all services"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}restart-llm${RST}        → Restart all services"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-status${RST}         → Check service status"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-services${RST}       → Check systemd services"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-log${RST}            → View llama-server logs"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-models${RST}         → List downloaded models"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}vram${RST}               → GPU/VRAM usage"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}hermes${RST}             → Hermes AI agent"
     echo -e "${BLD}${CYN}╰────────────────────────────────────────────────────────────────╯${RST}"
     echo ""
 }
@@ -1740,14 +1738,15 @@ echo -e "  Model            →  ${SEL_NAME}  (context: ${SAFE_CTX})"
 [[ "$VIDEO_DEPS_INSTALLED" == "true" ]] && echo -e "  Video Gen        →  Stable Video Diffusion"
 echo ""
 echo -e " ${BLD}Usage:${RST}"
-echo -e "  ${CYN}start-llm${RST}          start full stack (all 3 services)"
+echo -e "  ${CYN}start-llm-services${RST} auto-start all services (systemd)"
+echo -e "  ${CYN}start-llm${RST}          start full stack manually (fallback)"
 echo -e "  ${CYN}stop-llm${RST}           stop all services"
-echo -e "  ${CYN}llm-status${RST}         check service status"
+echo -e "  ${CYN}restart-llm${RST}        restart all services"
+echo -e "  ${CYN}llm-status${RST}         check running processes"
+echo -e "  ${CYN}llm-services${RST}       check systemd services"
 echo -e "  ${CYN}llm-log${RST}            tail llama-server logs"
 echo -e "  ${CYN}llm-models${RST}         list downloaded models"
 echo -e "  ${CYN}switch-model${RST}       change model (re-run installer)"
-echo -e "  ${CYN}start-workspace${RST}    start Workspace manually"
-echo -e "  ${CYN}stop-workspace${RST}     stop Workspace"
 echo -e "  ${CYN}hermes${RST}             Hermes AI agent (CLI)"
 echo -e "  ${CYN}qwen${RST}               Qwen Code assistant"
 echo -e "  ${CYN}vram${RST}               GPU/VRAM usage"
@@ -1764,6 +1763,8 @@ echo -e "  • Memory & skills management"
 echo -e "  • Terminal integration"
 echo -e "  • 8 themes (light/dark modes)"
 echo -e "  • PWA — install as desktop app"
+echo -e "  • Auto-start services on boot"
+echo -e "  • Proper service dependencies"
 echo ""
 echo -e " ${BLD}Docs:${RST}"
 echo -e "  llama.cpp       →  https://github.com/ggml-org/llama.cpp"
@@ -1772,5 +1773,6 @@ echo -e "  Hermes Workspace →  https://github.com/outsourc-e/hermes-workspace"
 echo -e "  Qwen Code       →  https://github.com/QwenLM/qwen-code"
 echo ""
 echo -e " ${YLW}Note:${RST} Run 'source ~/.bashrc' or open a new terminal."
+echo -e " ${GRN}Auto-start:${RST} Services start automatically on next login."
 [[ "$VIDEO_DEPS_INSTALLED" == "true" ]] && echo -e " ${YLW}Video:${RST} Run 'source ~/.profile' for generate-video in PATH."
 echo ""
