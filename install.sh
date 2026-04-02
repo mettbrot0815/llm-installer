@@ -594,7 +594,7 @@ fi
 source "${HERMES_VENV}/bin/activate"
 if ! python -c "import hermes_agent" &>/dev/null; then
     step "Installing Hermes Agent dependencies (first time ~2-5 min)..."
-    pip install --quiet -e "${HERMES_AGENT_DIR}" 2>&1 | tail -3
+    pip install --quiet -e "${HERMES_AGENT_DIR}[all]" 2>&1 | tail -3
     ok "Hermes Agent dependencies installed."
 else
     ok "Hermes Agent already installed in venv."
@@ -750,7 +750,7 @@ Requires=llama-server.service
 [Service]
 Type=simple
 WorkingDirectory=${HERMES_AGENT_DIR}
-ExecStart=${HERMES_VENV}/bin/hermes webapi
+ExecStart=${HERMES_VENV}/bin/python -m webapi
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${HOME}
@@ -1298,7 +1298,7 @@ WORKSPACE_DIR="${HOME}/hermes-workspace"
 
 # Check for running services
 LLAMA_PID=\$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=\$(pgrep -f "hermes webapi" 2>/dev/null || true)
+WEBAPI_PID=\$(pgrep -f "python -m webapi" 2>/dev/null || true)
 WORKSPACE_PID=\$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
 
 if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
@@ -1314,7 +1314,7 @@ if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
     fi
     if [[ "\$kill_choice" =~ ^[Yy]\$ ]]; then
         pkill -f "llama-server" 2>/dev/null || true
-        pkill -f "hermes webapi" 2>/dev/null || true
+        pkill -f "python -m webapi" 2>/dev/null || true
         pkill -f "pnpm dev" 2>/dev/null || true
         sleep 2
         echo "✓ All services stopped."
@@ -1362,7 +1362,7 @@ done
 echo "[2/3] Starting Hermes WebAPI..."
 source "\${HERMES_VENV}/bin/activate"
 cd "\${HERMES_AGENT_DIR}"
-hermes webapi &
+python -m webapi &
 WEBAPI_PID=\$!
 deactivate 2>/dev/null || true
 sleep 2
@@ -1419,7 +1419,7 @@ WORKSPACE_DIR="${HOME}/hermes-workspace"
 
 # Check for running services
 LLAMA_PID=\$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=\$(pgrep -f "hermes webapi" 2>/dev/null || true)
+WEBAPI_PID=\$(pgrep -f "python -m webapi" 2>/dev/null || true)
 WORKSPACE_PID=\$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
 
 if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
@@ -1434,7 +1434,7 @@ if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
     fi
     if [[ "\$kill_choice" =~ ^[Yy]\$ ]]; then
         pkill -f "llama-server" 2>/dev/null || true
-        pkill -f "hermes webapi" 2>/dev/null || true
+        pkill -f "python -m webapi" 2>/dev/null || true
         pkill -f "pnpm dev" 2>/dev/null || true
         sleep 2
         echo "✓ All services stopped."
@@ -1477,7 +1477,7 @@ done
 echo "[2/3] Starting Hermes WebAPI..."
 source "\${HERMES_VENV}/bin/activate"
 cd "\${HERMES_AGENT_DIR}"
-hermes webapi &
+python -m webapi &
 WEBAPI_PID=\$!
 deactivate 2>/dev/null || true
 sleep 2
@@ -1632,7 +1632,7 @@ BASHRC_START
 # LLM aliases
 alias start-llm='bash ~/start-llm.sh'
 alias start-llm-services='systemctl --user start llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services started via systemd" || bash ~/start-llm.sh'
-alias stop-llm='systemctl --user stop llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services stopped via systemd" || (pkill -f llama-server && pkill -f "hermes webapi" && pkill -f "pnpm dev" && echo "All LLM services stopped manually.")'
+alias stop-llm='systemctl --user stop llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services stopped via systemd" || (pkill -f llama-server && pkill -f "python -m webapi" && pkill -f "pnpm dev" && echo "All LLM services stopped manually.")'
 alias restart-llm='systemctl --user restart llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services restarted via systemd" || (stop-llm && sleep 2 && start-llm)'
 alias llm-log='tail -f /tmp/llama-server.log'
 alias switch-model='install.sh'
@@ -1644,8 +1644,8 @@ alias hermes-summarise='echo "Summarise: decisions, code, bugs, current task. Dr
 # Hermes Workspace aliases
 alias start-workspace='cd ~/hermes-workspace && pnpm dev'
 alias stop-workspace='pkill -f "pnpm dev" && echo "Hermes Workspace stopped."'
-alias start-hermes-api='source ~/hermes-agent/.venv/bin/activate && cd ~/hermes-agent && hermes webapi'
-alias stop-hermes-api='pkill -f "hermes webapi" && echo "Hermes WebAPI stopped."'
+alias start-hermes-api='source ~/hermes-agent/.venv/bin/activate && cd ~/hermes-agent && python -m webapi'
+alias stop-hermes-api='pkill -f "python -m webapi" && echo "Hermes WebAPI stopped."'
 alias workspace-log='tail -f ~/hermes-workspace/logs/*.log 2>/dev/null || echo "No workspace logs found."'
 alias hermes-api-log='tail -f ~/hermes-agent/logs/*.log 2>/dev/null || echo "No WebAPI logs found."'
 
@@ -1696,7 +1696,7 @@ llm-status() {
     echo -e "${BLD}${CYN}│${RST}  ──────────────────────────────────────────────────────"
     
     LLAMA_PID=\$(pgrep -f "llama-server" 2>/dev/null || true)
-    WEBAPI_PID=\$(pgrep -f "hermes webapi" 2>/dev/null || true)
+    WEBAPI_PID=\$(pgrep -f "python -m webapi" 2>/dev/null || true)
     WORKSPACE_PID=\$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
     
     if [[ -n "\$LLAMA_PID" ]]; then
