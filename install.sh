@@ -471,6 +471,7 @@ else
     fi
     ok "Disk space OK: ${AVAIL_GB}GB available, ~${REQ_GB_INT}GB needed."
 
+    echo "  → Starting download from HuggingFace..."
     if [[ -n "${HF_TOKEN:-}" ]]; then
         HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}"
     else
@@ -513,7 +514,7 @@ if [[ -n "$LLAMA_SERVER_BIN" ]]; then
     ok "To force rebuild: rm ${LLAMA_SERVER_BIN} and rerun."
 else
     step "Building llama.cpp from source (5–15 min first time, ~1 min with ccache)..."
-    
+
     # Check if ccache is available and working
     if command -v ccache &>/dev/null; then
         ok "ccache found: $(ccache --version | head -1)"
@@ -523,6 +524,8 @@ else
         warn "ccache not found — building without cache (slower recompilation)"
         export CC="gcc" CXX="g++"
     fi
+
+    echo "  → Configuring build with CMake..."
     
     LLAMA_DIR="${HOME}/llama.cpp"
 
@@ -536,12 +539,16 @@ else
 
     cd "$LLAMA_DIR"
     if [[ "$HAS_NVIDIA" == "true" ]]; then
+        echo "  → CUDA support detected — building with GPU acceleration..."
         cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
     else
+        echo "  → Building for CPU only..."
         cmake -B build -DGGML_CCACHE=ON
     fi
+    echo "  → Compiling llama.cpp (this may take 5-15 minutes)..."
     cmake --build build --config Release -j"$(nproc)"
+    echo "  → Installing system-wide..."
     sudo cmake --install build || warn "System install failed — using build directory."
     cd ~
 
@@ -594,7 +601,8 @@ fi
 source "${HERMES_VENV}/bin/activate"
 if ! python -c "import hermes_agent" &>/dev/null; then
     step "Installing Hermes Agent dependencies (first time ~2-5 min)..."
-    pip install --quiet -e "${HERMES_AGENT_DIR}[all]" 2>&1 | tail -3
+    echo "  → Installing OpenAI SDK, FastAPI, uvicorn, and all optional dependencies..."
+    pip install -e "${HERMES_AGENT_DIR}[all]"
     ok "Hermes Agent dependencies installed."
 else
     ok "Hermes Agent already installed in venv."
@@ -870,10 +878,12 @@ ok "pnpm ready: $(pnpm --version)"
 cd "${WORKSPACE_DIR}"
 if [[ ! -d "node_modules" ]]; then
     step "Installing Hermes Workspace dependencies (first time ~2-5 min)..."
-    pnpm install 2>&1 | tail -5
+    echo "  → Installing React, TypeScript, Monaco Editor, and UI dependencies..."
+    pnpm install
 else
     step "Updating Hermes Workspace dependencies to latest versions..."
-    pnpm update 2>&1 | tail -3
+    echo "  → Updating React, TypeScript, and UI dependencies..."
+    pnpm update
 fi
 
 # Create .env for workspace
@@ -945,25 +955,27 @@ mkdir -p "$VIDEO_GEN_DIR"
 
 VIDEO_DEPS_INSTALLED=false
 if python3 -c "import diffusers; import transformers; import accelerate; import PIL" &>/dev/null; then
-    step "Updating video generation dependencies to latest versions..."
-    pip3 install --quiet --user --break-system-packages --upgrade \
-        diffusers transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg \
-        torch torchvision --index-url https://download.pytorch.org/whl/cu121 2>&1 | tail -3
-    ok "Video generation dependencies updated."
+        step "Updating video generation dependencies to latest versions..."
+        echo "  → Installing diffusers, transformers, PyTorch..."
+        pip3 install --user --break-system-packages --upgrade \
+            diffusers transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg \
+            torch torchvision --index-url https://download.pytorch.org/whl/cu121
+        ok "Video generation dependencies updated."
     VIDEO_DEPS_INSTALLED=true
 else
     read -rp "  Install text-to-video generation support? (requires ~2GB disk) [y/N]: " install_video
     if [[ "$install_video" =~ ^[Yy]$ ]]; then
         step "Installing video generation dependencies..."
-        if pip3 install --quiet --user --break-system-packages \
+        echo "  → Installing PyTorch with CUDA support..."
+        if pip3 install --user --break-system-packages \
             diffusers transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg \
-            torch torchvision --index-url https://download.pytorch.org/whl/cu121 2>/dev/null; then
+            torch torchvision --index-url https://download.pytorch.org/whl/cu121; then
             ok "Video dependencies installed with CUDA backend."
-        elif pip3 install --quiet --user --break-system-packages \
-            "diffusers[torch]" transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg torch torchvision 2>/dev/null; then
-            ok "Video dependencies installed."
         else
-            warn "Video dependencies install failed — install manually with: pip3 install 'diffusers[torch]' transformers accelerate..."
+            echo "  → CUDA installation failed, trying CPU-only version..."
+            pip3 install --user --break-system-packages \
+                "diffusers[torch]" transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg torch torchvision
+            ok "Video dependencies installed (CPU version)."
         fi
 
         if python3 -c "import diffusers; import transformers" &>/dev/null; then
@@ -1202,11 +1214,14 @@ fi
 step "Updating system packages and Python dependencies..."
 
 # Update system packages
-sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && \
-sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq 2>&1 | tail -3
+echo "  → Updating system package lists..."
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+echo "  → Upgrading system packages..."
+sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
 
 # Update pip and key Python packages
-pip3 install --quiet --user --break-system-packages --upgrade pip setuptools wheel 2>&1 | tail -3
+echo "  → Updating Python package managers..."
+pip3 install --user --break-system-packages --upgrade pip setuptools wheel
 ok "System and Python package managers updated."
 
 # =============================================================================
@@ -1615,6 +1630,12 @@ export __LLM_BASHRC_LOADED=1
 
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
+
+# Progress indicator for long operations
+show_progress() {
+    local msg="$1"
+    echo -ne "  → ${msg}...\r"
+}
 export PATH="/usr/local/cuda/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 # Prioritize system Node.js and local tools over Windows installations
