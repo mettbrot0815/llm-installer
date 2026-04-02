@@ -890,7 +890,9 @@ ok "pnpm $(pnpm --version) ready."
 # ── Install OpenClaude ────────────────────────────────────────────────────────
 if ! command -v openclaude &>/dev/null; then
     step "Installing OpenClaude coding agent..."
-    curl -fsSL https://gitlawb.com/node/repos/z6MkqDnb/openclaude/install.sh | bash
+    npm config set prefix ~/.local
+    npm install @gitlawb/openclaude
+    export PATH="$HOME/.local/bin:$PATH"
     if command -v openclaude &>/dev/null; then
         ok "OpenClaude installed."
     else
