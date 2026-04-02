@@ -75,17 +75,11 @@ elif grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
 fi
 
 if [[ -z "$HF_TOKEN" ]]; then
-    echo ""
-    echo -e "  ${BLD}Why add a HuggingFace token?${RST}"
-    echo -e "  • Faster downloads from dedicated endpoints"
-    echo -e "  • Higher rate limits"
-    echo -e "  • Access to gated models (if you have access)"
-    echo ""
-    echo -e "  ${BLD}Get a free token here:${RST}"
-    echo -e "  ${CYN}https://huggingface.co/settings/tokens${RST}"
-    echo -e "  ${CYN}(Click 'New token' → give it a name → copy the token)${RST}"
-    echo ""
-    read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn
+    if [[ -t 0 ]]; then
+        read -rp "  Do you want to add a HuggingFace token? [y/N]: " hf_yn
+    else
+        hf_yn="n"  # Default to no in non-interactive mode
+    fi
     if [[ "$hf_yn" =~ ^[Yy]$ ]]; then
         read -rp "  Paste your token (starts with hf_): " HF_TOKEN
         HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
@@ -159,7 +153,11 @@ echo -e "  GPU  : ${GPU_NAME}   VRAM: ${VRAM_GiB} GiB   CUDA: ${HAS_NVIDIA}"
 
 if [[ "$HAS_NVIDIA" != "true" ]]; then
     warn "No NVIDIA GPU — llama.cpp will be CPU-only (much slower)."
-    read -rp "  Continue with CPU-only build? [y/N]: " cpu_ok
+    if [[ -t 0 ]]; then
+        read -rp "  Continue with CPU-only build? [y/N]: " cpu_ok
+    else
+        cpu_ok="y"  # Default to yes in non-interactive mode
+    fi
     [[ "$cpu_ok" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 fi
 
@@ -180,6 +178,8 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
         sudo dpkg -i /tmp/cuda-keyring.deb
         sudo apt-get update -qq
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6
+# Install optional dependencies if available
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq procps gettext-base 2>/dev/null || true
         ok "CUDA toolkit 12.6 installed."
     fi
     export PATH="/usr/local/cuda/bin:${PATH}"
@@ -358,13 +358,15 @@ fi
 ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
 
 GRADE_SEL=$(grade_model "$SEL_MIN_RAM" "$SEL_MIN_VRAM" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
-if [[ "$GRADE_SEL" == "F" ]]; then
-    warn "Grade F — this model will likely fail on your hardware."
-    read -rp "  Continue anyway? [y/N]: " go_anyway
-    [[ "$go_anyway" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
-elif [[ "$GRADE_SEL" == "C" ]]; then
-    warn "Grade C — tight fit, expect slow responses."
-fi
+    if [[ "$GRADE_SEL" == "F" ]]; then
+        warn "⚠️  Model grade 'F' — insufficient VRAM/RAM. Continue anyway?"
+        if [[ -t 0 ]]; then
+            read -rp "  Continue with this model? [y/N]: " grade_ok
+        else
+            grade_ok="n"  # Default to no for grade F models in non-interactive mode
+        fi
+        [[ "$grade_ok" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    fi
 
 # Context window and Jinja template settings per model
 # Qwen3.5 supports 256K context - use full capability
@@ -400,7 +402,12 @@ HF_CLI="${HOME}/.local/bin/hf"
 HF_CLI_LEGACY="${HOME}/.local/bin/huggingface-cli"
 
 if [[ ! -x "$HF_CLI" && ! -x "$HF_CLI_LEGACY" ]]; then
-    pip3 install --quiet --user --break-system-packages huggingface_hub
+    # Check if --break-system-packages is supported
+    if pip3 install --help 2>/dev/null | grep -q "break-system-packages"; then
+        pip3 install --quiet --user --break-system-packages huggingface_hub
+    else
+        pip3 install --quiet --user huggingface_hub
+    fi
 fi
 
 if [[ -x "$HF_CLI" ]]; then
@@ -417,7 +424,12 @@ fi
 
 # Update HuggingFace CLI to latest version
 step "Updating HuggingFace CLI to latest version..."
-pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -3
+    # Check if --break-system-packages is supported
+    if pip3 install --help 2>/dev/null | grep -q "break-system-packages"; then
+        pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -3
+    else
+        pip3 install --quiet --user --upgrade huggingface_hub 2>&1 | tail -3
+    fi
 
 ok "$HF_CLI_NAME ready: $( "$HF_CLI_USED" version 2>/dev/null || echo 'ok' )"
 
@@ -643,7 +655,11 @@ if [[ -x "$HERMES_BIN" ]] && "${HERMES_BIN}" --help &>/dev/null; then
     step "Checking for Hermes updates..."
     UPDATE_OUTPUT=$("${HERMES_BIN}" update --check 2>&1 || true)
     if echo "$UPDATE_OUTPUT" | grep -qi "update available"; then
-        read -rp "  Hermes update available. Install? [Y/n]: " update_yn
+        if [[ -t 0 ]]; then
+            read -rp "  Hermes update available. Install? [Y/n]: " update_yn
+        else
+            update_yn="y"  # Default to yes for updates in non-interactive mode
+        fi
         if [[ ! "$update_yn" =~ ^[Nn]$ ]]; then
             if "${HERMES_BIN}" update; then
                 ok "Hermes updated."
@@ -854,10 +870,10 @@ else
 fi
 
 # Install pnpm using the standalone installer
-if [[ ! -x "$LOCAL_PNPM" ]]; then
-    rm -rf "${HOME}/.local/share/pnpm" 2>/dev/null || true
+    if [[ ! -x "$LOCAL_PNPM" ]]; then
+        rm -rf "${HOME}/.local/share/pnpm" 2>/dev/null || true
 
-    if curl -fsSL https://get.pnpm.io/install.sh | env PNPM_HOME="${HOME}/.local/share/pnpm" sh -; then
+        if curl -fsSL https://get.pnpm.io/install.sh | env PNPM_HOME="${HOME}/.local/share/pnpm" bash -; then
         export PNPM_HOME="${HOME}/.local/share/pnpm"
         export PATH="$PNPM_HOME:$PATH"
         ok "pnpm installed locally to ${PNPM_HOME}"
@@ -1006,7 +1022,12 @@ fi
 # Update pip only if needed
 if ! pip3 list --user 2>/dev/null | grep -q "^pip "; then
     echo "  → Updating Python package managers..."
-    pip3 install --user --break-system-packages --upgrade pip setuptools wheel
+    # Check if --break-system-packages is supported (pip 23.0+)
+    if pip3 install --help 2>/dev/null | grep -q "break-system-packages"; then
+        pip3 install --user --break-system-packages --upgrade pip setuptools wheel
+    else
+        pip3 install --user --upgrade pip setuptools wheel
+    fi
 else
     echo "  → pip already up to date"
 fi
@@ -1047,16 +1068,18 @@ if command -v node &>/dev/null; then
         step "Installing Qwen Code..."
         export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
         # Use official Qwen Code installation script
-        if bash -c "$(curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh)" 2>/dev/null; then
-            ok "Qwen Code installed via official installer."
+        if bash -c "$(curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh)" 2>/dev/null && command -v qwen &>/dev/null; then
+            ok "Qwen Code installed successfully."
+            QWEN_CODE_INSTALLED=true
         else
             warn "Qwen Code installation failed — you can install manually with:"
             warn "bash -c \"\$(curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh)\""
+            QWEN_CODE_INSTALLED=false
         fi
     else
         ok "Qwen Code already installed."
+        QWEN_CODE_INSTALLED=true
     fi
-    QWEN_CODE_INSTALLED=true
 
     step "Writing ~/.qwen/settings.json..."
     mkdir -p "${HOME}/.qwen"
@@ -1111,9 +1134,9 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
         printf '\n'
         printf 'if [[ -n "$LLAMA_PID" || -n "$WEBAPI_PID" || -n "$WORKSPACE_PID" ]]; then\n'
         printf '    echo -e "\\n⚠️  Services already running:"\n'
-        printf '    [[ -n "$LLAMA_PID" ]] && echo "   llama-server:  $LLAMA_PID"\n'
-        printf '    [[ -n "$WEBAPI_PID" ]] && echo "   Hermes WebAPI: $WEBAPI_PID"\n'
-        printf '    [[ -n "$WORKSPACE_PID" ]] && echo "   Workspace:     $WORKSPACE_PID"\n'
+        printf '    [[ -n "$LLAMA_PID" ]] && echo "   llama-server:  \$LLAMA_PID"\n'
+        printf '    [[ -n "$WEBAPI_PID" ]] && echo "   Hermes WebAPI: \$WEBAPI_PID"\n'
+        printf '    [[ -n "$WORKSPACE_PID" ]] && echo "   Workspace:     \$WORKSPACE_PID"\n'
         printf '    echo ""\n'
         printf '    if [[ -t 0 ]]; then\n'
         printf '        read -rp "Terminate and start fresh? [y/N]: " kill_choice\n'
@@ -1136,9 +1159,9 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
         printf 'echo "│           Starting Full LLM Stack                                │"\n'
         printf 'echo "╰──────────────────────────────────────────────────────────────────╯"\n'
         printf 'echo ""\n'
-        printf 'echo "  Model     : $MODEL_NAME"\n'
-        printf 'echo "  Context   : $SAFE_CTX tokens"\n'
-        printf 'echo "  Jinja     : $USE_JINJA"\n'
+        printf 'echo "  Model     : \$MODEL_NAME"\n'
+        printf 'echo "  Context   : \$SAFE_CTX tokens"\n'
+        printf 'echo "  Jinja     : \$USE_JINJA"\n'
         printf 'echo ""\n'
         printf 'echo "  Endpoints:"\n'
         printf 'echo "  ────────────────────────────────────────────────────────────────"\n'
@@ -1152,15 +1175,15 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
         printf '\n'
         printf '# Start llama-server\n'
         printf 'echo "[1/3] Starting llama-server..."\n'
-        printf '"$LLAMA_BIN" -m "$GGUF" -ngl 99 -fa on -c "$SAFE_CTX" -np 1 \\\n'
-        printf '    --host 0.0.0.0 --port 8080 $USE_JINJA &\n'
-        printf 'LLAMA_PID=$!\n'
+        printf '"\$LLAMA_BIN" -m "\$GGUF" -ngl 99 -fa on -c "\$SAFE_CTX" -np 1 \\\n'
+        printf '    --host 0.0.0.0 --port 8080 \$USE_JINJA &\n'
+        printf 'LLAMA_PID=\$!\n'
         printf 'sleep 2\n'
         printf '\n'
         printf '# Wait for llama-server to be ready\n'
         printf 'for attempt in {1..15}; do\n'
         printf '    if curl -sf http://localhost:8080/v1/models &>/dev/null; then\n'
-        printf '        echo "✓ llama-server ready (PID: $LLAMA_PID)"\n'
+        printf '        echo "✓ llama-server ready (PID: \$LLAMA_PID)"\n'
         printf '        break\n'
         printf '    fi\n'
         printf '    sleep 1\n'
@@ -1171,7 +1194,7 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
         printf 'source "$HERMES_VENV/bin/activate"\n'
         printf 'cd "$HERMES_AGENT_DIR"\n'
         printf 'python -m webapi &\n'
-        printf 'WEBAPI_PID=$!\n'
+        printf 'WEBAPI_PID=\$!\n'
         printf 'deactivate 2>/dev/null || true\n'
         printf 'sleep 2\n'
         printf '\n'
@@ -1190,8 +1213,8 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
         printf '# Start Hermes Workspace\n'
         printf 'echo "[3/3] Starting Hermes Workspace..."\n'
         printf 'cd "$WORKSPACE_DIR"\n'
-        printf '"$HOME/.local/share/pnpm/pnpm" dev &\n'
-        printf 'WORKSPACE_PID=$!\n'
+        printf '"\$HOME/.local/share/pnpm/pnpm" dev &\n'
+        printf 'WORKSPACE_PID=\$!\n'
         printf 'sleep 3\n'
         printf '\n'
         printf '# Wait for Workspace to be ready\n'
@@ -1464,7 +1487,21 @@ alias start-llm-services='systemctl --user start llama-server.service hermes-web
 alias stop-llm='systemctl --user stop llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services stopped via systemd" || (pkill -f llama-server && pkill -f "python -m webapi" && pkill -f "pnpm dev" && echo "All LLM services stopped manually.")'
 alias restart-llm='systemctl --user restart llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services restarted via systemd" || (stop-llm && sleep 2 && start-llm)'
 alias llm-log='tail -f /tmp/llama-server.log'
-alias switch-model='install.sh'
+switch-model() {
+    # Find the installer script and re-run it
+    local installer_path
+    if [[ -f "${HOME}/.llm_installer_path" ]]; then
+        installer_path=$(cat "${HOME}/.llm_installer_path")
+    elif command -v find &>/dev/null; then
+        installer_path=$(find /home -name "install.sh" -path "*/llm*" 2>/dev/null | head -1)
+    fi
+    if [[ -f "$installer_path" ]]; then
+        echo "Re-running installer: $installer_path"
+        bash "$installer_path"
+    else
+        echo "Could not find installer script. Please run it manually."
+    fi
+}
 alias hermes-update='hermes update'
 alias hermes-doctor='hermes doctor'
 alias hermes-sessions='hermes sessions list'
@@ -1598,6 +1635,9 @@ show_llm_summary() {
     echo -e "${BLD}${CYN}╰────────────────────────────────────────────────────────────────╯${RST}"
     echo ""
 }
+
+    # Save installer path for switch-model function
+    echo "$(readlink -f "$0")" > "${HOME}/.llm_installer_path"
 
 [[ $- == *i* && ! -f "${HOME}/.llm_summary_shown" ]] && { show_llm_summary; touch "${HOME}/.llm_summary_shown"; }
 BASHRC_END
