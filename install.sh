@@ -18,11 +18,63 @@ set -euo pipefail
 # ── Colour helpers — exported so subshells (llm-models fn) can use them ───────
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
-step() { echo -e "\n${CYN}[*] $*${RST}"; }
+step() {
+    echo -e "\n${CYN}[$(date '+%Y-%m-%d %H:%M:%S')] [*] $*${RST}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [*] $*" >> "$LOG_FILE"
+}
 ok()   { echo -e "${GRN}[+] $*${RST}"; }
 info() { ok "$*"; }   # alias for consistency
 warn() { echo -e "${YLW}[!] $*${RST}"; }
 die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
+
+# ── Pre-flight checks ────────────────────────────────────────────────────────
+step "Running pre-flight checks..."
+
+# Check if running as root (should NOT be)
+if [[ $EUID -eq 0 ]]; then
+    die "This script should NOT be run as root. Run as normal user with sudo privileges."
+fi
+
+# Check for minimum Ubuntu version
+if [[ -f /etc/os-release ]]; then
+    source /etc/os-release
+    if [[ "$ID" != "ubuntu" ]] && [[ "$ID" != "debian" ]]; then
+        warn "This script is designed for Ubuntu/Debian. You're running $ID - may not work."
+    fi
+fi
+
+# Check for internet connectivity
+if ! ping -c 1 google.com &>/dev/null; then
+    die "No internet connection. Please check your network."
+fi
+
+# Check for sufficient disk space before starting
+MIN_DISK_GB=20
+AVAIL_DISK_GB=$(df -BG "$HOME" | awk 'NR==2 {print $4}' | sed 's/G//')
+if (( AVAIL_DISK_GB < MIN_DISK_GB )); then
+    die "Low disk space: ${AVAIL_DISK_GB}GB available, need at least ${MIN_DISK_GB}GB"
+fi
+
+ok "Pre-flight checks passed."
+
+# ── Uninstall option ──────────────────────────────────────────────────────────
+if [[ "${1:-}" == "--uninstall" ]]; then
+    echo "Uninstalling LLM stack..."
+    
+    # Stop services
+    systemctl --user stop llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null || true
+    systemctl --user disable llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null || true
+    
+    # Remove directories
+    rm -rf "$HOME/llama.cpp" "$HOME/hermes-agent" "$HOME/hermes-workspace" "$HOME/llm-models"
+    rm -f "$HOME/start-llm.sh" "$HOME/.local/bin/hermes"
+    
+    # Remove from .bashrc
+    sed -i '/# === LLM setup (added by install.sh) ===/,/# === LLM setup end ===/d' "$HOME/.bashrc" 2>/dev/null || true
+    
+    echo "Uninstall complete. Removed all LLM components."
+    exit 0
+fi
 
 # ── Temp file cleanup on exit ──────────────────────────────────────────────────
 TMPFILES=()
@@ -39,6 +91,29 @@ trap cleanup EXIT INT TERM
 register_tmp() {
     TMPFILES+=("$1")
 }
+
+# ── State tracking for resume capability ──────────────────────────────────────
+STATE_FILE="${HOME}/.llm_install_state"
+
+STEP_COMPLETED() {
+    echo "$1" >> "$STATE_FILE"
+}
+
+STEP_ALREADY_DONE() {
+    grep -qxF "$1" "$STATE_FILE" 2>/dev/null
+}
+
+# ── Dry-run mode ─────────────────────────────────────────────────────────────
+DRY_RUN=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+    DRY_RUN=true
+    warn "DRY RUN MODE - No changes will be made"
+fi
+
+# ── Logging to file ───────────────────────────────────────────────────────────
+LOG_FILE="${HOME}/llm-install.log"
+exec > >(tee -a "$LOG_FILE")
+exec 2>&1
 
 echo -e "${BLD}${CYN}"
 cat <<'BANNER'
@@ -126,25 +201,32 @@ fi
 #  2. System update + dependencies
 # =============================================================================
 step "Updating system packages..."
-sudo apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    build-essential cmake git ccache \
-    libcurl4-openssl-dev libssl-dev libffi-dev \
-    software-properties-common \
-    python3 python3-pip python3-venv \
-    pciutils wget curl ca-certificates zstd \
-    procps gettext-base   # watch command + envsubst
-ok "System packages ready."
+if [[ "$DRY_RUN" == "false" ]]; then
+    sudo apt-get update -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        build-essential cmake git ccache \
+        libcurl4-openssl-dev libssl-dev libffi-dev \
+        software-properties-common \
+        python3 python3-pip python3-venv \
+        pciutils wget curl ca-certificates zstd \
+        procps gettext-base   # envsubst is required for clean launch script
+else
+    echo "[DRY RUN] Would update system packages and install dependencies"
+fi
 
 step "Installing Python 3.11 (Hermes requirement)..."
 if python3.11 --version &>/dev/null; then
     ok "Python 3.11 already installed: $(python3.11 --version)"
 else
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.11 python3.11-venv
-    ok "Python 3.11 installed: $(python3.11 --version)"
+    if [[ "$DRY_RUN" == "false" ]]; then
+        sudo add-apt-repository -y ppa:deadsnakes/ppa
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.11 python3.11-venv
+        ok "Python 3.11 installed: $(python3.11 --version)"
+    else
+        echo "[DRY RUN] Would install Python 3.11"
+    fi
 fi
 
 # =============================================================================
@@ -232,8 +314,6 @@ MODELS=(
     "10|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active"
     "11|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
     "12|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
-    "13|bartowski/google_gemma-4-4b-it-GGUF|google_gemma-4-4b-it-Q4_K_M.gguf|Gemma 4 4B|2.5|16K|4|0|small|chat,code|Google · latest Gemma"
-    "14|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.5|16K|12|10|mid|chat,code|Google · larger Gemma 4"
 )
 
 MODEL_DIR="${HOME}/llm-models"
@@ -375,6 +455,7 @@ while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram t
         SEL_HF_REPO="${hf_repo// /}"
         SEL_GGUF="${gguf_file// /}"
         SEL_NAME="${dname# }"; SEL_NAME="${SEL_NAME% }"
+        export SEL_NAME
         SEL_MIN_RAM="${min_ram// /}"
         SEL_MIN_VRAM="${min_vram// /}"
         break
@@ -428,6 +509,7 @@ case "$SEL_GGUF" in
         USE_JINJA="--jinja"
         ;;
 esac
+export SAFE_CTX USE_JINJA
 ok "Context window: ${SAFE_CTX} tokens"
 
 # =============================================================================
@@ -480,6 +562,7 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
 fi
 
 GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
+export GGUF_PATH
 
 if [[ -f "$GGUF_PATH" ]]; then
     ok "Model already on disk: ${GGUF_PATH} — skipping download."
@@ -563,7 +646,7 @@ else
         git -C "$LLAMA_DIR" fetch origin --quiet
         git -C "$LLAMA_DIR" reset --hard origin/HEAD --quiet
     else
-        git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+        git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$LLAMA_DIR"
     fi
 
     cd "$LLAMA_DIR"
@@ -650,7 +733,8 @@ else
         echo ""
     fi
 
-    LLAMA_SERVER_BIN=$(find_llama_server || true)
+LLAMA_SERVER_BIN=$(find_llama_server || true)
+export LLAMA_SERVER_BIN
     [[ -n "$LLAMA_SERVER_BIN" ]] || die "llama-server not found after build."
     ok "llama-server: ${LLAMA_SERVER_BIN}"
 fi
@@ -661,6 +745,7 @@ fi
 step "Setting up Hermes Agent..."
 HERMES_AGENT_DIR="${HOME}/hermes-agent"
 HERMES_VENV="${HERMES_AGENT_DIR}/.venv"
+export HERMES_AGENT_DIR HERMES_VENV
 HERMES_BIN="${HOME}/.local/bin/hermes"
 HERMES_WEBAPI_INSTALLED=false
 HERMES_WORKSPACE_INSTALLED=false
@@ -739,6 +824,37 @@ if [[ -x "$HERMES_BIN" ]] && "${HERMES_BIN}" --help &>/dev/null; then
     fi
 fi
 
+# ── Apply Hermes WebAPI patches ───────────────────────────────────────────────
+step "Applying Hermes WebAPI patches..."
+
+# Find the correct paths
+CHAT_PY=$(find "${HERMES_AGENT_DIR}" -name "chat.py" -path "*/webapi/*" 2>/dev/null | head -1)
+DEPS_PY=$(find "${HERMES_AGENT_DIR}" -name "deps.py" -path "*/webapi/*" 2>/dev/null | head -1)
+
+# Patch chat.py to handle dict content
+if [[ -f "$CHAT_PY" ]]; then
+    if grep -q "content.lower()" "$CHAT_PY" && ! grep -q "isinstance(content, str)" "$CHAT_PY"; then
+        sed -i 's/content\.lower()/content = content if isinstance(content, str) else str(content)\n    content.lower()/g' "$CHAT_PY"
+        ok "Patched chat.py for dict content handling."
+    else
+        ok "chat.py already patched or not applicable."
+    fi
+else
+    warn "chat.py not found in webapi directory"
+fi
+
+# Patch deps.py to handle model config dict
+if [[ -f "$DEPS_PY" ]]; then
+    if grep -q "config.get(\"model\")" "$DEPS_PY" && ! grep -q "model.get(\"default\")" "$DEPS_PY"; then
+        sed -i 's/model = config\.get("model")/model = config.get("model")\n    if isinstance(model, dict):\n        model = model.get("default", model)/g' "$DEPS_PY"
+        ok "Patched deps.py for model config dict handling."
+    else
+        ok "deps.py already patched or not applicable."
+    fi
+else
+    warn "deps.py not found in webapi directory"
+fi
+
 # =============================================================================
 #  8c. Configure Hermes → llama-server (http://localhost:8080/v1)
 # =============================================================================
@@ -750,10 +866,10 @@ mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 CONFIG_FILE="${HERMES_DIR}/config.yaml"
 ENV_FILE="${HERMES_DIR}/.env"
 
-cat > "$ENV_FILE" <<ENV
+cat > "$ENV_FILE" <<'ENV_EOF' | sed "s|@@SEL_NAME@@|$SEL_NAME|g"
 OPENAI_API_KEY=llama
-LLM_MODEL=${SEL_NAME}
-ENV
+LLM_MODEL=@@SEL_NAME@@
+ENV_EOF
 
 if [[ -f "$CONFIG_FILE" ]]; then
     if grep -q "^model:" "$CONFIG_FILE" 2>/dev/null; then
@@ -767,30 +883,30 @@ if [[ -f "$CONFIG_FILE" ]]; then
             sed -i 's|^  base_url:.*|  base_url: http://localhost:8080/v1|' "$CONFIG_FILE" 2>/dev/null || true
         fi
     else
-        cat >> "$CONFIG_FILE" <<MODEL
+        cat >> "$CONFIG_FILE" <<'MODEL_EOF' | sed "s|@@SEL_NAME@@|$SEL_NAME|g"
 
 model:
-  default: "${SEL_NAME}"
+  default: "@@SEL_NAME@@"
   provider: custom
   base_url: http://localhost:8080/v1
-MODEL
+MODEL_EOF
     fi
     if grep -q "^custom:" "$CONFIG_FILE" 2>/dev/null; then
         sed -i '/^custom:/,/^[a-z]/{/^custom:/d; /^[a-z]/!d}' "$CONFIG_FILE" 2>/dev/null || true
     fi
     ok "config.yaml configured for local server."
 else
-    cat > "$CONFIG_FILE" <<CONFIG
+    cat > "$CONFIG_FILE" <<'CONFIG_EOF' | sed "s|@@SEL_NAME@@|$SEL_NAME|g"
 # Hermes Agent Configuration
-# Generated by install.sh for ${SEL_NAME}
+# Generated by install.sh for @@SEL_NAME@@
 
 model:
-  default: "${SEL_NAME}"
+  default: "@@SEL_NAME@@"
   provider: custom
   base_url: http://localhost:8080/v1
 
 # API key is stored in .env file (OPENAI_API_KEY=llama)
-CONFIG
+CONFIG_EOF
     ok "config.yaml created."
 fi
 
@@ -801,18 +917,19 @@ ok "Hermes configured → llama-server (${SEL_NAME} at http://localhost:8080/v1)
 # =============================================================================
 step "Setting up Hermes Workspace..."
 WORKSPACE_DIR="${HOME}/hermes-workspace"
+export WORKSPACE_DIR
 
 if [[ ! -f "${HOME}/.hermes/.env" ]]; then
     step "Creating Hermes Agent .env..."
     mkdir -p "${HOME}/.hermes"
-    cat > "${HOME}/.hermes/.env" <<HERMES_ENV
+    cat > "${HOME}/.hermes/.env" <<'HERMES_ENV_EOF' | sed "s|@@SEL_NAME@@|$SEL_NAME|g"
 # Hermes Agent Environment
 # Generated by install.sh
 OPENAI_API_KEY=llama
-LLM_MODEL=${SEL_NAME}
+LLM_MODEL=@@SEL_NAME@@
 HERMES_WEBAPI_HOST=0.0.0.0
 HERMES_WEBAPI_PORT=8642
-HERMES_ENV
+HERMES_ENV_EOF
     ok "Hermes Agent .env created."
 else
     if ! grep -q "^HERMES_WEBAPI_HOST=" "${HOME}/.hermes/.env" 2>/dev/null; then
@@ -828,7 +945,7 @@ fi
 # ── Hermes WebAPI systemd service ─────────────────────────────────────────────
 step "Configuring Hermes WebAPI service..."
 mkdir -p "${HOME}/.config/systemd/user"
-cat > "${HOME}/.config/systemd/user/hermes-webapi.service" <<WEBAPI_SERVICE
+cat > "${HOME}/.config/systemd/user/hermes-webapi.service" <<'WEBAPI_SERVICE_EOF' | sed -e "s|@@HERMES_AGENT_DIR@@|$HERMES_AGENT_DIR|g" -e "s|@@HERMES_VENV@@|$HERMES_VENV|g" -e "s|@@HOME@@|$HOME|g"
 [Unit]
 Description=Hermes Agent WebAPI
 After=llama-server.service network.target
@@ -836,16 +953,16 @@ Requires=llama-server.service
 
 [Service]
 Type=simple
-WorkingDirectory=${HERMES_AGENT_DIR}
-ExecStart=${HERMES_VENV}/bin/python -m webapi
+WorkingDirectory=@@HERMES_AGENT_DIR@@
+ExecStart=@@HERMES_VENV@@/bin/python -m webapi
 Restart=on-failure
 RestartSec=5
-Environment=HOME=${HOME}
-Environment=PATH=${HERMES_VENV}/bin:${HOME}/.local/bin:/usr/local/cuda/bin:/usr/bin:/bin
+Environment=HOME=@@HOME@@
+Environment=PATH=@@HERMES_VENV@@/bin:@@HOME@@/.local/bin:/usr/local/cuda/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target
-WEBAPI_SERVICE
+WEBAPI_SERVICE_EOF
 
 if systemctl --user daemon-reload 2>/dev/null; then
     systemctl --user enable hermes-webapi.service 2>/dev/null || true
@@ -877,44 +994,7 @@ else
     ok "Node.js $(node --version) already installed"
 fi
 
-# ── Install OpenClaude ────────────────────────────────────────────────────────
-if ! command -v openclaude &>/dev/null; then
-    step "Installing OpenClaude coding agent..."
-    mkdir -p ~/.npm-global
-    npm config set prefix ~/.npm-global
-    npm install -g @gitlawb/openclaude
-    export PATH="$HOME/.npm-global/bin:$PATH"
-    if command -v openclaude &>/dev/null; then
-        ok "OpenClaude installed."
-    else
-        warn "OpenClaude installation failed."
-    fi
-else
-    ok "OpenClaude already installed."
-fi
 
-# Configure OpenClaude for local llama-server
-if command -v openclaude &>/dev/null; then
-    OPENCLAUDE_DIR="${HOME}/.openclaude"
-    mkdir -p "$OPENCLAUDE_DIR"
-    cat > "${OPENCLAUDE_DIR}/settings.json" <<OPENCLAUDE_CFG
-{
-  "modelProviders": {
-    "openai": [{
-      "id": "${SEL_NAME}",
-      "name": "${SEL_NAME}",
-      "baseUrl": "http://localhost:8080/v1",
-      "description": "Local llama-server",
-      "envKey": "LLAMA_API_KEY"
-    }]
-  },
-  "env": { "LLAMA_API_KEY": "llama" },
-  "security": { "auth": { "selectedType": "openai" } },
-  "model": { "name": "${SEL_NAME}" }
-}
-OPENCLAUDE_CFG
-    ok "OpenClaude configured for local setup."
-fi
 
 # ── pnpm installation ─────────────────────────────────────────────────────────
 step "Installing pnpm..."
@@ -961,11 +1041,12 @@ cd - >/dev/null
 # ── Hermes Workspace systemd service ──────────────────────────────────────────
 step "Configuring Hermes Workspace service..."
 PNPM_BIN="$(command -v pnpm)"
+export PNPM_BIN
 if [[ -z "$PNPM_BIN" ]]; then
     die "pnpm not found in PATH. Installation may have failed."
 fi
 
-cat > "${HOME}/.config/systemd/user/hermes-workspace.service" <<WORKSPACE_SERVICE
+cat > "${HOME}/.config/systemd/user/hermes-workspace.service" <<'WORKSPACE_SERVICE_EOF' | sed -e "s|@@WORKSPACE_DIR@@|$WORKSPACE_DIR|g" -e "s|@@PNPM_BIN@@|$PNPM_BIN|g" -e "s|@@HOME@@|$HOME|g"
 [Unit]
 Description=Hermes Workspace Web UI
 After=hermes-webapi.service network.target
@@ -973,17 +1054,17 @@ Requires=hermes-webapi.service
 
 [Service]
 Type=simple
-WorkingDirectory=${WORKSPACE_DIR}
-ExecStart=${PNPM_BIN} dev
+WorkingDirectory=@@WORKSPACE_DIR@@
+ExecStart=@@PNPM_BIN@@ dev
 Restart=on-failure
 RestartSec=5
-Environment=HOME=${HOME}
+Environment=HOME=@@HOME@@
 Environment=NODE_ENV=production
-Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin
+Environment=PATH=@@HOME@@/.local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target
-WORKSPACE_SERVICE
+WORKSPACE_SERVICE_EOF
 
 if systemctl --user daemon-reload 2>/dev/null; then
     systemctl --user enable hermes-workspace.service 2>/dev/null || true
@@ -1025,29 +1106,31 @@ ok "System and Python package managers updated."
 
 
 # =============================================================================
-#  11. Create ~/start-llm.sh (using envsubst for safety)
+#  11. Create ~/start-llm.sh (using sed for safety)
 # =============================================================================
 step "Creating launch script..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
 
-# Template for the launch script – direct expansion of installer variables
-cat > "$LAUNCH_SCRIPT" << LAUNCH_EOF
+# Template for the launch script – using sed for safety
+# Ensure variables are available for sed substitution
+export HERMES_AGENT_DIR HERMES_VENV WORKSPACE_DIR
+cat > "$LAUNCH_SCRIPT" << 'LAUNCH_EOF' | sed -e "s|@@GGUF_PATH@@|$GGUF_PATH|g" -e "s|@@SEL_NAME@@|$SEL_NAME|g" -e "s|@@LLAMA_SERVER_BIN@@|$LLAMA_SERVER_BIN|g" -e "s|@@SAFE_CTX@@|$SAFE_CTX|g" -e "s|@@USE_JINJA@@|$USE_JINJA|g" -e "s|@@HERMES_AGENT_DIR@@|$HERMES_AGENT_DIR|g" -e "s|@@HERMES_VENV@@|$HERMES_VENV|g" -e "s|@@WORKSPACE_DIR@@|$WORKSPACE_DIR|g"
 #!/usr/bin/env bash
 # start-llm.sh – generated by install.sh
-GGUF="${GGUF_PATH}"
-MODEL_NAME="${SEL_NAME}"
-LLAMA_BIN="${LLAMA_SERVER_BIN}"
-SAFE_CTX="${SAFE_CTX}"
-USE_JINJA="${USE_JINJA}"
-HERMES_AGENT_DIR="${HERMES_AGENT_DIR}"
-HERMES_VENV="${HERMES_VENV}"
-WORKSPACE_DIR="${WORKSPACE_DIR}"
+GGUF="@@GGUF_PATH@@"
+MODEL_NAME="@@SEL_NAME@@"
+LLAMA_BIN="@@LLAMA_SERVER_BIN@@"
+SAFE_CTX="@@SAFE_CTX@@"
+USE_JINJA="@@USE_JINJA@@"
+HERMES_AGENT_DIR="@@HERMES_AGENT_DIR@@"
+HERMES_VENV="@@HERMES_VENV@@"
+WORKSPACE_DIR="@@WORKSPACE_DIR@@"
 export PNPM_HOME="${HOME}/.local/share/pnpm"
-export PATH=":${PATH}"
+export PATH="${PATH}"
 
 # Check for running services
 LLAMA_PID=$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=$(pgrep -f "hermes webapi" 2>/dev/null || true)
+WEBAPI_PID=$(pgrep -f "python -m webapi" 2>/dev/null || true)
 WORKSPACE_PID=$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
 
 if [[ -n "$LLAMA_PID" || -n "$WEBAPI_PID" || -n "$WORKSPACE_PID" ]]; then
@@ -1164,24 +1247,24 @@ ok "Launch script: ~/start-llm.sh (validated)"
 # =============================================================================
 step "Creating systemd user service for llama-server..."
 mkdir -p "${HOME}/.config/systemd/user"
-cat > "${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
+cat > "${HOME}/.config/systemd/user/llama-server.service" <<'SERVICE_EOF' | sed -e "s|@@LLAMA_SERVER_BIN@@|$LLAMA_SERVER_BIN|g" -e "s|@@GGUF_PATH@@|$GGUF_PATH|g" -e "s|@@SAFE_CTX@@|$SAFE_CTX|g" -e "s|@@USE_JINJA@@|$USE_JINJA|g" -e "s|@@HOME@@|$HOME|g"
 [Unit]
 Description=llama-server LLM inference
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${LLAMA_SERVER_BIN} -m ${GGUF_PATH} -ngl 99 -fa on -c ${SAFE_CTX} -np 1 --cache-type-k q4_0 --cache-type-v q4_0 --host 0.0.0.0 --port 8080 ${USE_JINJA}
+ExecStart=@@LLAMA_SERVER_BIN@@ -m @@GGUF_PATH@@ -ngl 99 -fa on -c @@SAFE_CTX@@ -np 1 --cache-type-k q4_0 --cache-type-v q4_0 --host 0.0.0.0 --port 8080 @@USE_JINJA@@
 Restart=on-failure
 RestartSec=5
-Environment=HOME=${HOME}
-Environment=PATH=/usr/local/cuda/bin:${HOME}/.local/bin:/usr/bin:/bin
+Environment=HOME=@@HOME@@
+Environment=PATH=/usr/local/cuda/bin:@@HOME@@/.local/bin:/usr/bin:/bin
 StandardOutput=file:/tmp/llama-server.log
 StandardError=file:/tmp/llama-server.log
 
 [Install]
 WantedBy=default.target
-SERVICE
+SERVICE_EOF
 
 if systemctl --user daemon-reload 2>/dev/null; then
     systemctl --user enable llama-server.service 2>/dev/null || true
@@ -1216,7 +1299,7 @@ show_progress() {
 export PATH="/usr/local/cuda/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 export PNPM_HOME="${HOME}/.local/share/pnpm"
-export PATH="/usr/bin:/bin:/usr/local/bin::${HOME}/.local/bin:${HOME}/.hermes/node/bin:${PATH}"
+export PATH="/usr/bin:/bin:/usr/local/bin:${HOME}/.local/bin:${HOME}/.hermes/node/bin:${PATH}"
 BASHRC_START
 
     if [[ -n "${HF_TOKEN:-}" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
@@ -1232,7 +1315,7 @@ alias start-llm-services='systemctl --user start llama-server.service hermes-web
 alias stop-llm='systemctl --user stop llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services stopped via systemd" || (pkill -f llama-server && pkill -f "python -m webapi" && pkill -f "pnpm dev" && echo "All LLM services stopped manually.")'
 alias restart-llm='systemctl --user restart llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services restarted via systemd" || (stop-llm && sleep 2 && start-llm)'
 alias llm-log='tail -f /tmp/llama-server.log'
-alias switch-model='~/.local/bin/install.sh 2>/dev/null || echo "install.sh not found in PATH"'
+alias switch-model='find ~ -name "install.sh" -type f -executable 2>/dev/null | head -1 | xargs bash 2>/dev/null || echo "install.sh not found"'
 alias hermes-update='hermes update'
 alias hermes-doctor='hermes doctor'
 alias hermes-sessions='hermes sessions list'
@@ -1292,7 +1375,7 @@ llm-status() {
     echo -e "${BLD}${CYN}│${RST}  ──────────────────────────────────────────────────────"
     
     LLAMA_PID=$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=$(pgrep -f "hermes webapi" 2>/dev/null || true)
+WEBAPI_PID=$(pgrep -f "python -m webapi" 2>/dev/null || true)
     WORKSPACE_PID=$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
     
     if [[ -n "$LLAMA_PID" ]]; then
@@ -1359,12 +1442,11 @@ echo -e "${BLD}${CYN}│${RST} ${CYN}llm-log${RST} → View llama-server logs"
 echo -e "${BLD}${CYN}│${RST} ${CYN}llm-models${RST} → List downloaded models"
 echo -e "${BLD}${CYN}│${RST} ${CYN}vram${RST} → GPU/VRAM usage"
 echo -e "${BLD}${CYN}│${RST} ${CYN}hermes${RST} → Hermes AI agent"
-echo -e "${BLD}${CYN}│${RST} ${CYN}openclaude${RST} → OpenClaude coding agent"
 echo -e "${BLD}${CYN}╰────────────────────────────────────────────────────────────────╯${RST}"
 echo ""
 }
 
-[[ $- == *i* && ! -f "${HOME}/.llm_summary_shown" ]] && { show_llm_summary; touch "${HOME}/.llm_summary_shown"; }
+[[ $- == *i* ]] && show_llm_summary
 BASHRC_END
 ok "Helpers written to ~/.bashrc."
 fi
@@ -1461,7 +1543,6 @@ echo -e " ${CYN}hermes${RST} Hermes AI agent (CLI)"
 
 echo -e " ${CYN}vram${RST} GPU/VRAM usage"
 echo -e " ${CYN}hermes${RST} → Hermes AI agent"
-echo -e " ${CYN}openclaude${RST} OpenClaude coding agent"
 
 echo ""
 echo -e " ${BLD}Open in Browser:${RST}"
