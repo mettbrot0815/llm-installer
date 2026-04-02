@@ -222,16 +222,19 @@ grade_model() {
         elif [[ $vram_h -ge 0 ]]; then echo "A"
         elif [[ $ram_h  -ge 4 ]]; then echo "B"
         elif [[ $ram_h  -ge 0 ]]; then echo "C"
-        else                           echo "F"; fi
+        else                           echo "F"
+        fi
     elif [[ $min_vram -gt 0 ]]; then
         if   [[ $ram_h -ge 8 ]]; then echo "B"
         elif [[ $ram_h -ge 0 ]]; then echo "C"
-        else                          echo "F"; fi
+        else                          echo "F"
+        fi
     else
         if   [[ $ram_h -ge 8 ]]; then echo "S"
         elif [[ $ram_h -ge 4 ]]; then echo "A"
         elif [[ $ram_h -ge 0 ]]; then echo "B"
-        else                          echo "F"; fi
+        else                          echo "F"
+        fi
     fi
 }
 
@@ -411,6 +414,11 @@ fi
 if ! "$HF_CLI_USED" version &>/dev/null; then
     die "'$HF_CLI_NAME' found at $HF_CLI_USED but fails to run."
 fi
+
+# Update HuggingFace CLI to latest version
+step "Updating HuggingFace CLI to latest version..."
+pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -3
+
 ok "$HF_CLI_NAME ready: $( "$HF_CLI_USED" version 2>/dev/null || echo 'ok' )"
 
 HF_CLI="$HF_CLI_USED"
@@ -436,6 +444,7 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
         fi
     else
         warn "HF login could not be verified — downloads will be unauthenticated."
+        # Don't fail the entire script for HF auth issues
     fi
 fi
 
@@ -465,6 +474,7 @@ else
     fi
     ok "Disk space OK: ${AVAIL_GB}GB available, ~${REQ_GB_INT}GB needed."
 
+    echo "  → Starting download from HuggingFace..."
     if [[ -n "${HF_TOKEN:-}" ]]; then
         HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}"
     else
@@ -507,7 +517,7 @@ if [[ -n "$LLAMA_SERVER_BIN" ]]; then
     ok "To force rebuild: rm ${LLAMA_SERVER_BIN} and rerun."
 else
     step "Building llama.cpp from source (5–15 min first time, ~1 min with ccache)..."
-    
+
     # Check if ccache is available and working
     if command -v ccache &>/dev/null; then
         ok "ccache found: $(ccache --version | head -1)"
@@ -517,6 +527,8 @@ else
         warn "ccache not found — building without cache (slower recompilation)"
         export CC="gcc" CXX="g++"
     fi
+
+    echo "  → Configuring build with CMake..."
     
     LLAMA_DIR="${HOME}/llama.cpp"
 
@@ -529,14 +541,24 @@ else
     fi
 
     cd "$LLAMA_DIR"
-    if [[ "$HAS_NVIDIA" == "true" ]]; then
-        cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
-            -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
+
+    # Check if build is already current and complete
+    if [[ -f "build/bin/llama-server" ]] && [[ -f "/usr/local/bin/llama-server" ]]; then
+        echo "  → llama.cpp already built and installed — skipping rebuild"
     else
-        cmake -B build -DGGML_CCACHE=ON
+        if [[ "$HAS_NVIDIA" == "true" ]]; then
+            echo "  → CUDA support detected — building with GPU acceleration..."
+            cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
+                -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
+        else
+            echo "  → Building for CPU only..."
+            cmake -B build -DGGML_CCACHE=ON
+        fi
+        echo "  → Compiling llama.cpp (this may take 5-15 minutes)..."
+        cmake --build build --config Release -j"$(nproc)"
+        echo "  → Installing system-wide..."
+        sudo cmake --install build || warn "System install failed — using build directory."
     fi
-    cmake --build build --config Release -j"$(nproc)"
-    sudo cmake --install build || warn "System install failed — using build directory."
     cd ~
 
     # Show ccache stats after build
@@ -553,17 +575,70 @@ else
 fi
 
 # =============================================================================
-#  8. Hermes Agent
+#  8. Hermes Agent (outsourc-e fork with WebAPI support)
 # =============================================================================
-step "Checking for Hermes Agent..."
+step "Setting up Hermes Agent..."
+HERMES_AGENT_DIR="${HOME}/hermes-agent"
+HERMES_VENV="${HERMES_AGENT_DIR}/.venv"
 HERMES_BIN="${HOME}/.local/bin/hermes"
-HERMES_INSTALLED=false
+HERMES_WEBAPI_INSTALLED=false
+HERMES_WORKSPACE_INSTALLED=false
 export PATH="${HOME}/.local/bin:${PATH}"
 
-if command -v hermes &>/dev/null || [[ -x "$HERMES_BIN" ]]; then
+# ── Clone or update the fork ──────────────────────────────────────────────────
+if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
+    ok "Hermes Agent (outsourc-e fork) already cloned — updating to latest..."
+    cd "${HERMES_AGENT_DIR}"
+    git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || warn "Hermes git update failed (continuing with existing code)"
+    cd - >/dev/null
+else
+    step "Cloning outsourc-e/hermes-agent (WebAPI fork)..."
+    git clone https://github.com/outsourc-e/hermes-agent.git "${HERMES_AGENT_DIR}" 2>&1 | tail -3
+    ok "Hermes Agent cloned."
+fi
+
+# ── Create / verify venv ──────────────────────────────────────────────────────
+if [[ ! -d "${HERMES_VENV}" ]]; then
+    step "Creating Python virtual environment for Hermes Agent..."
+    python3.11 -m venv "${HERMES_VENV}"
+    ok "Venv created at ${HERMES_VENV}"
+else
+    ok "Venv already exists at ${HERMES_VENV}"
+fi
+
+# ── Install/update dependencies ──────────────────────────────────────────────────────
+source "${HERMES_VENV}/bin/activate"
+if ! python -c "import hermes_agent" &>/dev/null; then
+    step "Installing Hermes Agent dependencies (first time ~2-5 min)..."
+    echo "  → Installing OpenAI SDK, FastAPI, uvicorn, and all optional dependencies..."
+    pip install -e "${HERMES_AGENT_DIR}[all]"
+    ok "Hermes Agent dependencies installed."
+elif [[ ! -f "${HERMES_VENV}/installed_marker" ]]; then
+    # Dependencies installed but mark as complete for future runs
+    touch "${HERMES_VENV}/installed_marker"
+    ok "Hermes Agent dependencies verified."
+else
+    ok "Hermes Agent dependencies already installed and verified."
+fi
+
+# ── Symlink hermes binary to ~/.local/bin ─────────────────────────────────────
+HERMES_VENV_BIN="${HERMES_VENV}/bin/hermes"
+if [[ -x "$HERMES_VENV_BIN" ]]; then
+    mkdir -p "${HOME}/.local/bin"
+    ln -sf "$HERMES_VENV_BIN" "$HERMES_BIN"
+    ok "Symlinked hermes → ${HERMES_BIN}"
+else
+    warn "hermes binary not found in venv at ${HERMES_VENV_BIN}"
+    warn "You may need to run: source ${HERMES_VENV}/bin/activate && cd ${HERMES_AGENT_DIR} && pip install -e ."
+fi
+
+deactivate 2>/dev/null || true
+
+# ── Update check ──────────────────────────────────────────────────────────────
+if [[ -x "$HERMES_BIN" ]] && "${HERMES_BIN}" --help &>/dev/null; then
     HERMES_VER=$("${HERMES_BIN}" --version 2>/dev/null || echo "installed")
-    ok "Hermes already installed: ${HERMES_VER}"
-    HERMES_INSTALLED=true
+    ok "Hermes Agent ready: ${HERMES_VER}"
+    HERMES_WEBAPI_INSTALLED=true
 
     step "Checking for Hermes updates..."
     UPDATE_OUTPUT=$("${HERMES_BIN}" update --check 2>&1 || true)
@@ -579,20 +654,6 @@ if command -v hermes &>/dev/null || [[ -x "$HERMES_BIN" ]]; then
     else
         ok "Hermes is up to date."
     fi
-else
-    [[ -f /usr/local/bin/hermes ]] && sudo rm -f /usr/local/bin/hermes
-    step "Installing Hermes Agent (Python 3.11 + Node.js 22)..."
-    if curl -fsSL --connect-timeout 15 --max-time 120 \
-        https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
-        -o /tmp/hermes-install.sh 2>&1; then
-        register_tmp "/tmp/hermes-install.sh"
-        bash /tmp/hermes-install.sh --skip-setup || pip3 install --user --break-system-packages hermes-agent || die "Failed to install Hermes"
-    else
-        pip3 install --user --break-system-packages hermes-agent || die "Failed to install Hermes via pip"
-    fi
-    export PATH="${HOME}/.local/bin:${PATH}"
-    HERMES_INSTALLED=true
-    ok "Hermes Agent installed."
 fi
 
 # =============================================================================
@@ -670,40 +731,9 @@ ok "Hermes configured → llama-server (${SEL_NAME} at http://localhost:8080/v1)
 #  8d. Hermes Workspace Integration (Web UI)
 # =============================================================================
 step "Setting up Hermes Workspace..."
-
 WORKSPACE_DIR="${HOME}/hermes-workspace"
-HERMES_AGENT_DIR="${HOME}/hermes-agent"
-HERMES_WEBAPI_INSTALLED=false
-HERMES_WORKSPACE_INSTALLED=false
-
-# ── Step 1: Install outsourc-e/hermes-agent (WebAPI fork) ─────────────────────
-step "Checking for Hermes Agent with WebAPI support..."
-
-if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
-    ok "Hermes Agent (outsourc-e fork) already cloned."
-    cd "${HERMES_AGENT_DIR}"
-    git pull --quiet 2>/dev/null || true
-    cd - >/dev/null
-else
-    step "Cloning outsourc-e/hermes-agent (WebAPI fork)..."
-    git clone https://github.com/outsourc-e/hermes-agent.git "${HERMES_AGENT_DIR}" 2>&1 | tail -3
-fi
-
-# Create Python virtual environment
-HERMES_VENV="${HERMES_AGENT_DIR}/.venv"
-if [[ ! -d "${HERMES_VENV}" ]]; then
-    step "Creating Python virtual environment for Hermes Agent..."
-    python3.11 -m venv "${HERMES_VENV}"
-fi
-
-# Activate venv and install
-source "${HERMES_VENV}/bin/activate"
-if ! python -c "import hermes_agent" &>/dev/null; then
-    step "Installing Hermes Agent in virtual environment..."
-    pip install --quiet -e "${HERMES_AGENT_DIR}" 2>&1 | tail -3
-fi
-
-# Run setup if not already configured (Section 8c may have created basic .env)
+# ── Step 1: Configure .env (Section 8 already installed the fork + venv) ──────
+# Section 8c may have created basic .env; ensure WebAPI settings are present
 if [[ ! -f "${HOME}/.hermes/.env" ]]; then
     step "Creating Hermes Agent .env..."
     mkdir -p "${HOME}/.hermes"
@@ -720,7 +750,6 @@ else
     # Ensure WebAPI settings are present in existing .env
     if ! grep -q "^HERMES_WEBAPI_HOST=" "${HOME}/.hermes/.env" 2>/dev/null; then
         cat >> "${HOME}/.hermes/.env" <<HERMES_ENV_ADD
-
 # WebAPI settings (added by install.sh)
 HERMES_WEBAPI_HOST=0.0.0.0
 HERMES_WEBAPI_PORT=8642
@@ -728,8 +757,7 @@ HERMES_ENV_ADD
         ok "Added WebAPI settings to ~/.hermes/.env."
     fi
 fi
-
-# ── Step 2: Start Hermes WebAPI Service ───────────────────────────────────────
+# ── Step 2: Hermes WebAPI systemd service ─────────────────────────────────────
 step "Configuring Hermes WebAPI service..."
 
 # Create systemd user service for WebAPI
@@ -737,16 +765,17 @@ mkdir -p "${HOME}/.config/systemd/user"
 cat > "${HOME}/.config/systemd/user/hermes-webapi.service" <<WEBAPI_SERVICE
 [Unit]
 Description=Hermes Agent WebAPI
-After=default.target
+After=llama-server.service network.target
+Requires=llama-server.service
 
 [Service]
 Type=simple
 WorkingDirectory=${HERMES_AGENT_DIR}
-ExecStart=${HERMES_VENV}/bin/hermes webapi
+ExecStart=${HERMES_VENV}/bin/python -m webapi
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${HOME}
-Environment=PATH=${HOME}/.local/bin:/usr/local/cuda/bin:/usr/bin:/bin
+Environment=PATH=${HERMES_VENV}/bin:${HOME}/.local/bin:/usr/local/cuda/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target
@@ -763,35 +792,140 @@ fi
 step "Checking for Hermes Workspace..."
 
 if [[ -d "${WORKSPACE_DIR}/.git" ]]; then
-    ok "Hermes Workspace already cloned."
+    ok "Hermes Workspace already cloned — updating to latest."
     cd "${WORKSPACE_DIR}"
-    git pull --quiet 2>/dev/null || true
+    git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
     cd - >/dev/null
 else
     step "Cloning outsourc-e/hermes-workspace..."
     git clone https://github.com/outsourc-e/hermes-workspace.git "${WORKSPACE_DIR}" 2>&1 | tail -3
 fi
 
-# Install pnpm if not available
-if ! command -v pnpm &>/dev/null; then
-    if command -v npm &>/dev/null; then
-        step "Installing pnpm..."
-        npm install -g pnpm 2>&1 | tail -2
+# Clean up any Windows npm installations that might cause conflicts
+WINDOWS_USER=$(whoami)
+if [[ -d "/mnt/c/Users/${WINDOWS_USER}/.npm-global" ]]; then
+    warn "Found Windows npm global installation — removing from PATH to avoid conflicts"
+    # Create new PATH without Windows npm-global
+    NEW_PATH=""
+    IFS=':' read -ra PATH_ARRAY <<< "$PATH"
+    for path_entry in "${PATH_ARRAY[@]}"; do
+        if [[ "$path_entry" != *"/mnt/c/Users/${WINDOWS_USER}/.npm-global"* ]]; then
+            if [[ -z "$NEW_PATH" ]]; then
+                NEW_PATH="$path_entry"
+            else
+                NEW_PATH="$NEW_PATH:$path_entry"
+            fi
+        fi
+    done
+    export PATH="$NEW_PATH"
+    ok "Windows npm-global removed from PATH"
+fi
+
+# Install pnpm locally only if needed
+step "Checking pnpm installation..."
+
+LOCAL_PNPM="${HOME}/.local/share/pnpm/pnpm"
+if [[ -x "$LOCAL_PNPM" ]] && "$LOCAL_PNPM" --version &>/dev/null; then
+    ok "Local pnpm $(pnpm --version) already installed and working"
+    export PNPM_HOME="${HOME}/.local/share/pnpm"
+    export PATH="$PNPM_HOME:$PATH"
+else
+    step "Installing pnpm locally..."
+    rm -rf "${HOME}/.local/share/pnpm" 2>/dev/null || true
+
+    if curl -fsSL https://get.pnpm.io/install.sh | env PNPM_HOME="${HOME}/.local/share/pnpm" sh -; then
+        export PNPM_HOME="${HOME}/.local/share/pnpm"
+        export PATH="$PNPM_HOME:$PATH"
+        ok "pnpm installed locally to ${PNPM_HOME}"
     else
-        warn "pnpm not found and npm unavailable — installing Node.js 22..."
-        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
-        npm install -g pnpm 2>&1 | tail -2
+        warn "pnpm standalone install failed, trying alternative method..."
+        # Fallback: install via npm but ensure it's local
+        mkdir -p "${HOME}/.local/share/pnpm"
+        if npm install -g pnpm --prefix="${HOME}/.local" 2>/dev/null; then
+            # Move pnpm to the expected location
+            mv "${HOME}/.local/lib/node_modules/.bin/pnpm"* "${HOME}/.local/share/pnpm/" 2>/dev/null || true
+            export PNPM_HOME="${HOME}/.local/share/pnpm"
+            export PATH="$PNPM_HOME:$PATH"
+            ok "pnpm installed via npm fallback"
+        else
+            die "Failed to install pnpm locally"
+        fi
     fi
 fi
 
+# Install pnpm using the standalone installer
+if [[ ! -x "$LOCAL_PNPM" ]]; then
+    rm -rf "${HOME}/.local/share/pnpm" 2>/dev/null || true
+
+    if curl -fsSL https://get.pnpm.io/install.sh | env PNPM_HOME="${HOME}/.local/share/pnpm" sh -; then
+        export PNPM_HOME="${HOME}/.local/share/pnpm"
+        export PATH="$PNPM_HOME:$PATH"
+        ok "pnpm installed locally to ${PNPM_HOME}"
+    else
+        warn "pnpm standalone install failed, trying alternative method..."
+        # Fallback: try to install via npm but ensure it's local
+        mkdir -p "${HOME}/.local/share/pnpm"
+        if npm install -g pnpm --prefix="${HOME}/.local" 2>/dev/null; then
+            # Move pnpm to the expected location
+            mv "${HOME}/.local/lib/node_modules/.bin/pnpm"* "${HOME}/.local/share/pnpm/" 2>/dev/null || true
+            export PNPM_HOME="${HOME}/.local/share/pnpm"
+            export PATH="$PNPM_HOME:$PATH"
+            ok "pnpm installed via npm fallback"
+        else
+            die "Failed to install pnpm locally"
+        fi
+    fi
+else
+    ok "Local pnpm already installed and working"
+    export PNPM_HOME="${HOME}/.local/share/pnpm"
+    export PATH="$PNPM_HOME:$PATH"
+fi
+
+# Ensure Node.js is available and install pnpm locally to avoid Windows npm conflicts
+if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]] || [[ "$(node --version 2>/dev/null | sed 's/v//')" != "24."* ]]; then
+    # If no node, Windows node, or not v24.x, install latest Node.js
+    step "Installing Node.js 24 LTS for Workspace..."
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - 2>/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    # Ensure system Node.js takes precedence
+    export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
+else
+    ok "Node.js $(node --version) already installed"
+fi
+
+ok "Node.js: $(node --version)"
 ok "pnpm: $(pnpm --version)"
+
+# Verify we're using the local pnpm and not Windows version
+if [[ "$(which pnpm)" == /mnt/* ]]; then
+    die "Still using Windows pnpm from $(which pnpm). PATH cleanup failed."
+fi
+
+# Verify pnpm works correctly
+if ! pnpm --version &>/dev/null; then
+    die "pnpm installation failed - cannot run pnpm --version"
+fi
+
+# Update pnpm to latest version (local installation)
+step "Ensuring pnpm is up to date..."
+if pnpm self-update 2>&1 | grep -q "ERR_PNPM_GLOBAL_PNPM_INSTALL"; then
+    warn "pnpm self-update not supported for local installations — using current version"
+fi
+ok "pnpm ready: $(pnpm --version)"
 
 # Install workspace dependencies
 cd "${WORKSPACE_DIR}"
 if [[ ! -d "node_modules" ]]; then
     step "Installing Hermes Workspace dependencies (first time ~2-5 min)..."
-    pnpm install 2>&1 | tail -5
+    echo "  → Installing React, TypeScript, Monaco Editor, and UI dependencies..."
+    pnpm install
+elif [[ ! -f "node_modules/.pnpm_install_complete" ]]; then
+    step "Updating Hermes Workspace dependencies to latest versions..."
+    echo "  → Updating React, TypeScript, and UI dependencies..."
+    pnpm update
+    touch "node_modules/.pnpm_install_complete"
+else
+    ok "Hermes Workspace dependencies already up to date."
 fi
 
 # Create .env for workspace
@@ -816,14 +950,18 @@ cd - >/dev/null
 # ── Step 4: Start Hermes Workspace Service ────────────────────────────────────
 step "Configuring Hermes Workspace service..."
 
-# Find pnpm location (could be in ~/.local/bin, /usr/bin, or ~/.nvm/versions/node/...)
-PNPM_BIN=$(command -v pnpm)
+# Use the local pnpm installation exclusively
+PNPM_BIN="${HOME}/.local/share/pnpm/pnpm"
+if [[ ! -x "$PNPM_BIN" ]]; then
+    die "Local pnpm not found at ${PNPM_BIN}. Installation may have failed."
+fi
 
 # Create systemd user service for Workspace
 cat > "${HOME}/.config/systemd/user/hermes-workspace.service" <<WORKSPACE_SERVICE
 [Unit]
 Description=Hermes Workspace Web UI
-After=hermes-webapi.service default.target
+After=hermes-webapi.service network.target
+Requires=hermes-webapi.service
 
 [Service]
 Type=simple
@@ -833,7 +971,7 @@ Restart=on-failure
 RestartSec=5
 Environment=HOME=${HOME}
 Environment=NODE_ENV=production
-Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin
+Environment=PATH=${HOME}/.local/bin:${HOME}/.local/share/pnpm:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target
@@ -846,53 +984,44 @@ else
     warn "systemd --user unavailable — Workspace must be started manually."
 fi
 
-# Deactivate venv
-deactivate 2>/dev/null || true
-
 HERMES_WEBAPI_INSTALLED=true
 HERMES_WORKSPACE_INSTALLED=true
 ok "Hermes Workspace integration complete."
 
 # =============================================================================
-#  8e. Text-to-Video Generation Dependencies
+#  8e. Text-to-Video Generation Dependencies (Optional)
 # =============================================================================
-step "Checking for text-to-video generation support..."
 VIDEO_GEN_DIR="${HOME}/llm-video"
 mkdir -p "$VIDEO_GEN_DIR"
 
 VIDEO_DEPS_INSTALLED=false
-if python3 -c "import diffusers; import transformers; import accelerate; import PIL" &>/dev/null; then
-    ok "Video generation dependencies already installed."
-    VIDEO_DEPS_INSTALLED=true
-else
+if [[ "$HAS_NVIDIA" == "true" ]]; then
     read -rp "  Install text-to-video generation support? (requires ~2GB disk) [y/N]: " install_video
     if [[ "$install_video" =~ ^[Yy]$ ]]; then
         step "Installing video generation dependencies..."
-        if pip3 install --quiet --user --break-system-packages \
+        echo "  → Installing PyTorch with CUDA support..."
+        if pip3 install --user --break-system-packages \
             diffusers transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg \
-            torch torchvision --index-url https://download.pytorch.org/whl/cu121 2>/dev/null; then
+            torch torchvision --index-url https://download.pytorch.org/whl/cu121; then
             ok "Video dependencies installed with CUDA backend."
-        elif pip3 install --quiet --user --break-system-packages \
-            "diffusers[torch]" transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg torch torchvision 2>/dev/null; then
-            ok "Video dependencies installed."
-        else
-            warn "Video dependencies install failed — install manually with: pip3 install 'diffusers[torch]' transformers accelerate..."
-        fi
-
-        if python3 -c "import diffusers; import transformers" &>/dev/null; then
-            ok "Video generation dependencies installed."
             VIDEO_DEPS_INSTALLED=true
         else
-            warn "Video dependencies not fully installed."
+            echo "  → CUDA installation failed, trying CPU-only version..."
+            pip3 install --user --break-system-packages \
+                "diffusers[torch]" transformers accelerate pillow safetensors opencv-python imageio imageio-ffmpeg torch torchvision
+            ok "Video dependencies installed (CPU version)."
+            VIDEO_DEPS_INSTALLED=true
         fi
     else
         ok "Skipping video generation support."
     fi
+else
+    ok "Skipping video generation (no NVIDIA GPU detected)."
 fi
 
 if [[ "$VIDEO_DEPS_INSTALLED" == "true" ]]; then
     step "Creating video generation script..."
-    cat > "${VIDEO_GEN_DIR}/generate_video.py" <<'VIDEO_SCRIPT'
+    cat > "${VIDEO_GEN_DIR}/generate_video.py" <<'//////'
 #!/usr/bin/env python3
 """Text-to-Video Generation Script using Stable Video Diffusion."""
 
@@ -928,134 +1057,93 @@ def create_base_image(prompt: str, width: int = 1024, height: int = 576) -> Imag
             factor = y / height
             pixels[x, y] = (int(base_color[0] * (1 - factor * 0.5)),
                            int(base_color[1] * (1 - factor * 0.5)),
-                           int(base_color[2] * (1 - factor * 0.5)))
+                           int(base_color[2] * (1 - factor * 0.5) + factor * 50))
+
+    # Add text overlay
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+    except (OSError, IOError):
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 48)
+        except (OSError, IOError):
+            font = ImageFont.load_default()
 
     draw = ImageDraw.Draw(img)
-    font = None
-    # Try multiple font paths with fallback to default
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
-    ]
-    # Also check WSL2 Windows font mount points
-    if os.path.exists("/mnt/c/Windows/Fonts"):
-        font_paths.extend([
-            "/mnt/c/Windows/Fonts/arial.ttf",
-            "/mnt/c/Windows/Fonts/calibri.ttf",
-        ])
-    for font_path in font_paths:
-        if os.path.exists(font_path):
-            try:
-                font = ImageFont.truetype(font_path, 24)
-                break
-            except Exception:
-                continue
-    if font is None:
-        # Try to find any TTF font using fc-list if available
-        try:
-            import subprocess
-            result = subprocess.run(['fc-list', ':family', 'sans', ':file'], 
-                                   capture_output=True, text=True, timeout=5)
-            if result.stdout:
-                for line in result.stdout.strip().split('\n')[:10]:
-                    if line.endswith('.ttf') or line.endswith('.ttc'):
-                        try:
-                            font = ImageFont.truetype(line.split(':')[-1].strip(), 24)
-                            break
-                        except Exception:
-                            continue
-        except Exception:
-            pass
-    if font is None:
-        font = ImageFont.load_default()
+    bbox = draw.textbbox((0, 0), prompt, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    x = (width - text_width) // 2
+    y = (height - text_height) // 2
 
-    words = prompt.split()
-    lines = []
-    current_line = ""
-    for word in words:
-        test_line = f"{current_line} {word}" if current_line else word
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        if bbox[2] - bbox[0] < width - 40:
-            current_line = test_line
-        else:
-            if current_line:
-                lines.append(current_line)
-            current_line = word
-    if current_line:
-        lines.append(current_line)
+    # Add text shadow
+    shadow_color = (0, 0, 0, 128)
+    for offset in [(1, 1), (-1, -1), (1, -1), (-1, 1)]:
+        draw.text((x + offset[0], y + offset[1]), prompt, font=font, fill=shadow_color)
 
-    text_y = height - 80
-    for i, line in enumerate(lines[-3:]):
-        line_y = text_y + i * 28
-        draw.text((51, line_y + 1), line, font=font, fill=(0, 0, 0))
-        draw.text((50, line_y), line, font=font, fill=(255, 255, 255))
+    # Add main text
+    draw.text((x, y), prompt, font=font, fill=(255, 255, 255))
+
     return img
 
 
-def generate_video(prompt: str, output_path: str, fps: int = 7,
-                   num_frames: int = 25, decode_chunk_size: int = 8) -> None:
-    """Generate a video from text prompt using Stable Video Diffusion."""
-    print(f"Generating video for prompt: '{prompt}'")
+def generate_video(prompt: str, output_path: str, fps: int = 7, num_frames: int = 25,
+                  decode_chunk_size: int = 8, seed: int = 42) -> None:
+    """Generate video from text prompt using Stable Video Diffusion."""
+    print(f"Generating video for: '{prompt}'")
     print(f"Output: {output_path}")
+    print(f"Frames: {num_frames}, FPS: {fps}")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
+    if not torch.cuda.is_available():
+        print("Warning: CUDA not available. Video generation will be slow on CPU.")
 
-    if device == "cuda":
-        try:
-            vram_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            print(f"VRAM: {vram_total:.1f} GiB available")
-            if vram_total < 8:
-                print(f"Warning: Only {vram_total:.1f}GB VRAM. Consider reducing --frames or --chunk-size.")
-        except Exception:
-            pass
-    else:
-        print("Warning: CPU generation is very slow.")
+    # Set random seed for reproducibility
+    torch.manual_seed(seed)
 
-    try:
-        print("Loading Stable Video Diffusion model...")
-        pipe = StableVideoDiffusionPipeline.from_pretrained(
-            "stabilityai/stable-video-diffusion-img2vid-xt",
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-            variant="fp16" if device == "cuda" else None
-        )
+    # Load the pipeline
+    print("Loading Stable Video Diffusion pipeline...")
+    pipe = StableVideoDiffusionPipeline.from_pretrained(
+        "stabilityai/stable-video-diffusion-img2vid-xt",
+        torch_dtype=torch.float16,
+        variant="fp16"
+    )
+
+    if torch.cuda.is_available():
+        pipe.to("cuda")
         pipe.enable_model_cpu_offload()
+        pipe.enable_vae_slicing()
+    else:
+        pipe.enable_sequential_cpu_offload()
 
-        print("Creating base image...")
-        base_image = create_base_image(prompt).resize((1024, 576))
+    # Create base image from prompt
+    print("Creating base image from prompt...")
+    base_image = create_base_image(prompt)
 
-        print(f"Generating {num_frames} frames...")
-        generator = torch.manual_seed(42) if device == "cpu" else None
-        frames = pipe(base_image, decode_chunk_size=decode_chunk_size,
-                      generator=generator, num_frames=num_frames).frames[0]
+    print("Generating video frames...")
+    # Generate video frames
+    frames = pipe(base_image, decode_chunk_size=decode_chunk_size,
+                  generator=torch.manual_seed(seed), num_frames=num_frames).frames[0]
 
-        print(f"Exporting video to {output_path}...")
-        if output_path.lower().endswith('.mp4'):
-            try:
-                import imageio
-                with imageio.get_writer(output_path, fps=fps, plugin='ffmpeg') as writer:
-                    for frame in frames:
-                        writer.append_data(frame)
-                print("Exported using imageio-ffmpeg")
-            except ImportError:
-                from diffusers.utils import export_to_video
-                export_to_video(frames, output_path, fps=fps)
-                print("Exported using OpenCV")
+    print(f"Generated {len(frames)} frames, exporting to {output_path}...")
+
+    # Export to video file
+    \        if output_path.lower().endswith('.mp4'):
+        try:
+            import imageio
+            with imageio.get_writer(output_path, fps=fps, plugin='ffmpeg') as writer:
+                for frame in frames:
+                    writer.append_data(frame)
+            print("Exported using imageio-ffmpeg")
+        \            except ImportError:
+            from diffusers.utils import export_to_video
+            export_to_video(frames, output_path, fps=fps)
+            print("Exported using OpenCV")
         else:
             # Convert fps to duration (ms per frame) for Pillow GIF export
             duration_ms = int(1000 / fps)
             frames[0].save(output_path, save_all=True, append_images=frames[1:],
-                          duration=duration_ms, loop=0, format="GIF")
+                      duration=duration_ms, loop=0, format="GIF")
 
-        print(f"✓ Video saved: {output_path} ({num_frames/fps:.1f}s)")
-    except Exception as e:
-        print(f"Error: {e}")
-        print("\nTroubleshooting: Check VRAM (8GB+ recommended), reduce --frames or --chunk-size")
-        sys.exit(1)
+    print(f"✓ Video saved: {output_path} ({num_frames/fps:.1f}s)")
 
 
 def main():
@@ -1074,23 +1162,25 @@ def main():
         os.makedirs(output_dir)
 
     generate_video(prompt=args.prompt, output_path=args.output,
-                   fps=args.fps, num_frames=args.frames, decode_chunk_size=args.chunk_size)
+                  fps=args.fps, num_frames=args.frames, decode_chunk_size=args.chunk_size)
 
 
 if __name__ == "__main__":
     main()
-VIDEO_SCRIPT
+//////
+
+    cat > "${VIDEO_GEN_DIR}/generate-video" <<'@@@@@@'
+#!/bin/bash
+# Wrapper script for text-to-video generation
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}" python3 "${SCRIPT_DIR}/generate_video.py" "$@"
+@@@@@@
 
     chmod +x "${VIDEO_GEN_DIR}/generate_video.py"
-
-    cat > "${VIDEO_GEN_DIR}/generate-video" <<'VIDEO_WRAPPER'
-#!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python3 "${SCRIPT_DIR}/generate_video.py" "$@"
-VIDEO_WRAPPER
     chmod +x "${VIDEO_GEN_DIR}/generate-video"
-    ok "Video generation script created."
 
+    # Create symlink for convenience
     [[ ! -L "${VIDEO_GEN_DIR}/genvideo" ]] && ln -sf "${VIDEO_GEN_DIR}/generate-video" "${VIDEO_GEN_DIR}/genvideo" && ok "Created genvideo symlink"
 
     if ! grep -q "llm-video" "${HOME}/.profile" 2>/dev/null; then
@@ -1101,27 +1191,77 @@ export PATH="$HOME/llm-video:$PATH"
 PROFILE_VIDEO
         ok "Added llm-video to ~/.profile"
     fi
+
+    # Also add to ~/.bashrc for interactive shells
+    if ! grep -q "llm-video" "${HOME}/.bashrc" 2>/dev/null; then
+        echo "export PATH=\"\$HOME/llm-video:\$PATH\"  # Video generation" >> "${HOME}/.bashrc"
+        ok "Added llm-video to ~/.bashrc"
+    fi
 fi
 
 # =============================================================================
-#  9. Qwen Code
+#  0. Update System and Python Packages
+# =============================================================================
+step "Updating system packages and Python dependencies..."
+
+# Update system packages (only if not recently updated)
+if [[ ! -f /var/cache/apt/pkgcache.bin ]] || find /var/cache/apt/pkgcache.bin -mmin +60 2>/dev/null | grep -q pkgcache; then
+    echo "  → Updating system package lists..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    echo "  → Upgrading system packages..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+else
+    echo "  → System packages recently updated — skipping"
+fi
+
+# Update pip only if needed
+if ! pip3 list --user 2>/dev/null | grep -q "^pip "; then
+    echo "  → Updating Python package managers..."
+    pip3 install --user --break-system-packages --upgrade pip setuptools wheel
+else
+    echo "  → pip already up to date"
+fi
+ok "System and Python package managers updated."
+
+# =============================================================================
+#  1. WSL Environment Check
 # =============================================================================
 step "Checking for Qwen Code..."
 QWEN_CODE_INSTALLED=false
-[[ -x "${HOME}/.hermes/node/bin/node" ]] && export PATH="${HOME}/.hermes/node/bin:${PATH}"
 
-if ! command -v node &>/dev/null; then
-    warn "Node.js not found — installing Node.js 22..."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
+# Use Node.js from Hermes installation if available, otherwise install system-wide
+if [[ -x "${HOME}/.hermes/node/bin/node" ]]; then
+    export PATH="${HOME}/.hermes/node/bin:${PATH}"
+    QWEN_NODE_PATH="${HOME}/.hermes/node/bin"
+elif [[ -x "${HOME}/.local/bin/node" ]]; then
+    QWEN_NODE_PATH="${HOME}/.local/bin"
+else
+    QWEN_NODE_PATH=""
+fi
+
+if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]] || [[ "$(node --version 2>/dev/null | sed 's/v//')" != "24."* ]]; then
+    warn "Node.js not found, using Windows Node.js, or not v24.x — installing system Node.js 24 LTS..."
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - 2>/dev/null
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    QWEN_NODE_PATH="/usr/bin"
+    # Ensure system Node.js takes precedence
+    export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
+else
+    ok "Node.js $(node --version) already available for Qwen Code"
 fi
 
 if command -v node &>/dev/null; then
     ok "Node.js: $(node --version)"
-    if ! command -v qwen &>/dev/null; then
+
+    # Update npm to latest version (skip if permission denied - not critical)
+    if ! npm list -g @qwen-code/cli &>/dev/null; then
         step "Installing Qwen Code..."
+        export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
         npm install -g @qwen-code/cli 2>&1 | tail -3
-        export PATH="$(npm prefix -g 2>/dev/null)/bin:${PATH}"
+        NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
+        export PATH="${NPM_GLOBAL_BIN}:${PATH}"
+    else
+        ok "Qwen Code already installed."
     fi
     QWEN_CODE_INSTALLED=true
 
@@ -1159,21 +1299,19 @@ WORKSPACE_DIR="${HOME}/hermes-workspace"
 
 if [[ "$HAS_NVIDIA" == "true" ]]; then
     cat > "$LAUNCH_SCRIPT" <<LAUNCH
-#!/usr/bin/env bash
 # Full LLM Stack launcher — generated by install.sh
-# Starts: llama-server (8080) + Hermes WebAPI (8642) + Hermes Workspace (3000)
 GGUF="${GGUF_PATH}"
 MODEL_NAME="${SEL_NAME}"
 LLAMA_BIN="${LLAMA_SERVER_BIN}"
 SAFE_CTX=${SAFE_CTX}
 USE_JINJA="${USE_JINJA}"
-HERMES_AGENT_DIR="${HERMES_AGENT_DIR}"
-HERMES_VENV="${HERMES_VENV}"
-WORKSPACE_DIR="${WORKSPACE_DIR}"
+HERMES_AGENT_DIR="${HOME}/hermes-agent"
+HERMES_VENV="${HOME}/hermes-agent/.venv"
+WORKSPACE_DIR="${HOME}/hermes-workspace"
 
 # Check for running services
 LLAMA_PID=\$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=\$(pgrep -f "hermes webapi" 2>/dev/null || true)
+WEBAPI_PID=\$(pgrep -f "python -m webapi" 2>/dev/null || true)
 WORKSPACE_PID=\$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
 
 if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
@@ -1189,7 +1327,7 @@ if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
     fi
     if [[ "\$kill_choice" =~ ^[Yy]\$ ]]; then
         pkill -f "llama-server" 2>/dev/null || true
-        pkill -f "hermes webapi" 2>/dev/null || true
+        pkill -f "python -m webapi" 2>/dev/null || true
         pkill -f "pnpm dev" 2>/dev/null || true
         sleep 2
         echo "✓ All services stopped."
@@ -1237,19 +1375,25 @@ done
 echo "[2/3] Starting Hermes WebAPI..."
 source "\${HERMES_VENV}/bin/activate"
 cd "\${HERMES_AGENT_DIR}"
-hermes webapi &
+python -m webapi &
 WEBAPI_PID=\$!
 deactivate 2>/dev/null || true
 sleep 2
 
-# Wait for WebAPI to be ready
-for i in {1..15}; do
-    if curl -sf http://localhost:8642/health &>/dev/null; then
-        echo "✓ Hermes WebAPI ready (PID: \$WEBAPI_PID)"
-        break
-    fi
-    sleep 1
-done
+        # Wait for WebAPI to be ready (increased timeout)
+        for i in {1..20}; do
+            if curl -sf http://localhost:8642/health &>/dev/null 2>&1; then
+                ok "Hermes WebAPI ready at http://localhost:8642"
+                break
+            elif curl -sf http://localhost:8642/docs &>/dev/null 2>&1; then
+                ok "Hermes WebAPI ready at http://localhost:8642 (using /docs endpoint)"
+                break
+            fi
+            sleep 1
+        done
+        if [[ $i -eq 20 ]]; then
+            warn "Hermes WebAPI health check timed out — may still be starting up"
+        fi
 
 # Start Hermes Workspace
 echo "[3/3] Starting Hermes Workspace..."
@@ -1269,24 +1413,32 @@ echo ""
 wait
 LAUNCH
 else
-    CPU_THREADS=$(nproc)
+    # Use physical cores for better performance, fallback to nproc
+    if command -v lscpu &>/dev/null; then
+        CPU_THREADS=$(lscpu | grep "^Core(s) per socket:" | awk '{print $4}' 2>/dev/null)
+        SOCKETS=$(lscpu | grep "^Socket(s):" | awk '{print $2}' 2>/dev/null)
+        if [[ -n "$CPU_THREADS" && -n "$SOCKETS" ]]; then
+            CPU_THREADS=$(( CPU_THREADS * SOCKETS ))
+        else
+            CPU_THREADS=$(nproc)
+        fi
+    else
+        CPU_THREADS=$(nproc)
+    fi
     cat > "$LAUNCH_SCRIPT" <<LAUNCH
-#!/usr/bin/env bash
 # Full LLM Stack launcher (CPU) — generated by install.sh
-# Starts: llama-server (8080) + Hermes WebAPI (8642) + Hermes Workspace (3000)
-# Threads: ${CPU_THREADS}
 GGUF="${GGUF_PATH}"
 MODEL_NAME="${SEL_NAME}"
 LLAMA_BIN="${LLAMA_SERVER_BIN}"
 SAFE_CTX=${SAFE_CTX}
 USE_JINJA="${USE_JINJA}"
-HERMES_AGENT_DIR="${HERMES_AGENT_DIR}"
-HERMES_VENV="${HERMES_VENV}"
-WORKSPACE_DIR="${WORKSPACE_DIR}"
+HERMES_AGENT_DIR="${HOME}/hermes-agent"
+HERMES_VENV="${HOME}/hermes-agent/.venv"
+WORKSPACE_DIR="${HOME}/hermes-workspace"
 
 # Check for running services
 LLAMA_PID=\$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=\$(pgrep -f "hermes webapi" 2>/dev/null || true)
+WEBAPI_PID=\$(pgrep -f "python -m webapi" 2>/dev/null || true)
 WORKSPACE_PID=\$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
 
 if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
@@ -1301,7 +1453,7 @@ if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
     fi
     if [[ "\$kill_choice" =~ ^[Yy]\$ ]]; then
         pkill -f "llama-server" 2>/dev/null || true
-        pkill -f "hermes webapi" 2>/dev/null || true
+        pkill -f "python -m webapi" 2>/dev/null || true
         pkill -f "pnpm dev" 2>/dev/null || true
         sleep 2
         echo "✓ All services stopped."
@@ -1344,14 +1496,17 @@ done
 echo "[2/3] Starting Hermes WebAPI..."
 source "\${HERMES_VENV}/bin/activate"
 cd "\${HERMES_AGENT_DIR}"
-hermes webapi &
+python -m webapi &
 WEBAPI_PID=\$!
 deactivate 2>/dev/null || true
 sleep 2
 
-for i in {1..15}; do
-    if curl -sf http://localhost:8642/health &>/dev/null; then
+for i in {1..25}; do
+    if curl -sf http://localhost:8642/health &>/dev/null 2>&1; then
         echo "✓ Hermes WebAPI ready (PID: \$WEBAPI_PID)"
+        break
+    elif curl -sf http://localhost:8642/docs &>/dev/null 2>&1; then
+        echo "✓ Hermes WebAPI ready (PID: \$WEBAPI_PID, using /docs endpoint)"
         break
     fi
     sleep 1
@@ -1387,11 +1542,14 @@ LOG_MAX_SIZE=$((50 * 1024 * 1024))
 if [[ -f "$LOG_FILE" ]]; then
     LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
     if (( LOG_SIZE > LOG_MAX_SIZE )); then
-        mv "$LOG_FILE" "${LOG_FILE}.old"
+        # Use temporary file to avoid race conditions
+        TEMP_LOG="${LOG_FILE}.tmp.$(date +%s)"
+        mv "$LOG_FILE" "$TEMP_LOG"
         if command -v gzip &>/dev/null; then
-            gzip "${LOG_FILE}.old" 2>/dev/null || true
+            gzip "$TEMP_LOG" 2>/dev/null && mv "${TEMP_LOG}.gz" "${LOG_FILE}.old.gz" || mv "$TEMP_LOG" "${LOG_FILE}.old"
             ok "Rotated log → ${LOG_FILE}.old.gz"
         else
+            mv "$TEMP_LOG" "${LOG_FILE}.old"
             ok "Rotated log → ${LOG_FILE}.old"
         fi
     fi
@@ -1426,58 +1584,36 @@ mkdir -p "${HOME}/.config/systemd/user"
 cat > "${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
 [Unit]
 Description=llama-server LLM inference
-After=default.target
+After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -c 'echo n | bash ${LAUNCH_SCRIPT}'
+ExecStart=${LLAMA_SERVER_BIN} -m ${GGUF_PATH} -ngl 99 -fa on -c ${SAFE_CTX} -np 1 --cache-type-k q4_0 --cache-type-v q4_0 --host 0.0.0.0 --port 8080 ${USE_JINJA}
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${HOME}
-Environment=PATH=/usr/local/cuda/bin:${HOME}/.local/bin:${HOME}/.hermes/node/bin:/usr/bin:/bin
+Environment=PATH=/usr/local/cuda/bin:${HOME}/.local/bin:/usr/bin:/bin
+StandardOutput=file:/tmp/llama-server.log
+StandardError=file:/tmp/llama-server.log
 
 [Install]
 WantedBy=default.target
 SERVICE
 
 if systemctl --user daemon-reload 2>/dev/null; then
-    systemctl --user enable --now llama-server.service 2>/dev/null || true
-    ok "systemd service enabled."
+    systemctl --user enable llama-server.service 2>/dev/null || true
+    ok "systemd services configured for auto-start."
+    info "Services will auto-start on next login. Use 'start-llm' for immediate start."
 else
-    warn "systemd --user unavailable — using ~/.bashrc auto-start."
+    warn "systemd --user unavailable — services must be started manually with 'start-llm'"
 fi
 
 # =============================================================================
 #  12b. Start all services after installation
 # =============================================================================
 if [[ "$HERMES_WEBAPI_INSTALLED" == "true" && "$HERMES_WORKSPACE_INSTALLED" == "true" ]]; then
-    step "Starting all services for first use..."
-    
-    # Start Hermes WebAPI if systemd is available
     if systemctl --user daemon-reload 2>/dev/null; then
-        systemctl --user start hermes-webapi.service 2>/dev/null && ok "Hermes WebAPI started." || warn "WebAPI start failed."
-        sleep 2
-        
-        # Wait for WebAPI to be ready
-        for i in {1..10}; do
-            if curl -sf http://localhost:8642/health &>/dev/null; then
-                ok "Hermes WebAPI ready at http://localhost:8642"
-                break
-            fi
-            sleep 1
-        done
-        
-        systemctl --user start hermes-workspace.service 2>/dev/null && ok "Hermes Workspace started." || warn "Workspace start failed."
-        sleep 3
-        
-        # Wait for Workspace to be ready
-        for i in {1..15}; do
-            if curl -sf http://localhost:3000 &>/dev/null; then
-                ok "Hermes Workspace ready at http://localhost:3000 ⭐"
-                break
-            fi
-            sleep 1
-        done
+        info "Services configured for auto-start. Use 'start-llm' to start immediately."
     else
         warn "systemd unavailable — services must be started manually with 'start-llm'"
     fi
@@ -1501,11 +1637,18 @@ export __LLM_BASHRC_LOADED=1
 
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
+
+# Progress indicator for long operations
+show_progress() {
+    local msg="$1"
+    echo -ne "  → ${msg}...\r"
+}
 export PATH="/usr/local/cuda/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
-export PATH="${HOME}/.local/bin:${PATH}"
-export PATH="${HOME}/.hermes/node/bin:${PATH}"
-export PATH="${HOME}/llm-video:${PATH}"
+# Prioritize system Node.js and local tools over Windows installations
+export PNPM_HOME="${HOME}/.local/share/pnpm"
+export PATH="/usr/bin:/bin:/usr/local/bin:${PNPM_HOME}:${HOME}/.local/bin:${HOME}/.hermes/node/bin:${PATH}"
+[[ "$VIDEO_DEPS_INSTALLED" == "true" ]] && export PATH="${HOME}/llm-video:${PATH}"
 BASHRC_START
 
     if [[ -n "${HF_TOKEN:-}" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
@@ -1517,7 +1660,9 @@ BASHRC_START
 
 # LLM aliases
 alias start-llm='bash ~/start-llm.sh'
-alias stop-llm='pkill -f llama-server && pkill -f "hermes webapi" && pkill -f "pnpm dev" && echo "All LLM services stopped."'
+alias start-llm-services='systemctl --user start llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services started via systemd" || bash ~/start-llm.sh'
+alias stop-llm='systemctl --user stop llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services stopped via systemd" || (pkill -f llama-server && pkill -f "python -m webapi" && pkill -f "pnpm dev" && echo "All LLM services stopped manually.")'
+alias restart-llm='systemctl --user restart llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null && echo "LLM services restarted via systemd" || (stop-llm && sleep 2 && start-llm)'
 alias llm-log='tail -f /tmp/llama-server.log'
 alias switch-model='install.sh'
 alias hermes-update='hermes update'
@@ -1528,8 +1673,8 @@ alias hermes-summarise='echo "Summarise: decisions, code, bugs, current task. Dr
 # Hermes Workspace aliases
 alias start-workspace='cd ~/hermes-workspace && pnpm dev'
 alias stop-workspace='pkill -f "pnpm dev" && echo "Hermes Workspace stopped."'
-alias start-hermes-api='source ~/hermes-agent/.venv/bin/activate && cd ~/hermes-agent && hermes webapi'
-alias stop-hermes-api='pkill -f "hermes webapi" && echo "Hermes WebAPI stopped."'
+alias start-hermes-api='source ~/hermes-agent/.venv/bin/activate && cd ~/hermes-agent && python -m webapi'
+alias stop-hermes-api='pkill -f "python -m webapi" && echo "Hermes WebAPI stopped."'
 alias workspace-log='tail -f ~/hermes-workspace/logs/*.log 2>/dev/null || echo "No workspace logs found."'
 alias hermes-api-log='tail -f ~/hermes-agent/logs/*.log 2>/dev/null || echo "No WebAPI logs found."'
 
@@ -1555,13 +1700,32 @@ llm-models() {
     echo ""
 }
 
+llm-services() {
+    echo -e "\n  ${BLD}Systemd Services Status:${RST}"
+    echo "  ─────────────────────────────────────────────────"
+    if command -v systemctl &>/dev/null; then
+        for service in llama-server hermes-webapi hermes-workspace; do
+            status=$(systemctl --user is-active "$service.service" 2>/dev/null || echo "inactive")
+            enabled=$(systemctl --user is-enabled "$service.service" 2>/dev/null || echo "disabled")
+            case $status in
+                active) color=$GRN; icon="✓" ;;
+                *) color=$RED; icon="✗" ;;
+            esac
+            printf "  %s %-20s %s (%s)\n" "$icon" "$service.service" "$status" "$enabled"
+        done
+    else
+        echo "  systemd not available"
+    fi
+    echo ""
+}
+
 llm-status() {
     echo -e "${BLD}${CYN}╭────────────────────────────────────────────────────────────────╮${RST}"
     echo -e "${BLD}${CYN}│${RST}  ${BLD}LLM Stack Status${RST}"
     echo -e "${BLD}${CYN}│${RST}  ──────────────────────────────────────────────────────"
     
     LLAMA_PID=\$(pgrep -f "llama-server" 2>/dev/null || true)
-    WEBAPI_PID=\$(pgrep -f "hermes webapi" 2>/dev/null || true)
+    WEBAPI_PID=\$(pgrep -f "python -m webapi" 2>/dev/null || true)
     WORKSPACE_PID=\$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
     
     if [[ -n "\$LLAMA_PID" ]]; then
@@ -1621,19 +1785,16 @@ show_llm_summary() {
     echo -e "${BLD}${CYN}╭────────────────────────────────────────────────────────────────╮${RST}"
     echo -e "${BLD}${CYN}│${RST}  ${BLD}LLM Quick Commands${RST}"
     echo -e "${BLD}${CYN}│${RST}  ──────────────────────────────────────────────────────"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}start-llm${RST}        → Start full LLM stack"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}stop-llm${RST}         → Stop all services"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-status${RST}       → Check service status"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-log${RST}          → View llama-server logs"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-models${RST}       → List downloaded models"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}start-workspace${RST}  → Start Workspace (manual)"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}vram${RST}             → GPU/VRAM usage"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}hermes${RST}           → Hermes AI agent"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}qwen${RST}             → Qwen Code assistant"
-    echo -e "${BLD}${CYN}│${RST}  ──────────────────────────────────────────────────────"
-    echo -e "${BLD}${CYN}│${RST}  ${BLD}Web UIs:${RST}"
-    echo -e "${BLD}${CYN}│${RST}  ${GRN}http://localhost:3000${RST}  → Hermes Workspace ⭐"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}http://localhost:8080${RST}  → llama-server"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}start-llm-services${RST} → Auto-start via systemd"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}start-llm${RST}          → Start full stack manually"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}stop-llm${RST}           → Stop all services"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}restart-llm${RST}        → Restart all services"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-status${RST}         → Check service status"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-services${RST}       → Check systemd services"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-log${RST}            → View llama-server logs"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-models${RST}         → List downloaded models"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}vram${RST}               → GPU/VRAM usage"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}hermes${RST}             → Hermes AI agent"
     echo -e "${BLD}${CYN}╰────────────────────────────────────────────────────────────────╯${RST}"
     echo ""
 }
@@ -1667,11 +1828,12 @@ fi
 
 if [[ -n "$WSLCONFIG" && ! -f "$WSLCONFIG" && -n "$WSLCONFIG_DIR" ]]; then
     step "Writing .wslconfig..."
-    WSL_RAM=$(( RAM_GiB * 3 / 4 ))
-    (( WSL_RAM < 8 )) && WSL_RAM=8
-    (( WSL_RAM > 64 )) && WSL_RAM=64
-    WSL_SWAP=$(( WSL_RAM / 4 ))
-    (( WSL_SWAP < 2 )) && WSL_SWAP=2
+    # Allocate 80% of host RAM but cap at reasonable limits for LLM workloads
+    WSL_RAM=$(( RAM_GiB * 4 / 5 ))
+    (( WSL_RAM < 16 )) && WSL_RAM=16  # Minimum 16GB for LLM workloads
+    (( WSL_RAM > 96 )) && WSL_RAM=96  # Cap at 96GB to leave headroom
+    WSL_SWAP=$(( WSL_RAM / 2 ))       # 50% of RAM for swap (more generous for LLM workloads)
+    (( WSL_SWAP < 8 )) && WSL_SWAP=8  # Minimum 8GB swap
 
     cat > "$WSLCONFIG" <<WSLCFG
 ; Generated by install.sh
@@ -1702,7 +1864,13 @@ cat <<'EOF'
  ╚══════════════════════════════════════════════════════════╝
 EOF
 echo -e "${RST}"
-echo -e " ${BLD}Installed:${RST}"
+echo -e " ${BLD}Versions Installed:${RST}"
+echo -e "  Node.js          →  $(node --version 2>/dev/null || echo 'Not installed')"
+echo -e "  npm              →  $(npm --version 2>/dev/null || echo 'Not installed')"
+echo -e "  pnpm             →  $(pnpm --version 2>/dev/null || echo 'Not installed')"
+echo -e "  Python           →  $(python3 --version 2>/dev/null || echo 'Not installed')"
+echo -e "  llama.cpp        →  $(llama-server --version 2>&1 | head -1 || echo 'Latest')"
+echo -e "  ${BLD}Services:${RST}"
 echo -e "  llama-server     →  http://localhost:8080/v1"
 echo -e "  llama.cpp Web UI →  http://localhost:8080"
 echo -e "  Hermes WebAPI    →  http://localhost:8642"
@@ -1710,18 +1878,19 @@ echo -e "  Hermes Workspace →  http://localhost:3000 ⭐"
 echo -e "  Model            →  ${SEL_NAME}  (context: ${SAFE_CTX})"
 [[ "$HERMES_WEBAPI_INSTALLED" == "true" ]] && echo -e "  Hermes Agent     →  outsourc-e fork with WebAPI"
 [[ "$HERMES_WORKSPACE_INSTALLED" == "true" ]] && echo -e "  Hermes Workspace →  Full web UI installed"
-[[ "$QWEN_CODE_INSTALLED" == "true" ]] && echo -e "  Qwen Code        →  coding agent"
-[[ "$VIDEO_DEPS_INSTALLED" == "true" ]] && echo -e "  Video Gen        →  Stable Video Diffusion"
+[[ "$QWEN_CODE_INSTALLED" == "true" ]] && echo -e "  Qwen Code        →  coding agent (qwen instant compatible)"
+[[ "$VIDEO_DEPS_INSTALLED" == "true" ]] && echo -e "  Video Gen        →  Stable Video Diffusion (CUDA)"
 echo ""
 echo -e " ${BLD}Usage:${RST}"
-echo -e "  ${CYN}start-llm${RST}          start full stack (all 3 services)"
+echo -e "  ${CYN}start-llm-services${RST} auto-start all services (systemd)"
+echo -e "  ${CYN}start-llm${RST}          start full stack manually (fallback)"
 echo -e "  ${CYN}stop-llm${RST}           stop all services"
-echo -e "  ${CYN}llm-status${RST}         check service status"
+echo -e "  ${CYN}restart-llm${RST}        restart all services"
+echo -e "  ${CYN}llm-status${RST}         check running processes"
+echo -e "  ${CYN}llm-services${RST}       check systemd services"
 echo -e "  ${CYN}llm-log${RST}            tail llama-server logs"
 echo -e "  ${CYN}llm-models${RST}         list downloaded models"
 echo -e "  ${CYN}switch-model${RST}       change model (re-run installer)"
-echo -e "  ${CYN}start-workspace${RST}    start Workspace manually"
-echo -e "  ${CYN}stop-workspace${RST}     stop Workspace"
 echo -e "  ${CYN}hermes${RST}             Hermes AI agent (CLI)"
 echo -e "  ${CYN}qwen${RST}               Qwen Code assistant"
 echo -e "  ${CYN}vram${RST}               GPU/VRAM usage"
@@ -1738,6 +1907,8 @@ echo -e "  • Memory & skills management"
 echo -e "  • Terminal integration"
 echo -e "  • 8 themes (light/dark modes)"
 echo -e "  • PWA — install as desktop app"
+echo -e "  • Auto-start services on boot"
+echo -e "  • Proper service dependencies"
 echo ""
 echo -e " ${BLD}Docs:${RST}"
 echo -e "  llama.cpp       →  https://github.com/ggml-org/llama.cpp"
@@ -1746,5 +1917,5 @@ echo -e "  Hermes Workspace →  https://github.com/outsourc-e/hermes-workspace"
 echo -e "  Qwen Code       →  https://github.com/QwenLM/qwen-code"
 echo ""
 echo -e " ${YLW}Note:${RST} Run 'source ~/.bashrc' or open a new terminal."
-[[ "$VIDEO_DEPS_INSTALLED" == "true" ]] && echo -e " ${YLW}Video:${RST} Run 'source ~/.profile' for generate-video in PATH."
+echo -e " ${GRN}Auto-start:${RST} Services start automatically on next login."
 echo ""
