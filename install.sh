@@ -938,7 +938,7 @@ Restart=on-failure
 RestartSec=5
 Environment=HOME=${HOME}
 Environment=NODE_ENV=production
-Environment=PATH=${HOME}/.local/bin:${PNPM_HOME}:/usr/bin:/bin
+Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target
