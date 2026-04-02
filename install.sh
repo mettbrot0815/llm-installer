@@ -59,6 +59,16 @@ fi
 # =============================================================================
 step "HuggingFace token (optional)..."
 
+# Load HF_TOKEN from ~/.bashrc if present (for non-interactive shells)
+if [[ -f "${HOME}/.bashrc" ]]; then
+    HF_TOKEN_FROM_BASH=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null | head -1 | sed 's/.*export HF_TOKEN=//' | sed "s/^[\"']//" | sed "s/[\"']$//")
+    if [[ -n "$HF_TOKEN_FROM_BASH" ]]; then
+        HF_TOKEN="$HF_TOKEN_FROM_BASH"
+        export HF_TOKEN
+        ok "HF_TOKEN loaded from ~/.bashrc."
+    fi
+fi
+
 HF_TOKEN=""
 
 # Priority 1: Environment variable
