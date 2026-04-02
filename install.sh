@@ -775,19 +775,39 @@ else
     git clone https://github.com/outsourc-e/hermes-workspace.git "${WORKSPACE_DIR}" 2>&1 | tail -3
 fi
 
-# Install pnpm if not available
+# Clean up any Windows npm installations that might cause conflicts
+if [[ -d "/mnt/c/Users/${USER}/.npm-global" ]]; then
+    warn "Found Windows npm global installation — removing from PATH to avoid conflicts"
+    export PATH=$(echo "$PATH" | sed 's|/mnt/c/Users/'${USER}'/.npm-global[^:]*:||g')
+fi
+
+# Ensure Node.js is available and install pnpm locally to avoid Windows npm conflicts
+if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]]; then
+    # If no node or it's from Windows mount, install system Node.js
+    step "Installing Node.js 22 for Workspace..."
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    # Ensure system Node.js takes precedence
+    export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
+fi
+
+# Install pnpm locally to avoid conflicts with Windows npm
 if ! command -v pnpm &>/dev/null; then
-    if command -v npm &>/dev/null; then
-        step "Installing pnpm..."
-        npm install -g pnpm 2>&1 | tail -2
+    step "Installing pnpm locally..."
+    # Install pnpm using the standalone installer to avoid npm conflicts
+    if curl -fsSL https://get.pnpm.io/install.sh | sh -; then
+        # Source the pnpm setup that the installer creates
+        [[ -f "${HOME}/.bashrc" ]] && source "${HOME}/.bashrc" 2>/dev/null || true
+        export PNPM_HOME="${HOME}/.local/share/pnpm"
+        export PATH="$PNPM_HOME:$PATH"
+        ok "pnpm installed locally"
     else
-        warn "pnpm not found and npm unavailable — installing Node.js 22..."
-        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+        warn "pnpm standalone install failed, trying npm install..."
         npm install -g pnpm 2>&1 | tail -2
     fi
 fi
 
+ok "Node.js: $(node --version)"
 ok "pnpm: $(pnpm --version)"
 
 # Install workspace dependencies
@@ -819,8 +839,11 @@ cd - >/dev/null
 # ── Step 4: Start Hermes Workspace Service ────────────────────────────────────
 step "Configuring Hermes Workspace service..."
 
-# Find pnpm location (could be in ~/.local/bin, /usr/bin, or ~/.nvm/versions/node/...)
-PNPM_BIN=$(command -v pnpm)
+# Use the local pnpm installation
+PNPM_BIN="${HOME}/.local/share/pnpm/pnpm"
+if [[ ! -x "$PNPM_BIN" ]]; then
+    PNPM_BIN=$(command -v pnpm)
+fi
 
 # Create systemd user service for Workspace
 cat > "${HOME}/.config/systemd/user/hermes-workspace.service" <<WORKSPACE_SERVICE
@@ -837,7 +860,7 @@ Restart=on-failure
 RestartSec=5
 Environment=HOME=${HOME}
 Environment=NODE_ENV=production
-Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin
+Environment=PATH=${HOME}/.local/bin:${HOME}/.local/share/pnpm:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target
@@ -1126,17 +1149,21 @@ else
     QWEN_NODE_PATH=""
 fi
 
-if ! command -v node &>/dev/null; then
-    warn "Node.js not found — installing Node.js 22..."
+if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]]; then
+    warn "Node.js not found or using Windows Node.js — installing system Node.js 22..."
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     QWEN_NODE_PATH="/usr/bin"
+    # Ensure system Node.js takes precedence
+    export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
 fi
 
 if command -v node &>/dev/null; then
     ok "Node.js: $(node --version)"
     if ! command -v qwen &>/dev/null; then
         step "Installing Qwen Code..."
+        # Use npm install -g but ensure it uses the local npm, not Windows npm
+        export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
         npm install -g @qwen-code/cli 2>&1 | tail -3
         NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
         export PATH="${NPM_GLOBAL_BIN}:${PATH}"
@@ -1508,7 +1535,10 @@ export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 export PATH="/usr/local/cuda/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+# Prioritize system Node.js over Windows installations
+export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
 export PATH="${HOME}/.local/bin:${PATH}"
+export PATH="${HOME}/.local/share/pnpm:${PATH}"
 export PATH="${HOME}/.hermes/node/bin:${PATH}"
 export PATH="${HOME}/llm-video:${PATH}"
 BASHRC_START
