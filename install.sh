@@ -905,61 +905,7 @@ else
 fi
 ok "System and Python package managers updated."
 
-# =============================================================================
-#  10. Qwen Code installation
-# =============================================================================
-step "Installing Qwen Code..."
-QWEN_CODE_INSTALLED=false
 
-if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]]; then
-    warn "Node.js not found or Windows version – installing system Node.js 24 LTS..."
-    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - 2>/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
-    export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
-fi
-
-if command -v node &>/dev/null; then
-    ok "Node.js: $(node --version)"
-    if ! command -v qwen &>/dev/null; then
-        step "Installing Qwen Code via npm..."
-        npm install -g @qwen-code/cli 2>&1 | tail -3 || warn "npm install failed"
-        NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
-        export PATH="${NPM_GLOBAL_BIN}:${PATH}"
-        if command -v qwen &>/dev/null; then
-            QWEN_CODE_INSTALLED=true
-            ok "Qwen Code installed."
-        else
-            warn "Qwen Code installation may have failed – 'qwen' command not found."
-        fi
-    else
-        QWEN_CODE_INSTALLED=true
-        ok "Qwen Code already installed."
-    fi
-
-    if [[ "$QWEN_CODE_INSTALLED" == "true" ]]; then
-        step "Writing ~/.qwen/settings.json..."
-        mkdir -p "${HOME}/.qwen"
-        cat > "${HOME}/.qwen/settings.json" <<QWEN_CFG
-{
-  "modelProviders": {
-    "openai": [{
-      "id": "${SEL_NAME}",
-      "name": "${SEL_NAME}",
-      "baseUrl": "http://localhost:8080/v1",
-      "description": "Local llama-server",
-      "envKey": "LLAMA_API_KEY"
-    }]
-  },
-  "env": { "LLAMA_API_KEY": "llama" },
-  "security": { "auth": { "selectedType": "openai" } },
-  "model": { "name": "${SEL_NAME}" }
-}
-QWEN_CFG
-        ok "Qwen Code configured."
-    fi
-else
-    warn "Node.js still not available – skipping Qwen Code installation."
-fi
 
 # =============================================================================
 #  11. Create ~/start-llm.sh (using envsubst for safety)
@@ -1371,7 +1317,7 @@ echo -e " Hermes Workspace → http://localhost:3000 ⭐"
 echo -e " Model → ${SEL_NAME} (context: ${SAFE_CTX})"
 [[ "$HERMES_WEBAPI_INSTALLED" == "true" ]] && echo -e " Hermes Agent → outsourc-e fork with WebAPI"
 [[ "$HERMES_WORKSPACE_INSTALLED" == "true" ]] && echo -e " Hermes Workspace → Full web UI installed"
-[[ "$QWEN_CODE_INSTALLED" == "true" ]] && echo -e " Qwen Code → coding agent"
+
 
 echo ""
 echo -e " ${BLD}Usage:${RST}"
@@ -1385,7 +1331,7 @@ echo -e " ${CYN}llm-log${RST} tail llama-server logs"
 echo -e " ${CYN}llm-models${RST} list downloaded models"
 echo -e " ${CYN}switch-model${RST} change model (re-run installer)"
 echo -e " ${CYN}hermes${RST} Hermes AI agent (CLI)"
-echo -e " ${CYN}qwen${RST} Qwen Code assistant"
+
 echo -e " ${CYN}vram${RST} GPU/VRAM usage"
 
 echo ""
