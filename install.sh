@@ -574,10 +574,9 @@ else
     if [[ -f "build/bin/llama-server" ]] && [[ -f "/usr/local/bin/llama-server" ]]; then
         echo "  → llama.cpp already built and installed — skipping rebuild"
     else
-        if [[ "$HAS_NVIDIA" == "true" ]]; then
-            echo "  → CUDA support detected — building with GPU acceleration..."
-            cmake -B build -DGGML_CUDA=ON \
-                -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
+    if false && [[ "$HAS_NVIDIA" == "true" ]]; then  # Force CPU build due to CUDA linking issues
+        echo "  → CUDA support detected but disabled — building CPU-only..."
+        cmake -B build -DGGML_CCACHE=ON
         else
             echo "  → Building for CPU only..."
             cmake -B build -DGGML_CCACHE=ON
