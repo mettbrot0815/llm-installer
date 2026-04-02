@@ -1002,7 +1002,7 @@ HERMES_AGENT_DIR="${HERMES_AGENT_DIR}"
 HERMES_VENV="${HERMES_VENV}"
 WORKSPACE_DIR="${WORKSPACE_DIR}"
 export PNPM_HOME="${HOME}/.local/share/pnpm"
-export PATH="${PNPM_HOME}:${PATH}"
+export PATH=":${PATH}"
 
 # Check for running services
 LLAMA_PID=$(pgrep -f "llama-server" 2>/dev/null || true)
@@ -1180,7 +1180,7 @@ show_progress() {
 export PATH="/usr/local/cuda/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 export PNPM_HOME="${HOME}/.local/share/pnpm"
-export PATH="/usr/bin:/bin:/usr/local/bin:${PNPM_HOME}:${HOME}/.local/bin:${HOME}/.hermes/node/bin:${PATH}"
+export PATH="/usr/bin:/bin:/usr/local/bin::${HOME}/.local/bin:${HOME}/.hermes/node/bin:${PATH}"
 BASHRC_START
 
     if [[ -n "${HF_TOKEN:-}" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
