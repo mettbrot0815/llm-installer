@@ -879,8 +879,7 @@ fi
 step "Installing pnpm..."
 if ! command -v pnpm &>/dev/null; then
     npm install -g pnpm
-    export PNPM_HOME="${HOME}/.local/share/pnpm"
-    export PATH="${PNPM_HOME}:${PATH}"
+    export PATH="$HOME/.local/bin:$PATH"
 fi
 if ! command -v pnpm &>/dev/null; then
     die "pnpm installation failed – please install manually."
