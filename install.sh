@@ -776,9 +776,61 @@ else
 fi
 
 # Clean up any Windows npm installations that might cause conflicts
-if [[ -d "/mnt/c/Users/${USER}/.npm-global" ]]; then
+WINDOWS_USER=$(whoami)
+if [[ -d "/mnt/c/Users/${WINDOWS_USER}/.npm-global" ]]; then
     warn "Found Windows npm global installation — removing from PATH to avoid conflicts"
-    export PATH=$(echo "$PATH" | sed 's|/mnt/c/Users/'${USER}'/.npm-global[^:]*:||g')
+    # Create new PATH without Windows npm-global
+    NEW_PATH=""
+    IFS=':' read -ra PATH_ARRAY <<< "$PATH"
+    for path_entry in "${PATH_ARRAY[@]}"; do
+        if [[ "$path_entry" != *"/mnt/c/Users/${WINDOWS_USER}/.npm-global"* ]]; then
+            if [[ -z "$NEW_PATH" ]]; then
+                NEW_PATH="$path_entry"
+            else
+                NEW_PATH="$NEW_PATH:$path_entry"
+            fi
+        fi
+    done
+    export PATH="$NEW_PATH"
+    ok "Windows npm-global removed from PATH"
+fi
+
+# Force reinstall pnpm locally to ensure we use the correct version
+step "Installing pnpm locally (fresh install)..."
+
+# First, check if we have a working local pnpm
+LOCAL_PNPM="${HOME}/.local/share/pnpm/pnpm"
+if [[ -x "$LOCAL_PNPM" ]] && ! "$LOCAL_PNPM" --version &>/dev/null; then
+    warn "Local pnpm exists but doesn't work — reinstalling"
+    rm -rf "${HOME}/.local/share/pnpm" 2>/dev/null || true
+fi
+
+# Install pnpm using the standalone installer
+if [[ ! -x "$LOCAL_PNPM" ]]; then
+    rm -rf "${HOME}/.local/share/pnpm" 2>/dev/null || true
+
+    if curl -fsSL https://get.pnpm.io/install.sh | env PNPM_HOME="${HOME}/.local/share/pnpm" sh -; then
+        export PNPM_HOME="${HOME}/.local/share/pnpm"
+        export PATH="$PNPM_HOME:$PATH"
+        ok "pnpm installed locally to ${PNPM_HOME}"
+    else
+        warn "pnpm standalone install failed, trying alternative method..."
+        # Fallback: try to install via npm but ensure it's local
+        mkdir -p "${HOME}/.local/share/pnpm"
+        if npm install -g pnpm --prefix="${HOME}/.local" 2>/dev/null; then
+            # Move pnpm to the expected location
+            mv "${HOME}/.local/lib/node_modules/.bin/pnpm"* "${HOME}/.local/share/pnpm/" 2>/dev/null || true
+            export PNPM_HOME="${HOME}/.local/share/pnpm"
+            export PATH="$PNPM_HOME:$PATH"
+            ok "pnpm installed via npm fallback"
+        else
+            die "Failed to install pnpm locally"
+        fi
+    fi
+else
+    ok "Local pnpm already installed and working"
+    export PNPM_HOME="${HOME}/.local/share/pnpm"
+    export PATH="$PNPM_HOME:$PATH"
 fi
 
 # Ensure Node.js is available and install pnpm locally to avoid Windows npm conflicts
@@ -791,24 +843,18 @@ if ! command -v node &>/dev/null || [[ "$(which node 2>/dev/null)" == /mnt/* ]];
     export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
 fi
 
-# Install pnpm locally to avoid conflicts with Windows npm
-if ! command -v pnpm &>/dev/null; then
-    step "Installing pnpm locally..."
-    # Install pnpm using the standalone installer to avoid npm conflicts
-    if curl -fsSL https://get.pnpm.io/install.sh | sh -; then
-        # Source the pnpm setup that the installer creates
-        [[ -f "${HOME}/.bashrc" ]] && source "${HOME}/.bashrc" 2>/dev/null || true
-        export PNPM_HOME="${HOME}/.local/share/pnpm"
-        export PATH="$PNPM_HOME:$PATH"
-        ok "pnpm installed locally"
-    else
-        warn "pnpm standalone install failed, trying npm install..."
-        npm install -g pnpm 2>&1 | tail -2
-    fi
-fi
-
 ok "Node.js: $(node --version)"
 ok "pnpm: $(pnpm --version)"
+
+# Verify we're using the local pnpm and not Windows version
+if [[ "$(which pnpm)" == /mnt/* ]]; then
+    die "Still using Windows pnpm from $(which pnpm). PATH cleanup failed."
+fi
+
+# Verify pnpm works correctly
+if ! pnpm --version &>/dev/null; then
+    die "pnpm installation failed - cannot run pnpm --version"
+fi
 
 # Install workspace dependencies
 cd "${WORKSPACE_DIR}"
@@ -839,10 +885,10 @@ cd - >/dev/null
 # ── Step 4: Start Hermes Workspace Service ────────────────────────────────────
 step "Configuring Hermes Workspace service..."
 
-# Use the local pnpm installation
+# Use the local pnpm installation exclusively
 PNPM_BIN="${HOME}/.local/share/pnpm/pnpm"
 if [[ ! -x "$PNPM_BIN" ]]; then
-    PNPM_BIN=$(command -v pnpm)
+    die "Local pnpm not found at ${PNPM_BIN}. Installation may have failed."
 fi
 
 # Create systemd user service for Workspace
@@ -1535,12 +1581,9 @@ export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 export PATH="/usr/local/cuda/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
-# Prioritize system Node.js over Windows installations
-export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
-export PATH="${HOME}/.local/bin:${PATH}"
-export PATH="${HOME}/.local/share/pnpm:${PATH}"
-export PATH="${HOME}/.hermes/node/bin:${PATH}"
-export PATH="${HOME}/llm-video:${PATH}"
+# Prioritize system Node.js and local tools over Windows installations
+export PNPM_HOME="${HOME}/.local/share/pnpm"
+export PATH="/usr/bin:/bin:/usr/local/bin:${PNPM_HOME}:${HOME}/.local/bin:${HOME}/.hermes/node/bin:${HOME}/llm-video:${PATH}"
 BASHRC_START
 
     if [[ -n "${HF_TOKEN:-}" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
