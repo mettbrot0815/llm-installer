@@ -920,7 +920,7 @@ cd - >/dev/null
 
 # ── Hermes Workspace systemd service ──────────────────────────────────────────
 step "Configuring Hermes Workspace service..."
-PNPM_BIN="${HOME}/.local/share/pnpm/pnpm"
+PNPM_BIN="${HOME}/.local/bin/pnpm"
 if [[ ! -x "$PNPM_BIN" ]]; then
     die "Local pnpm not found at ${PNPM_BIN}. Installation may have failed."
 fi
