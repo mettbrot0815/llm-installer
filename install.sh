@@ -861,10 +861,10 @@ if ! pnpm --version &>/dev/null; then
     die "pnpm installation failed - cannot run pnpm --version"
 fi
 
-# Update pnpm to latest version
+# Update pnpm to latest version (local installation)
 step "Ensuring pnpm is up to date..."
-pnpm add -g pnpm 2>&1 | tail -3 || pnpm install -g pnpm 2>&1 | tail -3 || true
-ok "pnpm updated: $(pnpm --version)"
+pnpm self-update 2>&1 | tail -3 || ok "pnpm self-update not available, using current version $(pnpm --version)"
+ok "pnpm ready: $(pnpm --version)"
 
 # Install workspace dependencies
 cd "${WORKSPACE_DIR}"
