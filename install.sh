@@ -551,51 +551,93 @@ else
     if command -v ccache &>/dev/null; then
         ok "ccache found: $(ccache --version | head -1)"
         ccache -s 2>/dev/null | grep -E "cache (hit|miss)" | head -2 || true
-        export CC="ccache gcc" CXX="ccache g++"
     else
         warn "ccache not found — building without cache (slower recompilation)"
-        export CC="gcc" CXX="g++"
     fi
 
-    echo "  → Configuring build with CMake..."
-    
     LLAMA_DIR="${HOME}/llama.cpp"
 
     if [[ -d "$LLAMA_DIR/.git" ]]; then
-        step "Updating llama.cpp repo..."
-        git -C "$LLAMA_DIR" fetch origin
-        git -C "$LLAMA_DIR" reset --hard origin/HEAD
+        git -C "$LLAMA_DIR" fetch origin --quiet
+        git -C "$LLAMA_DIR" reset --hard origin/HEAD --quiet
     else
-        git clone https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+        git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
     fi
 
     cd "$LLAMA_DIR"
 
+    # Don't export CC/CXX as ccache wrappers — interferes with nvcc
+    unset CC CXX
+
     if [[ -f "build/bin/llama-server" ]] && [[ -f "/usr/local/bin/llama-server" ]]; then
         echo "  → llama.cpp already built and installed — skipping rebuild"
     else
-    if [[ "$HAS_NVIDIA" == "true" ]]; then
-        echo "  → CUDA support detected — building with GPU acceleration..."
-        cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
-            -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
+        # Wipe build dir if cmake flags differ from last run
+        CMAKE_FINGERPRINT_FILE="build/.cmake_flags"
+        if [[ "$HAS_NVIDIA" == "true" ]]; then
+            CMAKE_FLAGS_HASH="CUDA-FA_ALL_QUANTS"
         else
-            echo "  → Building for CPU only..."
-            cmake -B build -DGGML_CCACHE=ON
+            CMAKE_FLAGS_HASH="CPU-only"
         fi
-        echo "  → Compiling llama.cpp (this may take 5-15 minutes)..."
-        if ! cmake --build build --config Release -j"$(nproc)"; then
-            if [[ "$HAS_NVIDIA" == "true" ]]; then
-                warn "CUDA build failed — falling back to CPU-only build..."
+
+        if [[ -f "$CMAKE_FINGERPRINT_FILE" ]]; then
+            STORED_HASH=$(cat "$CMAKE_FINGERPRINT_FILE")
+            if [[ "$STORED_HASH" != "$CMAKE_FLAGS_HASH" ]]; then
+                warn "Build flags changed ($STORED_HASH → $CMAKE_FLAGS_HASH) — wiping build dir"
                 rm -rf build
-                cmake -B build -DGGML_CCACHE=ON
-                cmake --build build --config Release -j"$(nproc)" || die "CPU build also failed."
+            fi
+        fi
+
+        if [[ "$HAS_NVIDIA" == "true" ]]; then
+            cmake -B build \
+                -DGGML_CUDA=ON \
+                -DGGML_CUDA_FA_ALL_QUANTS=ON \
+                -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+                -DGGML_CCACHE=ON \
+                -DCMAKE_BUILD_TYPE=Release \
+                > /tmp/cmake-config.log 2>&1 \
+                || { cat /tmp/cmake-config.log; die "CMake CUDA config failed"; }
+        else
+            cmake -B build \
+                -DGGML_CCACHE=ON \
+                -DCMAKE_BUILD_TYPE=Release \
+                > /tmp/cmake-config.log 2>&1 \
+                || { cat /tmp/cmake-config.log; die "CMake CPU config failed"; }
+        fi
+
+        # Store fingerprint
+        echo "$CMAKE_FLAGS_HASH" > "$CMAKE_FINGERPRINT_FILE"
+
+        echo -e "  ${CYN}Compiling ($(nproc) cores) — live progress:${RST}"
+
+        # Build only llama-server — skips failing examples
+        if ! cmake --build build --config Release \
+                --target llama-server \
+                -j"$(nproc)" 2>&1 | \
+            while IFS= read -r line; do
+                [[ "$line" =~ ^\[\ *[0-9]+% ]] && printf "\r  %s" "$line" || true
+                [[ "$line" =~ (error:|Error) ]] && printf "\n  ${RED}%s${RST}\n" "$line" || true
+            done; then
+
+            if [[ "$HAS_NVIDIA" == "true" ]]; then
+                warn "CUDA build failed — falling back to CPU-only..."
+                rm -rf build
+                cmake -B build -DGGML_CCACHE=ON -DCMAKE_BUILD_TYPE=Release \
+                    > /tmp/cmake-config.log 2>&1 \
+                    || { cat /tmp/cmake-config.log; die "CPU fallback cmake failed"; }
+                echo "CPU-only" > "$CMAKE_FINGERPRINT_FILE"
+                cmake --build build --config Release \
+                    --target llama-server \
+                    -j"$(nproc)" || die "CPU build also failed"
                 HAS_NVIDIA=false
             else
                 die "Build failed."
             fi
         fi
-        echo "  → Installing system-wide..."
-        sudo cmake --install build || warn "System install failed — using build directory."
+        printf "\n"
+
+        sudo cmake --install build --quiet 2>/dev/null \
+            || warn "System-wide install failed — using build directory."
     fi
     cd ~
 
