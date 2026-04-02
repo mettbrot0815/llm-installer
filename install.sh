@@ -222,16 +222,19 @@ grade_model() {
         elif [[ $vram_h -ge 0 ]]; then echo "A"
         elif [[ $ram_h  -ge 4 ]]; then echo "B"
         elif [[ $ram_h  -ge 0 ]]; then echo "C"
-        else                           echo "F"; fi
+        else                           echo "F"
+        fi
     elif [[ $min_vram -gt 0 ]]; then
         if   [[ $ram_h -ge 8 ]]; then echo "B"
         elif [[ $ram_h -ge 0 ]]; then echo "C"
-        else                          echo "F"; fi
+        else                          echo "F"
+        fi
     else
         if   [[ $ram_h -ge 8 ]]; then echo "S"
         elif [[ $ram_h -ge 4 ]]; then echo "A"
         elif [[ $ram_h -ge 0 ]]; then echo "B"
-        else                          echo "F"; fi
+        else                          echo "F"
+        fi
     fi
 }
 
@@ -1018,7 +1021,7 @@ fi
 
 if [[ "$VIDEO_DEPS_INSTALLED" == "true" ]]; then
     step "Creating video generation script..."
-    cat > "${VIDEO_GEN_DIR}/generate_video.py" <<'VIDEO_SCRIPT'
+    cat > "${VIDEO_GEN_DIR}/generate_video.py" <<'//////'
 #!/usr/bin/env python3
 """Text-to-Video Generation Script using Stable Video Diffusion."""
 
@@ -1123,21 +1126,21 @@ def generate_video(prompt: str, output_path: str, fps: int = 7, num_frames: int 
     print(f"Generated {len(frames)} frames, exporting to {output_path}...")
 
     # Export to video file
-    if output_path.lower().endswith('.mp4'):
+    \        if output_path.lower().endswith('.mp4'):
         try:
             import imageio
             with imageio.get_writer(output_path, fps=fps, plugin='ffmpeg') as writer:
                 for frame in frames:
                     writer.append_data(frame)
             print("Exported using imageio-ffmpeg")
-        except ImportError:
+        \            except ImportError:
             from diffusers.utils import export_to_video
             export_to_video(frames, output_path, fps=fps)
             print("Exported using OpenCV")
-    else:
-        # Convert fps to duration (ms per frame) for Pillow GIF export
-        duration_ms = int(1000 / fps)
-        frames[0].save(output_path, save_all=True, append_images=frames[1:],
+        else:
+            # Convert fps to duration (ms per frame) for Pillow GIF export
+            duration_ms = int(1000 / fps)
+            frames[0].save(output_path, save_all=True, append_images=frames[1:],
                       duration=duration_ms, loop=0, format="GIF")
 
     print(f"✓ Video saved: {output_path} ({num_frames/fps:.1f}s)")
@@ -1164,15 +1167,15 @@ def main():
 
 if __name__ == "__main__":
     main()
-VIDEO_SCRIPT
+//////
 
-    cat > "${VIDEO_GEN_DIR}/generate-video" <<'VIDEO_WRAPPER'
+    cat > "${VIDEO_GEN_DIR}/generate-video" <<'@@@@@@'
 #!/bin/bash
 # Wrapper script for text-to-video generation
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}" python3 "${SCRIPT_DIR}/generate_video.py" "$@"
-VIDEO_WRAPPER
+@@@@@@
 
     chmod +x "${VIDEO_GEN_DIR}/generate_video.py"
     chmod +x "${VIDEO_GEN_DIR}/generate-video"
