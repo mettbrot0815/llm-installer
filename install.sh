@@ -1364,7 +1364,7 @@ echo -e "${BLD}${CYN}╰──────────────────�
 echo ""
 }
 
-[[ $- == *i* && ! -f "${HOME}/.llm_summary_shown" ]] && { show_llm_summary; touch "${HOME}/.llm_summary_shown"; }
+[[ $- == *i* ]] && show_llm_summary
 BASHRC_END
 ok "Helpers written to ~/.bashrc."
 fi
