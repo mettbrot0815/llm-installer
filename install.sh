@@ -1044,9 +1044,9 @@ export PNPM_HOME="${HOME}/.local/share/pnpm"
 export PATH=":${PATH}"
 
 # Check for running services
-LLAMA_PID=\$(pgrep -f "llama-server" 2>/dev/null || true)
-WEBAPI_PID=\$(pgrep -f "python -m webapi" 2>/dev/null || true)
-WORKSPACE_PID=\$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
+LLAMA_PID=$(pgrep -f "llama-server" 2>/dev/null || true)
+WEBAPI_PID=$(pgrep -f "python -m webapi" 2>/dev/null || true)
+WORKSPACE_PID=$(pgrep -f "pnpm dev" 2>/dev/null | grep -i workspace || true)
 
 if [[ -n "\$LLAMA_PID" || -n "\$WEBAPI_PID" || -n "\$WORKSPACE_PID" ]]; then
     echo -e "\n⚠️  Services already running:"
