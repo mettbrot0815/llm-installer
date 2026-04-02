@@ -18,11 +18,63 @@ set -euo pipefail
 # ── Colour helpers — exported so subshells (llm-models fn) can use them ───────
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
-step() { echo -e "\n${CYN}[*] $*${RST}"; }
+step() {
+    echo -e "\n${CYN}[$(date '+%Y-%m-%d %H:%M:%S')] [*] $*${RST}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [*] $*" >> "$LOG_FILE"
+}
 ok()   { echo -e "${GRN}[+] $*${RST}"; }
 info() { ok "$*"; }   # alias for consistency
 warn() { echo -e "${YLW}[!] $*${RST}"; }
 die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
+
+# ── Pre-flight checks ────────────────────────────────────────────────────────
+step "Running pre-flight checks..."
+
+# Check if running as root (should NOT be)
+if [[ $EUID -eq 0 ]]; then
+    die "This script should NOT be run as root. Run as normal user with sudo privileges."
+fi
+
+# Check for minimum Ubuntu version
+if [[ -f /etc/os-release ]]; then
+    source /etc/os-release
+    if [[ "$ID" != "ubuntu" ]] && [[ "$ID" != "debian" ]]; then
+        warn "This script is designed for Ubuntu/Debian. You're running $ID - may not work."
+    fi
+fi
+
+# Check for internet connectivity
+if ! ping -c 1 google.com &>/dev/null; then
+    die "No internet connection. Please check your network."
+fi
+
+# Check for sufficient disk space before starting
+MIN_DISK_GB=20
+AVAIL_DISK_GB=$(df -BG "$HOME" | awk 'NR==2 {print $4}' | sed 's/G//')
+if (( AVAIL_DISK_GB < MIN_DISK_GB )); then
+    die "Low disk space: ${AVAIL_DISK_GB}GB available, need at least ${MIN_DISK_GB}GB"
+fi
+
+ok "Pre-flight checks passed."
+
+# ── Uninstall option ──────────────────────────────────────────────────────────
+if [[ "${1:-}" == "--uninstall" ]]; then
+    echo "Uninstalling LLM stack..."
+    
+    # Stop services
+    systemctl --user stop llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null || true
+    systemctl --user disable llama-server.service hermes-webapi.service hermes-workspace.service 2>/dev/null || true
+    
+    # Remove directories
+    rm -rf "$HOME/llama.cpp" "$HOME/hermes-agent" "$HOME/hermes-workspace" "$HOME/llm-models"
+    rm -f "$HOME/start-llm.sh" "$HOME/.local/bin/hermes"
+    
+    # Remove from .bashrc
+    sed -i '/# === LLM setup (added by install.sh) ===/,/# === LLM setup end ===/d' "$HOME/.bashrc" 2>/dev/null || true
+    
+    echo "Uninstall complete. Removed all LLM components."
+    exit 0
+fi
 
 # ── Temp file cleanup on exit ──────────────────────────────────────────────────
 TMPFILES=()
@@ -39,6 +91,29 @@ trap cleanup EXIT INT TERM
 register_tmp() {
     TMPFILES+=("$1")
 }
+
+# ── State tracking for resume capability ──────────────────────────────────────
+STATE_FILE="${HOME}/.llm_install_state"
+
+STEP_COMPLETED() {
+    echo "$1" >> "$STATE_FILE"
+}
+
+STEP_ALREADY_DONE() {
+    grep -qxF "$1" "$STATE_FILE" 2>/dev/null
+}
+
+# ── Dry-run mode ─────────────────────────────────────────────────────────────
+DRY_RUN=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+    DRY_RUN=true
+    warn "DRY RUN MODE - No changes will be made"
+fi
+
+# ── Logging to file ───────────────────────────────────────────────────────────
+LOG_FILE="${HOME}/llm-install.log"
+exec > >(tee -a "$LOG_FILE")
+exec 2>&1
 
 echo -e "${BLD}${CYN}"
 cat <<'BANNER'
@@ -126,25 +201,32 @@ fi
 #  2. System update + dependencies
 # =============================================================================
 step "Updating system packages..."
-sudo apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    build-essential cmake git ccache \
-    libcurl4-openssl-dev libssl-dev libffi-dev \
-    software-properties-common \
-    python3 python3-pip python3-venv \
-    pciutils wget curl ca-certificates zstd \
-    procps gettext-base   # watch command + envsubst
-ok "System packages ready."
+if [[ "$DRY_RUN" == "false" ]]; then
+    sudo apt-get update -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        build-essential cmake git ccache \
+        libcurl4-openssl-dev libssl-dev libffi-dev \
+        software-properties-common \
+        python3 python3-pip python3-venv \
+        pciutils wget curl ca-certificates zstd \
+        procps gettext-base   # envsubst is required for clean launch script
+else
+    echo "[DRY RUN] Would update system packages and install dependencies"
+fi
 
 step "Installing Python 3.11 (Hermes requirement)..."
 if python3.11 --version &>/dev/null; then
     ok "Python 3.11 already installed: $(python3.11 --version)"
 else
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.11 python3.11-venv
-    ok "Python 3.11 installed: $(python3.11 --version)"
+    if [[ "$DRY_RUN" == "false" ]]; then
+        sudo add-apt-repository -y ppa:deadsnakes/ppa
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.11 python3.11-venv
+        ok "Python 3.11 installed: $(python3.11 --version)"
+    else
+        echo "[DRY RUN] Would install Python 3.11"
+    fi
 fi
 
 # =============================================================================
