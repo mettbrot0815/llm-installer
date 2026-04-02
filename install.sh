@@ -553,17 +553,65 @@ else
 fi
 
 # =============================================================================
-#  8. Hermes Agent
+#  8. Hermes Agent (outsourc-e fork with WebAPI support)
 # =============================================================================
-step "Checking for Hermes Agent..."
+step "Setting up Hermes Agent..."
+HERMES_AGENT_DIR="${HOME}/hermes-agent"
+HERMES_VENV="${HERMES_AGENT_DIR}/.venv"
 HERMES_BIN="${HOME}/.local/bin/hermes"
-HERMES_INSTALLED=false
+HERMES_WEBAPI_INSTALLED=false
+HERMES_WORKSPACE_INSTALLED=false
 export PATH="${HOME}/.local/bin:${PATH}"
 
-if command -v hermes &>/dev/null || [[ -x "$HERMES_BIN" ]]; then
+# ── Clone or update the fork ──────────────────────────────────────────────────
+if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
+    ok "Hermes Agent (outsourc-e fork) already cloned — checking for updates..."
+    cd "${HERMES_AGENT_DIR}"
+    git pull --quiet 2>/dev/null || warn "Hermes git pull failed (continuing with existing code)"
+    cd - >/dev/null
+else
+    step "Cloning outsourc-e/hermes-agent (WebAPI fork)..."
+    git clone https://github.com/outsourc-e/hermes-agent.git "${HERMES_AGENT_DIR}" 2>&1 | tail -3
+    ok "Hermes Agent cloned."
+fi
+
+# ── Create / verify venv ──────────────────────────────────────────────────────
+if [[ ! -d "${HERMES_VENV}" ]]; then
+    step "Creating Python virtual environment for Hermes Agent..."
+    python3.11 -m venv "${HERMES_VENV}"
+    ok "Venv created at ${HERMES_VENV}"
+else
+    ok "Venv already exists at ${HERMES_VENV}"
+fi
+
+# ── Install dependencies ──────────────────────────────────────────────────────
+source "${HERMES_VENV}/bin/activate"
+if ! python -c "import hermes_agent" &>/dev/null; then
+    step "Installing Hermes Agent dependencies (first time ~2-5 min)..."
+    pip install --quiet -e "${HERMES_AGENT_DIR}" 2>&1 | tail -3
+    ok "Hermes Agent dependencies installed."
+else
+    ok "Hermes Agent already installed in venv."
+fi
+
+# ── Symlink hermes binary to ~/.local/bin ─────────────────────────────────────
+HERMES_VENV_BIN="${HERMES_VENV}/bin/hermes"
+if [[ -x "$HERMES_VENV_BIN" ]]; then
+    mkdir -p "${HOME}/.local/bin"
+    ln -sf "$HERMES_VENV_BIN" "$HERMES_BIN"
+    ok "Symlinked hermes → ${HERMES_BIN}"
+else
+    warn "hermes binary not found in venv at ${HERMES_VENV_BIN}"
+    warn "You may need to run: source ${HERMES_VENV}/bin/activate && cd ${HERMES_AGENT_DIR} && pip install -e ."
+fi
+
+deactivate 2>/dev/null || true
+
+# ── Update check ──────────────────────────────────────────────────────────────
+if [[ -x "$HERMES_BIN" ]]; then
     HERMES_VER=$("${HERMES_BIN}" --version 2>/dev/null || echo "installed")
-    ok "Hermes already installed: ${HERMES_VER}"
-    HERMES_INSTALLED=true
+    ok "Hermes Agent ready: ${HERMES_VER}"
+    HERMES_WEBAPI_INSTALLED=true
 
     step "Checking for Hermes updates..."
     UPDATE_OUTPUT=$("${HERMES_BIN}" update --check 2>&1 || true)
@@ -579,20 +627,6 @@ if command -v hermes &>/dev/null || [[ -x "$HERMES_BIN" ]]; then
     else
         ok "Hermes is up to date."
     fi
-else
-    [[ -f /usr/local/bin/hermes ]] && sudo rm -f /usr/local/bin/hermes
-    step "Installing Hermes Agent (Python 3.11 + Node.js 22)..."
-    if curl -fsSL --connect-timeout 15 --max-time 120 \
-        https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
-        -o /tmp/hermes-install.sh 2>&1; then
-        register_tmp "/tmp/hermes-install.sh"
-        bash /tmp/hermes-install.sh --skip-setup || pip3 install --user --break-system-packages hermes-agent || die "Failed to install Hermes"
-    else
-        pip3 install --user --break-system-packages hermes-agent || die "Failed to install Hermes via pip"
-    fi
-    export PATH="${HOME}/.local/bin:${PATH}"
-    HERMES_INSTALLED=true
-    ok "Hermes Agent installed."
 fi
 
 # =============================================================================
@@ -670,40 +704,9 @@ ok "Hermes configured → llama-server (${SEL_NAME} at http://localhost:8080/v1)
 #  8d. Hermes Workspace Integration (Web UI)
 # =============================================================================
 step "Setting up Hermes Workspace..."
-
 WORKSPACE_DIR="${HOME}/hermes-workspace"
-HERMES_AGENT_DIR="${HOME}/hermes-agent"
-HERMES_WEBAPI_INSTALLED=false
-HERMES_WORKSPACE_INSTALLED=false
-
-# ── Step 1: Install outsourc-e/hermes-agent (WebAPI fork) ─────────────────────
-step "Checking for Hermes Agent with WebAPI support..."
-
-if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
-    ok "Hermes Agent (outsourc-e fork) already cloned."
-    cd "${HERMES_AGENT_DIR}"
-    git pull --quiet 2>/dev/null || true
-    cd - >/dev/null
-else
-    step "Cloning outsourc-e/hermes-agent (WebAPI fork)..."
-    git clone https://github.com/outsourc-e/hermes-agent.git "${HERMES_AGENT_DIR}" 2>&1 | tail -3
-fi
-
-# Create Python virtual environment
-HERMES_VENV="${HERMES_AGENT_DIR}/.venv"
-if [[ ! -d "${HERMES_VENV}" ]]; then
-    step "Creating Python virtual environment for Hermes Agent..."
-    python3.11 -m venv "${HERMES_VENV}"
-fi
-
-# Activate venv and install
-source "${HERMES_VENV}/bin/activate"
-if ! python -c "import hermes_agent" &>/dev/null; then
-    step "Installing Hermes Agent in virtual environment..."
-    pip install --quiet -e "${HERMES_AGENT_DIR}" 2>&1 | tail -3
-fi
-
-# Run setup if not already configured (Section 8c may have created basic .env)
+# ── Step 1: Configure .env (Section 8 already installed the fork + venv) ──────
+# Section 8c may have created basic .env; ensure WebAPI settings are present
 if [[ ! -f "${HOME}/.hermes/.env" ]]; then
     step "Creating Hermes Agent .env..."
     mkdir -p "${HOME}/.hermes"
@@ -720,7 +723,6 @@ else
     # Ensure WebAPI settings are present in existing .env
     if ! grep -q "^HERMES_WEBAPI_HOST=" "${HOME}/.hermes/.env" 2>/dev/null; then
         cat >> "${HOME}/.hermes/.env" <<HERMES_ENV_ADD
-
 # WebAPI settings (added by install.sh)
 HERMES_WEBAPI_HOST=0.0.0.0
 HERMES_WEBAPI_PORT=8642
@@ -728,8 +730,7 @@ HERMES_ENV_ADD
         ok "Added WebAPI settings to ~/.hermes/.env."
     fi
 fi
-
-# ── Step 2: Start Hermes WebAPI Service ───────────────────────────────────────
+# ── Step 2: Hermes WebAPI systemd service ─────────────────────────────────────
 step "Configuring Hermes WebAPI service..."
 
 # Create systemd user service for WebAPI
