@@ -829,8 +829,11 @@ fi
 # ── Apply Hermes WebAPI patches ───────────────────────────────────────────────
 step "Applying Hermes WebAPI patches..."
 
+# Find the correct paths
+CHAT_PY=$(find "${HERMES_AGENT_DIR}" -name "chat.py" -path "*/webapi/*" 2>/dev/null | head -1)
+DEPS_PY=$(find "${HERMES_AGENT_DIR}" -name "deps.py" -path "*/webapi/*" 2>/dev/null | head -1)
+
 # Patch chat.py to handle dict content
-CHAT_PY="${HERMES_AGENT_DIR}/hermes/webapi/chat.py"
 if [[ -f "$CHAT_PY" ]]; then
     if grep -q "content.lower()" "$CHAT_PY" && ! grep -q "isinstance(content, str)" "$CHAT_PY"; then
         sed -i 's/content\.lower()/content = content if isinstance(content, str) else str(content)\n    content.lower()/g' "$CHAT_PY"
@@ -839,11 +842,10 @@ if [[ -f "$CHAT_PY" ]]; then
         ok "chat.py already patched or not applicable."
     fi
 else
-    warn "chat.py not found at $CHAT_PY"
+    warn "chat.py not found in webapi directory"
 fi
 
 # Patch deps.py to handle model config dict
-DEPS_PY="${HERMES_AGENT_DIR}/hermes/webapi/deps.py"
 if [[ -f "$DEPS_PY" ]]; then
     if grep -q "config.get(\"model\")" "$DEPS_PY" && ! grep -q "model.get(\"default\")" "$DEPS_PY"; then
         sed -i 's/model = config\.get("model")/model = config.get("model")\n    if isinstance(model, dict):\n        model = model.get("default", model)/g' "$DEPS_PY"
@@ -852,7 +854,7 @@ if [[ -f "$DEPS_PY" ]]; then
         ok "deps.py already patched or not applicable."
     fi
 else
-    warn "deps.py not found at $DEPS_PY"
+    warn "deps.py not found in webapi directory"
 fi
 
 # =============================================================================
