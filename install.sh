@@ -871,7 +871,9 @@ fi
 
 # Update pnpm to latest version (local installation)
 step "Ensuring pnpm is up to date..."
-pnpm self-update 2>&1 | tail -3 || ok "pnpm self-update not available, using current version $(pnpm --version)"
+if pnpm self-update 2>&1 | grep -q "ERR_PNPM_GLOBAL_PNPM_INSTALL"; then
+    warn "pnpm self-update not supported for local installations — using current version"
+fi
 ok "pnpm ready: $(pnpm --version)"
 
 # Install workspace dependencies
@@ -1252,10 +1254,12 @@ fi
 if command -v node &>/dev/null; then
     ok "Node.js: $(node --version)"
 
-    # Update npm to latest version
-    step "Updating npm to latest version..."
+    # Update npm to latest version (skip if permission denied - not critical)
+    step "Checking npm version..."
     export PATH="/usr/bin:/bin:/usr/local/bin:${PATH}"
-    npm install -g npm@latest 2>&1 | tail -3
+    if npm install -g npm@latest 2>&1 | grep -q "permission denied\|EACCES"; then
+        warn "Cannot update system npm (permission denied) — using current version"
+    fi
 
     ok "npm: $(npm --version)"
 
