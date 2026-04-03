@@ -74,43 +74,73 @@ step "HuggingFace token (optional)..."
 
 HF_TOKEN=""
 
+# Skip token prompt if already set or saved
 if [[ -n ${HF_TOKEN:-} ]]; then
-    ok "HF_TOKEN already set in environment — using it."
-elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
-    HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
-    [[ -n $HF_TOKEN ]] && ok "HF_TOKEN found in ~/.cache/huggingface/token."
+    ok "HF_TOKEN already set — skipping prompt."
 elif grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-    HF_TOKEN=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" | head -1 \
-        | sed 's/.*export HF_TOKEN=//' | sed "s/^[\"']//" | sed "s/[\"']$//")
-    [[ -n $HF_TOKEN ]] && ok "HF_TOKEN found in ~/.bashrc."
-fi
+    ok "HF_TOKEN found in ~/.bashrc — loading."
+    source <(grep "export HF_TOKEN=" "${HOME}/.bashrc")
+    export HF_TOKEN
+else
+    # First, check if already in environment
+    if [[ -n ${HF_TOKEN:-} ]]; then
+        ok "HF_TOKEN already set in environment — using it."
+    elif grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+        # Source it from bashrc
+        HF_TOKEN=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" | head -1 \
+            | sed 's/.*export HF_TOKEN=//' | sed 's/^["'\'']//' | sed 's/["'\'']$//')
+        export HF_TOKEN
+        ok "HF_TOKEN loaded from ~/.bashrc"
+    elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
+        HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
+        export HF_TOKEN
+        [[ -n $HF_TOKEN ]] && ok "HF_TOKEN found in ~/.cache/huggingface/token."
+    fi
 
-if [[ -z $HF_TOKEN ]]; then
-    echo ""
-    echo -e "  ${BLD}Why add a HuggingFace token?${RST}"
-    echo -e "  • Faster downloads · higher rate limits · gated model access"
-    echo -e "  ${CYN}https://huggingface.co/settings/tokens${RST}"
-    echo ""
-    if [[ -t 0 ]]; then
-        read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn
-        if [[ $hf_yn =~ ^[Yy]$ ]]; then
-            read -rp "  Paste your token (starts with hf_): " HF_TOKEN
-            HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
-            if [[ $HF_TOKEN =~ ^hf_ ]]; then
-                ok "Token accepted."
+    # If still empty, prompt for it (only in interactive mode)
+    if [[ -z $HF_TOKEN ]]; then
+        echo ""
+        echo -e "  ${BLD}Why add a HuggingFace token?${RST}"
+        echo -e "  • Faster downloads · higher rate limits · gated model access"
+        echo -e "  ${CYN}https://huggingface.co/settings/tokens${RST}"
+        echo ""
+        
+        if [[ -t 0 ]]; then
+            read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn
+            if [[ $hf_yn =~ ^[Yy]$ ]]; then
+                read -rp "  Paste your token (starts with hf_): " HF_TOKEN
+                HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
+                export HF_TOKEN
+                
+                if [[ $HF_TOKEN =~ ^hf_ ]]; then
+                    ok "Token accepted."
+                    # Save to ~/.bashrc for future runs
+                    if ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+                        echo "" >> "${HOME}/.bashrc"
+                        echo "# HuggingFace token (added by install.sh)" >> "${HOME}/.bashrc"
+                        echo "export HF_TOKEN=\"${HF_TOKEN}\"" >> "${HOME}/.bashrc"
+                        ok "HF_TOKEN saved to ~/.bashrc (will auto-load in future)"
+                    fi
+                else
+                    warn "Token doesn't start with 'hf_' — using anyway, but not saving."
+                fi
             else
-                warn "Token doesn't start with 'hf_' — using anyway, double-check it."
+                ok "Skipping — unauthenticated downloads (slower, rate-limited)."
             fi
         else
-            ok "Skipping — unauthenticated downloads (slower, rate-limited)."
+            ok "Non-interactive – skipping HuggingFace token prompt."
         fi
-    else
-        ok "Non-interactive – skipping HuggingFace token prompt."
     fi
 fi
 
-export HF_TOKEN
+# Final check for switch-model runs (token might be in bashrc but not sourced)
+if [[ -z ${HF_TOKEN:-} ]] && grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+    # Source it for this session
+    source <(grep "export HF_TOKEN=" "${HOME}/.bashrc")
+    ok "HF_TOKEN loaded from ~/.bashrc for current session"
+fi
 
+export HF_TOKEN
 # =============================================================================
 #  2. System packages
 # =============================================================================
@@ -235,6 +265,9 @@ MODELS=(
     "11|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
     "12|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
 )
+
+# Set NUM_MODELS from the array length (FIXED)
+NUM_MODELS=${#MODELS[@]}
 
 MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
@@ -410,22 +443,21 @@ HDR
     echo -e "  ${YLW}Tip:${RST} @sudoingX used model 5 (Qwen 3.5 9B) on RTX 3060 12GB"
     echo -e "  Enter a number, or ${BLD}u${RST} to download via HuggingFace URL."
     echo ""
-}   # ← End of show_model_table
+}
 
+# Download function placeholder (needs to be defined before use)
 while true; do
+    show_model_table
     if [[ ! -t 0 ]]; then
         warn "Non-interactive – defaulting to model 5 (Qwen 3.5 9B)"
         CHOICE="5"
         break
     fi
-    read -rp "$(echo -e "  ${BLD}Enter model number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE
-    if [[ $CHOICE == "u" || $CHOICE == "U" ]]; then
-        download_from_hf_url
-        break
-    elif [[ $CHOICE =~ ^[0-9]+$ ]] && ((CHOICE >= 1 && CHOICE <= NUM_MODELS)); then
+    read -rp "$(echo -e "  ${BLD}Enter model number [1-${NUM_MODELS}]:${RST} ")" CHOICE
+    if [[ $CHOICE =~ ^[0-9]+$ ]] && ((CHOICE >= 1 && CHOICE <= NUM_MODELS)); then
         break
     fi
-    warn "Please enter a number between 1 and ${NUM_MODELS}, or 'u'."
+    warn "Please enter a number between 1 and ${NUM_MODELS}."
 done
 
 # Parse catalogue selection
@@ -470,9 +502,8 @@ if [[ $CHOICE != "u" && $CHOICE != "U" ]]; then
     apply_model_settings "$SEL_GGUF"
     GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
 fi
-
 # =============================================================================
-#  7. Download model from catalogue (if not already present)
+#  7. Download model (if not present)
 # =============================================================================
 if [[ -f $GGUF_PATH ]]; then
     ok "Model already on disk: ${GGUF_PATH} — skipping download."
@@ -483,7 +514,6 @@ elif [[ $CHOICE != "u" && $CHOICE != "U" ]]; then
     AVAIL_KB=$(df -k "${MODEL_DIR}" | awk 'NR==2 {print $4}')
     AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
 
-    # Exact index match to get size (avoids "1" matching "11" or "12")
     REQ_GB=""
     while IFS='|' read -r idx _ _ _ size_gb _ _ _ _ _ _; do
         [[ ${idx// /} == "$CHOICE" ]] && {
@@ -498,6 +528,13 @@ elif [[ $CHOICE != "u" && $CHOICE != "U" ]]; then
     ((REQ_GB_INT < 3)) && REQ_GB_INT=3
     ((AVAIL_GB < REQ_GB_INT)) && die "Insufficient disk: need ~${REQ_GB_INT}GB, have ${AVAIL_GB}GB."
     ok "Disk space OK: ${AVAIL_GB}GB available, ~${REQ_GB_INT}GB needed."
+
+    # Install huggingface-cli if needed
+    if ! command -v huggingface-cli &>/dev/null; then
+        pip3 install --user --upgrade huggingface-hub
+        export PATH="${HOME}/.local/bin:${PATH}"
+    fi
+    HF_CLI="huggingface-cli"
 
     if [[ -n ${HF_TOKEN:-} ]]; then
         HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}"
@@ -514,7 +551,6 @@ elif [[ $CHOICE != "u" && $CHOICE != "U" ]]; then
         ok "Model downloaded: ${GGUF_PATH} (${FILE_SIZE} bytes)"
     fi
 fi
-
 # =============================================================================
 #  8. Build llama.cpp (skip if binary already exists)
 # =============================================================================
