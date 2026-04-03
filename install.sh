@@ -1,27 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes Agent
-#
-#  What this installs:
-#    - llama.cpp (CUDA or CPU) → http://localhost:8080
-#    - Hermes Agent (CLI)      → configured to use local llama-server
-#
-#  Model selector features:
-#    - Shows ALL catalogue models with hardware grade (even grade F)
-#    - Scans ~/llm-models for any .gguf (downloaded OR manually copied) → marks ↓
-#    - 'u' option: download any model by HuggingFace URL or repo path
-#    - switch-model alias re-runs this script (re-selects model, regenerates
-#      start-llm.sh, restarts llama-server) — no full reinstall
-#
-#  Removed: Hermes Workspace, video generation, pnpm/Node.js, Qwen Code
-#
-#  Windows npm guard: PATH is sanitised to exclude /mnt/c/ Windows binaries
-#  before any node/npm check so Windows-host npm is never picked up.
 # =============================================================================
 set -euo pipefail
 
-# ── Strip Windows /mnt/* paths from PATH so Windows npm/node are never used ──
-#    This must happen before any command -v node/npm check.
+# ── Strip Windows /mnt/* paths from PATH ──
 CLEAN_PATH=""
 IFS=':' read -ra PATH_PARTS <<<"$PATH"
 for part in "${PATH_PARTS[@]}"; do
@@ -31,7 +14,7 @@ done
 export PATH="$CLEAN_PATH"
 unset CLEAN_PATH PATH_PARTS part
 
-# ── Colour helpers ─────────────────────────────────────────────────────────────
+# ── Colour helpers ──
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 step() { echo -e "\n${CYN}[*] $*${RST}"; }
@@ -42,7 +25,7 @@ die() {
     exit 1
 }
 
-# ── Temp file cleanup ──────────────────────────────────────────────────────────
+# ── Temp file cleanup ──
 TMPFILES=()
 cleanup() {
     local f
@@ -66,7 +49,6 @@ if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
 else
     warn "/proc/version does not mention Microsoft/WSL — continuing anyway."
 fi
-
 # =============================================================================
 #  1. HuggingFace token (optional)
 # =============================================================================
@@ -74,73 +56,58 @@ step "HuggingFace token (optional)..."
 
 HF_TOKEN=""
 
-# Skip token prompt if already set or saved
+# Check if token already exists in environment or bashrc
 if [[ -n ${HF_TOKEN:-} ]]; then
-    ok "HF_TOKEN already set — skipping prompt."
+    ok "HF_TOKEN already set in environment — using it."
 elif grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-    ok "HF_TOKEN found in ~/.bashrc — loading."
-    source <(grep "export HF_TOKEN=" "${HOME}/.bashrc")
-    export HF_TOKEN
-else
-    # First, check if already in environment
-    if [[ -n ${HF_TOKEN:-} ]]; then
-        ok "HF_TOKEN already set in environment — using it."
-    elif grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-        # Source it from bashrc
-        HF_TOKEN=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" | head -1 \
-            | sed 's/.*export HF_TOKEN=//' | sed 's/^["'\'']//' | sed 's/["'\'']$//')
-        export HF_TOKEN
-        ok "HF_TOKEN loaded from ~/.bashrc"
-    elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
-        HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
-        export HF_TOKEN
-        [[ -n $HF_TOKEN ]] && ok "HF_TOKEN found in ~/.cache/huggingface/token."
-    fi
+    # Load from bashrc
+    HF_TOKEN=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" | head -1 \
+        | sed 's/.*export HF_TOKEN=//' | sed 's/^["'\'']//' | sed 's/["'\'']$//')
+    ok "HF_TOKEN loaded from ~/.bashrc"
+elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
+    HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
+    [[ -n $HF_TOKEN ]] && ok "HF_TOKEN found in ~/.cache/huggingface/token"
+fi
 
-    # If still empty, prompt for it (only in interactive mode)
-    if [[ -z $HF_TOKEN ]]; then
-        echo ""
-        echo -e "  ${BLD}Why add a HuggingFace token?${RST}"
-        echo -e "  • Faster downloads · higher rate limits · gated model access"
-        echo -e "  ${CYN}https://huggingface.co/settings/tokens${RST}"
-        echo ""
-        
-        if [[ -t 0 ]]; then
-            read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn
-            if [[ $hf_yn =~ ^[Yy]$ ]]; then
-                read -rp "  Paste your token (starts with hf_): " HF_TOKEN
-                HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
-                export HF_TOKEN
-                
-                if [[ $HF_TOKEN =~ ^hf_ ]]; then
-                    ok "Token accepted."
-                    # Save to ~/.bashrc for future runs
-                    if ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-                        echo "" >> "${HOME}/.bashrc"
-                        echo "# HuggingFace token (added by install.sh)" >> "${HOME}/.bashrc"
-                        echo "export HF_TOKEN=\"${HF_TOKEN}\"" >> "${HOME}/.bashrc"
-                        ok "HF_TOKEN saved to ~/.bashrc (will auto-load in future)"
-                    fi
-                else
-                    warn "Token doesn't start with 'hf_' — using anyway, but not saving."
+# If still empty, prompt for it (only in interactive mode)
+if [[ -z $HF_TOKEN ]]; then
+    echo ""
+    echo -e "  ${BLD}Why add a HuggingFace token?${RST}"
+    echo -e "  • Faster downloads · higher rate limits · gated model access"
+    echo -e "  • Required for gated models (e.g., Llama 3, Gemma)"
+    echo -e "  ${CYN}https://huggingface.co/settings/tokens${RST}"
+    echo ""
+    
+    if [[ -t 0 ]]; then
+        read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn
+        if [[ $hf_yn =~ ^[Yy]$ ]]; then
+            read -rp "  Paste your token (starts with hf_): " HF_TOKEN
+            HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
+            
+            if [[ $HF_TOKEN =~ ^hf_ ]]; then
+                ok "Token accepted."
+                # Save to ~/.bashrc for future runs
+                if ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+                    {
+                        echo ""
+                        echo "# HuggingFace token (added by install.sh)"
+                        echo "export HF_TOKEN=\"${HF_TOKEN}\""
+                    } >> "${HOME}/.bashrc"
+                    ok "HF_TOKEN saved to ~/.bashrc (will auto-load in future)"
                 fi
             else
-                ok "Skipping — unauthenticated downloads (slower, rate-limited)."
+                warn "Token doesn't start with 'hf_' — using anyway, but not saving."
             fi
         else
-            ok "Non-interactive – skipping HuggingFace token prompt."
+            ok "Skipping — unauthenticated downloads (slower, rate-limited)."
         fi
+    else
+        ok "Non-interactive – skipping HuggingFace token prompt."
     fi
 fi
 
-# Final check for switch-model runs (token might be in bashrc but not sourced)
-if [[ -z ${HF_TOKEN:-} ]] && grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-    # Source it for this session
-    source <(grep "export HF_TOKEN=" "${HOME}/.bashrc")
-    ok "HF_TOKEN loaded from ~/.bashrc for current session"
-fi
-
-export HF_TOKEN
+# Export if we have it
+export HF_TOKEN="${HF_TOKEN:-}"
 # =============================================================================
 #  2. System packages
 # =============================================================================
@@ -257,13 +224,14 @@ MODELS=(
     "3|unsloth/Qwen3.5-4B-GGUF|Qwen3.5-4B-Q4_K_M.gguf|Qwen 3.5 4B|2.0|256K|4|0|small|chat,code|Alibaba · capable on CPU"
     "4|bartowski/Phi-4-mini-instruct-GGUF|Phi-4-mini-instruct-Q4_K_M.gguf|Phi-4 Mini 3.8B|2.0|16K|4|0|small|reasoning,code|Microsoft · strong reasoning"
     "5|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on 3060"
-    "6|bartowski/Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction"
-    "7|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|32K|12|10|mid|code|#1 coding on 3060"
-    "8|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|32K|14|10|mid|chat,code,reasoning|Strong planning"
-    "9|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google · strict output"
-    "10|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active"
-    "11|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
-    "12|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
+    "6|unsloth/gemma-4-E4B-it-GGUF|gemma-4-E4B-it-Q5_K_M.gguf|Gemma 4 E4B 4.5B|5.5|128K|6|2|mid|chat,audio,edge|Google · text+image+audio, efficient"
+    "7|bartowski/Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction"
+    "8|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|32K|12|10|mid|code|#1 coding on 3060"
+    "9|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|32K|14|10|mid|chat,code,reasoning|Strong planning"
+    "10|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google · strict output"
+    "11|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active"
+    "12|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
+    "13|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
 )
 
 # Set NUM_MODELS from the array length (FIXED)
@@ -502,55 +470,28 @@ if [[ $CHOICE != "u" && $CHOICE != "U" ]]; then
     apply_model_settings "$SEL_GGUF"
     GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
 fi
-# =============================================================================
-#  7. Download model (if not present)
-# =============================================================================
-if [[ -f $GGUF_PATH ]]; then
-    ok "Model already on disk: ${GGUF_PATH} — skipping download."
-elif [[ $CHOICE != "u" && $CHOICE != "U" ]]; then
-    step "Downloading ${SEL_NAME} from HuggingFace..."
-    warn "This may take several minutes depending on model size and connection."
 
-    AVAIL_KB=$(df -k "${MODEL_DIR}" | awk 'NR==2 {print $4}')
-    AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
-
-    REQ_GB=""
-    while IFS='|' read -r idx _ _ _ size_gb _ _ _ _ _ _; do
-        [[ ${idx// /} == "$CHOICE" ]] && {
-            REQ_GB="${size_gb// /}"
-            break
-        }
-    done < <(printf '%s\n' "${MODELS[@]}")
-
-    REQ_GB_INT=${REQ_GB%.*}
-    [[ $REQ_GB == *"."* ]] && REQ_GB_INT=$((REQ_GB_INT + 1))
-    REQ_GB_INT=$((REQ_GB_INT + 2))
-    ((REQ_GB_INT < 3)) && REQ_GB_INT=3
-    ((AVAIL_GB < REQ_GB_INT)) && die "Insufficient disk: need ~${REQ_GB_INT}GB, have ${AVAIL_GB}GB."
-    ok "Disk space OK: ${AVAIL_GB}GB available, ~${REQ_GB_INT}GB needed."
-
-    # Install huggingface-cli if needed
-    if ! command -v huggingface-cli &>/dev/null; then
-        pip3 install --user --upgrade huggingface-hub
-        export PATH="${HOME}/.local/bin:${PATH}"
-    fi
-    HF_CLI="huggingface-cli"
-
-    if [[ -n ${HF_TOKEN:-} ]]; then
-        HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}"
-    else
-        "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}"
-    fi
-
-    [[ -f $GGUF_PATH ]] || die "Download completed but file not found."
-    FILE_SIZE=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
-    ((FILE_SIZE < 104857600)) && die "Downloaded file suspiciously small (${FILE_SIZE} bytes)."
-    if command -v numfmt &>/dev/null; then
-        ok "Model downloaded: ${GGUF_PATH} ($(numfmt --to=iec-i --suffix=B "${FILE_SIZE}"))"
-    else
-        ok "Model downloaded: ${GGUF_PATH} (${FILE_SIZE} bytes)"
-    fi
+# Use python module instead of CLI
+if ! python3 -c "import huggingface_hub" 2>/dev/null; then
+    pip3 install --user huggingface-hub --break-system-packages
 fi
+
+# Download using Python
+python3 -c "
+from huggingface_hub import hf_hub_download
+import os
+
+hf_hub_download(
+    repo_id='${SEL_HF_REPO}',
+    filename='${SEL_GGUF}',
+    local_dir='${MODEL_DIR}',
+    token='${HF_TOKEN}' if '${HF_TOKEN}' else None
+)
+"
+
+
+
+
 # =============================================================================
 #  8. Build llama.cpp (skip if binary already exists)
 # =============================================================================
@@ -569,7 +510,6 @@ find_llama_server() {
             }
         fi
     done
-    # Generic search under build dir
     local found
     found=$(find "${HOME}/llama.cpp" -name "llama-server" -type f -executable 2>/dev/null | head -1)
     if [[ -n $found ]]; then
@@ -628,6 +568,11 @@ else
     ok "llama-server: ${LLAMA_SERVER_BIN}"
 fi
 
+# =============================================================================
+#  9. Hermes Agent (outsourc-e fork with WebAPI)
+# =============================================================================
+step "Setting up Hermes Agent..."
+# ... rest of your script continues ...
 # =============================================================================
 #  9. Hermes Agent (outsourc-e fork with WebAPI)
 # =============================================================================
