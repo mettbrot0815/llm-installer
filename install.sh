@@ -23,9 +23,9 @@ set -euo pipefail
 # ── Strip Windows /mnt/* paths from PATH so Windows npm/node are never used ──
 #    This must happen before any command -v node/npm check.
 CLEAN_PATH=""
-IFS=':' read -ra PATH_PARTS <<< "$PATH"
+IFS=':' read -ra PATH_PARTS <<<"$PATH"
 for part in "${PATH_PARTS[@]}"; do
-    [[ "$part" == /mnt/* ]] && continue
+    [[ $part == /mnt/* ]] && continue
     CLEAN_PATH="${CLEAN_PATH:+${CLEAN_PATH}:}${part}"
 done
 export PATH="$CLEAN_PATH"
@@ -35,16 +35,19 @@ unset CLEAN_PATH PATH_PARTS part
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 step() { echo -e "\n${CYN}[*] $*${RST}"; }
-ok()   { echo -e "${GRN}[+] $*${RST}"; }
+ok() { echo -e "${GRN}[+] $*${RST}"; }
 warn() { echo -e "${YLW}[!] $*${RST}"; }
-die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
+die() {
+    echo -e "${RED}[ERROR] $*${RST}"
+    exit 1
+}
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
 cleanup() {
     local f
     for f in "${TMPFILES[@]+"${TMPFILES[@]}"}"; do
-        [[ -n "$f" && -f "$f" ]] && rm -f "$f"
+        [[ -n $f && -f $f ]] && rm -f "$f"
     done
 }
 trap cleanup EXIT INT TERM
@@ -71,18 +74,18 @@ step "HuggingFace token (optional)..."
 
 HF_TOKEN=""
 
-if [[ -n "${HF_TOKEN:-}" ]]; then
+if [[ -n ${HF_TOKEN:-} ]]; then
     ok "HF_TOKEN already set in environment — using it."
 elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
     HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
-    [[ -n "$HF_TOKEN" ]] && ok "HF_TOKEN found in ~/.cache/huggingface/token."
+    [[ -n $HF_TOKEN ]] && ok "HF_TOKEN found in ~/.cache/huggingface/token."
 elif grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-    HF_TOKEN=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" | head -1 | \
-        sed 's/.*export HF_TOKEN=//' | sed "s/^[\"']//" | sed "s/[\"']$//")
-    [[ -n "$HF_TOKEN" ]] && ok "HF_TOKEN found in ~/.bashrc."
+    HF_TOKEN=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" | head -1 \
+        | sed 's/.*export HF_TOKEN=//' | sed "s/^[\"']//" | sed "s/[\"']$//")
+    [[ -n $HF_TOKEN ]] && ok "HF_TOKEN found in ~/.bashrc."
 fi
 
-if [[ -z "$HF_TOKEN" ]]; then
+if [[ -z $HF_TOKEN ]]; then
     echo ""
     echo -e "  ${BLD}Why add a HuggingFace token?${RST}"
     echo -e "  • Faster downloads · higher rate limits · gated model access"
@@ -90,10 +93,10 @@ if [[ -z "$HF_TOKEN" ]]; then
     echo ""
     if [[ -t 0 ]]; then
         read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn
-        if [[ "$hf_yn" =~ ^[Yy]$ ]]; then
+        if [[ $hf_yn =~ ^[Yy]$ ]]; then
             read -rp "  Paste your token (starts with hf_): " HF_TOKEN
             HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
-            if [[ "$HF_TOKEN" =~ ^hf_ ]]; then
+            if [[ $HF_TOKEN =~ ^hf_ ]]; then
                 ok "Token accepted."
             else
                 warn "Token doesn't start with 'hf_' — using anyway, double-check it."
@@ -138,8 +141,11 @@ fi
 step "Detecting hardware..."
 
 RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-RAM_GiB=$(( RAM_KB / 1024 / 1024 ))
-(( RAM_GiB == 0 )) && { warn "RAM detection returned 0 — defaulting to 8 GiB."; RAM_GiB=8; }
+RAM_GiB=$((RAM_KB / 1024 / 1024))
+((RAM_GiB == 0)) && {
+    warn "RAM detection returned 0 — defaulting to 8 GiB."
+    RAM_GiB=8
+}
 CPUS=$(nproc)
 HAS_NVIDIA=false
 VRAM_GiB=0
@@ -151,7 +157,7 @@ if command -v nvidia-smi &>/dev/null; then
         GPU_LINE=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
         GPU_NAME=$(echo "$GPU_LINE" | cut -d',' -f1 | xargs)
         VRAM_MiB=$(echo "$GPU_LINE" | cut -d',' -f2 | awk '{print $1}')
-        VRAM_GiB=$(( VRAM_MiB / 1024 ))
+        VRAM_GiB=$((VRAM_MiB / 1024))
         HAS_NVIDIA=true
         ok "GPU : ${GPU_NAME}  (${VRAM_GiB} GiB VRAM)  — CUDA OK"
     else
@@ -166,11 +172,14 @@ echo -e "\n  ${BLD}Hardware${RST}"
 echo -e "  RAM  : ${RAM_GiB} GiB   CPUs: ${CPUS}"
 echo -e "  GPU  : ${GPU_NAME}   VRAM: ${VRAM_GiB} GiB   CUDA: ${HAS_NVIDIA}"
 
-if [[ "$HAS_NVIDIA" != "true" ]]; then
+if [[ $HAS_NVIDIA != "true" ]]; then
     warn "No NVIDIA GPU — llama.cpp will be CPU-only (much slower)."
     if [[ -t 0 ]]; then
         read -rp "  Continue with CPU-only build? [y/N]: " cpu_ok
-        [[ "$cpu_ok" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+        [[ $cpu_ok =~ ^[Yy]$ ]] || {
+            echo "Aborted."
+            exit 0
+        }
     else
         warn "Non-interactive – continuing with CPU-only build."
     fi
@@ -179,7 +188,7 @@ fi
 # =============================================================================
 #  4. CUDA toolkit (GPU only)
 # =============================================================================
-if [[ "$HAS_NVIDIA" == "true" ]]; then
+if [[ $HAS_NVIDIA == "true" ]]; then
     step "Checking CUDA toolkit..."
     if command -v nvcc &>/dev/null; then
         ok "CUDA toolkit already installed: $(nvcc --version 2>/dev/null | head -1)"
@@ -233,53 +242,80 @@ mkdir -p "$MODEL_DIR"
 # ── Grade helpers ─────────────────────────────────────────────────────────────
 grade_model() {
     local min_ram="${1:?}" min_vram="${2:?}" ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
-    local ram_h=$(( ram_gib - min_ram ))
-    if [[ $min_vram -gt 0 && "$has_nvidia" == "true" ]]; then
-        local vram_h=$(( vram_gib - min_vram ))
-        if   [[ $vram_h -ge 4 ]]; then echo "S"
-        elif [[ $vram_h -ge 0 ]]; then echo "A"
-        elif [[ $ram_h  -ge 4 ]]; then echo "B"
-        elif [[ $ram_h  -ge 0 ]]; then echo "C"
-        else                           echo "F"; fi
+    local ram_h=$((ram_gib - min_ram))
+
+    if [[ $min_vram -gt 0 && $has_nvidia == "true" ]]; then
+        local vram_h=$((vram_gib - min_vram))
+        if [[ $vram_h -ge 4 ]]; then
+            echo "S"
+        elif [[ $vram_h -ge 0 ]]; then
+            echo "A"
+        elif [[ $ram_h -ge 4 ]]; then
+            echo "B"
+        elif [[ $ram_h -ge 0 ]]; then
+            echo "C"
+        else
+            echo "F"
+        fi
     elif [[ $min_vram -gt 0 ]]; then
-        if   [[ $ram_h -ge 8 ]]; then echo "B"
-        elif [[ $ram_h -ge 0 ]]; then echo "C"
-        else                          echo "F"; fi
+        # No NVIDIA, only RAM
+        if [[ $ram_h -ge 8 ]]; then
+            echo "B"
+        elif [[ $ram_h -ge 0 ]]; then
+            echo "C"
+        else
+            echo "F"
+        fi
     else
-        if   [[ $ram_h -ge 8 ]]; then echo "S"
-        elif [[ $ram_h -ge 4 ]]; then echo "A"
-        elif [[ $ram_h -ge 0 ]]; then echo "B"
-        else                          echo "F"; fi
+        # Very small model, no VRAM requirement
+        echo "S"
     fi
 }
 
 grade_label() {
     case $1 in
-        S) echo "S  Runs great ";; A) echo "A  Runs well  ";;
-        B) echo "B  Decent     ";; C) echo "C  Tight fit  ";;
-        F) echo "F  Too heavy  ";; *) echo "?  Unknown    ";;
+        S) echo "S  Runs great " ;;
+        A) echo "A  Runs well  " ;;
+        B) echo "B  Decent     " ;;
+        C) echo "C  Tight fit  " ;;
+        F) echo "F  Too heavy  " ;;
+        *) echo "?  Unknown    " ;;
     esac
 }
 
 grade_color() {
-    case $1 in S|A) echo "${GRN}";; B|C) echo "${YLW}";; *) echo "${RED}";; esac
+    case $1 in
+        S | A) echo "${GRN}" ;;
+        B | C) echo "${YLW}" ;;
+        *) echo "${RED}" ;;
+    esac
 }
 
-# ── Infer ctx/jinja from filename (used for both catalogue and URL downloads) ─
+# ── Infer ctx/jinja from filename ─────────────────────────────────────────────
 apply_model_settings() {
     local gguf="$1"
+
     case "$gguf" in
         *Qwen3.5*)
-            SAFE_CTX=262144; USE_JINJA="--jinja"
-            ok "Qwen3.5 detected: enabling full 256K context window" ;;
-        *Llama-3.1*|*Llama-3.3*|*Qwen3-30B*)
-            SAFE_CTX=131072; USE_JINJA="--jinja" ;;
+            SAFE_CTX=262144
+            USE_JINJA="--jinja"
+            ok "Qwen3.5 detected: enabling full 256K context window"
+            ;;
+        *Llama-3.1* | *Llama-3.3* | *Qwen3-30B*)
+            SAFE_CTX=131072
+            USE_JINJA="--jinja"
+            ;;
         *google_gemma-3*)
-            SAFE_CTX=131072; USE_JINJA="--no-jinja"
-            ok "Gemma 3 detected: Jinja disabled (strict role enforcement)" ;;
+            SAFE_CTX=131072
+            USE_JINJA="--no-jinja"
+            ok "Gemma 3 detected: Jinja disabled (strict role enforcement)"
+            ;;
         *)
-            SAFE_CTX=32768; USE_JINJA="--jinja" ;;
+            SAFE_CTX=32768
+            USE_JINJA="--jinja"
+            ;;
     esac
+
     ok "Context window: ${SAFE_CTX} tokens"
 }
 
@@ -298,21 +334,28 @@ HDR
         "${GPU_NAME:0:28}" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA"
 
     echo -e "  ${BLD} #   Model                    Size    Ctx     Grade              Tags${RST}"
-    echo    "  ─────────────────────────────────────────────────────────────────────────────"
+    echo "  ─────────────────────────────────────────────────────────────────────────────"
 
     local last_tier=""
     local idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc
-    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
-        idx="${idx// /}"; dname="${dname# }"; dname="${dname% }"
-        size_gb="${size_gb// /}"; ctx="${ctx// /}"
-        min_ram="${min_ram// /}"; min_vram="${min_vram// /}"
-        tier="${tier// /}"; tags="${tags// /}"; gguf_file="${gguf_file// /}"
 
-        if [[ "$tier" != "$last_tier" ]]; then
+    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
+        idx="${idx// /}"
+        dname="${dname# }"
+        dname="${dname% }"
+        size_gb="${size_gb// /}"
+        ctx="${ctx// /}"
+        min_ram="${min_ram// /}"
+        min_vram="${min_vram// /}"
+        tier="${tier// /}"
+        tags="${tags// /}"
+        gguf_file="${gguf_file// /}"
+
+        if [[ $tier != "$last_tier" ]]; then
             case $tier in
-                tiny)  echo -e "\n  ${BLD}▸ TINY   (< 1 GB · instant · edge/test)${RST}" ;;
+                tiny) echo -e "\n  ${BLD}▸ TINY   (< 1 GB · instant · edge/test)${RST}" ;;
                 small) echo -e "\n  ${BLD}▸ SMALL  (1–2 GB · fast CPU · everyday use)${RST}" ;;
-                mid)   echo -e "\n  ${BLD}▸ MID    (4–17 GB · quality/speed balance)${RST}" ;;
+                mid) echo -e "\n  ${BLD}▸ MID    (4–17 GB · quality/speed balance)${RST}" ;;
                 large) echo -e "\n  ${BLD}▸ LARGE  (15 GB+ · high-end GPU or lots of RAM)${RST}" ;;
             esac
             last_tier="$tier"
@@ -323,7 +366,6 @@ HDR
         GC=$(grade_color "$GRADE")
         GL=$(grade_label "$GRADE")
 
-        # Mark as present if the file exists in MODEL_DIR regardless of how it got there
         if [[ -f "${MODEL_DIR}/${gguf_file}" ]]; then
             cached=" ${CYN}↓${RST}"
         else
@@ -331,6 +373,7 @@ HDR
         fi
 
         tag_display="${tags//,/ }"
+
         echo -e "  ${BLD}$(printf '%2s' "$idx")${RST}  $(printf '%-26s' "$dname")  $(printf '%5s' "$size_gb") GB  $(printf '%-7s' "$ctx")  ${GC}$(printf '%-13s' "$GL")${RST}  $(printf '%-24s' "$tag_display") $cached"
 
     done < <(printf '%s\n' "${MODELS[@]}")
@@ -338,25 +381,30 @@ HDR
     # Show any .gguf files in MODEL_DIR not in the catalogue (manually copied)
     local extra_count=0 f fname
     for f in "${MODEL_DIR}"/*.gguf; do
-        [[ -f "$f" ]] || continue
+        [[ -f $f ]] || continue
         fname=$(basename "$f")
         local in_cat=false
         local _idx _repo cat_gguf _rest
         while IFS='|' read -r _idx _repo cat_gguf _rest; do
-            [[ "${cat_gguf// /}" == "$fname" ]] && { in_cat=true; break; }
+            [[ ${cat_gguf// /} == "$fname" ]] && {
+                in_cat=true
+                break
+            }
         done < <(printf '%s\n' "${MODELS[@]}")
-        if [[ "$in_cat" == "false" ]]; then
-            (( extra_count++ ))
-            if (( extra_count == 1 )); then
+
+        if [[ $in_cat == "false" ]]; then
+            ((extra_count++))
+            if ((extra_count == 1)); then
                 echo -e "\n  ${BLD}▸ LOCAL  (in ~/llm-models, not in catalogue)${RST}"
             fi
-            local sz; sz=$(du -h "$f" 2>/dev/null | cut -f1)
+            local sz
+            sz=$(du -h "$f" 2>/dev/null | cut -f1)
             echo -e "  ${CYN}↓${RST}  ${fname}  (${sz})"
         fi
     done
 
     echo ""
-    echo    "  ─────────────────────────────────────────────────────────────────────────────"
+    echo "  ─────────────────────────────────────────────────────────────────────────────"
     echo -e "  ${GRN}S/A${RST} Runs great/well   ${YLW}B/C${RST} Tight fit   ${RED}F${RST} Too heavy   ${CYN}↓${RST} Already on disk"
     echo ""
     echo -e "  ${YLW}Tip:${RST} @sudoingX used model 5 (Qwen 3.5 9B) on RTX 3060 12GB"
@@ -376,27 +424,28 @@ download_from_hf_url() {
     echo ""
     read -rp "  Paste URL or repo (owner/name): " HF_INPUT
     HF_INPUT="${HF_INPUT//[[:space:]]/}"
-    [[ -z "$HF_INPUT" ]] && die "No input provided."
+    [[ -z $HF_INPUT ]] && die "No input provided."
 
-    if [[ "$HF_INPUT" =~ ^https?:// ]]; then
+    if [[ $HF_INPUT =~ ^https?:// ]]; then
         # ── Direct URL ──────────────────────────────────────────────────────
         SEL_GGUF=$(basename "$HF_INPUT")
-        SEL_GGUF="${SEL_GGUF%%\?*}"    # strip query string
-        [[ "$SEL_GGUF" != *.gguf ]] && die "URL does not point to a .gguf file: $SEL_GGUF"
+        SEL_GGUF="${SEL_GGUF%%\?*}" # strip query string
+        [[ $SEL_GGUF != *.gguf ]] && die "URL does not point to a .gguf file: $SEL_GGUF"
         SEL_NAME="${SEL_GGUF%.gguf}"
         GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
         SEL_HF_REPO=""
 
-        if [[ -f "$GGUF_PATH" ]]; then
+        if [[ -f $GGUF_PATH ]]; then
             ok "Already on disk: ${GGUF_PATH}"
         else
             step "Downloading ${SEL_GGUF}..."
             local curl_args=(-fL --progress-bar -o "$GGUF_PATH")
-            [[ -n "${HF_TOKEN:-}" ]] && curl_args+=(-H "Authorization: Bearer ${HF_TOKEN}")
+            [[ -n ${HF_TOKEN:-} ]] && curl_args+=(-H "Authorization: Bearer ${HF_TOKEN}")
             curl "${curl_args[@]}" "$HF_INPUT" || die "curl download failed."
-            [[ -f "$GGUF_PATH" ]] || die "File not found after download."
-            local fsize; fsize=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
-            (( fsize < 104857600 )) && die "Downloaded file too small (${fsize} bytes) — check URL."
+            [[ -f $GGUF_PATH ]] || die "File not found after download."
+            local fsize
+            fsize=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
+            ((fsize < 104857600)) && die "Downloaded file too small (${fsize} bytes) — check URL."
             ok "Downloaded: ${GGUF_PATH}"
         fi
     else
@@ -408,8 +457,8 @@ download_from_hf_url() {
         local list_output="" gf_choice
         if list_output=$(HF_TOKEN="${HF_TOKEN:-}" "$HF_CLI" download "$SEL_HF_REPO" \
                 --include "*.gguf" --dry-run 2>/dev/null); then
-            mapfile -t GGUF_FILES < <(echo "$list_output" | grep -i '\.gguf$' | \
-                awk '{print $NF}' | xargs -I{} basename {} | sort)
+            mapfile -t GGUF_FILES < <(echo "$list_output" | grep -i '\.gguf$' \
+                | awk '{print $NF}' | xargs -I{} basename {} | sort)
         else
             GGUF_FILES=()
         fi
@@ -418,7 +467,7 @@ download_from_hf_url() {
             warn "Could not auto-list files. Enter the exact GGUF filename manually."
             read -rp "  Filename (e.g. model-Q4_K_M.gguf): " SEL_GGUF
             SEL_GGUF="${SEL_GGUF//[[:space:]]/}"
-            [[ -z "$SEL_GGUF" ]] && die "No filename provided."
+            [[ -z $SEL_GGUF ]] && die "No filename provided."
         elif [[ ${#GGUF_FILES[@]} -eq 1 ]]; then
             SEL_GGUF="${GGUF_FILES[0]}"
             ok "Only one GGUF found: ${SEL_GGUF}"
@@ -428,34 +477,35 @@ download_from_hf_url() {
             local fi=1
             for gf in "${GGUF_FILES[@]}"; do
                 printf "  %2d  %s\n" "$fi" "$gf"
-                (( fi++ ))
+                ((fi++))
             done
             echo ""
             while true; do
                 read -rp "  Enter number [1-${#GGUF_FILES[@]}]: " gf_choice
-                [[ "$gf_choice" =~ ^[0-9]+$ ]] && \
-                    (( gf_choice >= 1 && gf_choice <= ${#GGUF_FILES[@]} )) && break
+                [[ $gf_choice =~ ^[0-9]+$ ]] \
+                    && ((gf_choice >= 1 && gf_choice <= ${#GGUF_FILES[@]})) && break
                 warn "Invalid choice."
             done
-            SEL_GGUF="${GGUF_FILES[$((gf_choice-1))]}"
+            SEL_GGUF="${GGUF_FILES[$((gf_choice - 1))]}"
         fi
 
         SEL_NAME="${SEL_GGUF%.gguf}"
         GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
 
-        if [[ -f "$GGUF_PATH" ]]; then
+        if [[ -f $GGUF_PATH ]]; then
             ok "Already on disk: ${GGUF_PATH}"
         else
             step "Downloading ${SEL_GGUF} from ${SEL_HF_REPO}..."
-            if [[ -n "${HF_TOKEN:-}" ]]; then
+            if [[ -n ${HF_TOKEN:-} ]]; then
                 HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" \
                     --local-dir "$MODEL_DIR"
             else
                 "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" --local-dir "$MODEL_DIR"
             fi
-            [[ -f "$GGUF_PATH" ]] || die "Download completed but file not found."
-            local fsize; fsize=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
-            (( fsize < 104857600 )) && die "Downloaded file too small (${fsize} bytes)."
+            [[ -f $GGUF_PATH ]] || die "Download completed but file not found."
+            local fsize
+            fsize=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
+            ((fsize < 104857600)) && die "Downloaded file too small (${fsize} bytes)."
             ok "Downloaded: ${GGUF_PATH}"
         fi
     fi
@@ -472,24 +522,26 @@ export PATH="${HOME}/.local/bin:${PATH}"
 HF_CLI_PATH="${HOME}/.local/bin/hf"
 HF_CLI_LEGACY="${HOME}/.local/bin/huggingface-cli"
 
-if [[ ! -x "$HF_CLI_PATH" && ! -x "$HF_CLI_LEGACY" ]]; then
+if [[ ! -x $HF_CLI_PATH && ! -x $HF_CLI_LEGACY ]]; then
     pip3 install --quiet --user --break-system-packages huggingface_hub
 fi
 
 # Keep HF CLI up to date
 pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -2
 
-if [[ -x "$HF_CLI_PATH" ]]; then
-    HF_CLI="$HF_CLI_PATH"; HF_CLI_NAME="hf"
-elif [[ -x "$HF_CLI_LEGACY" ]]; then
-    HF_CLI="$HF_CLI_LEGACY"; HF_CLI_NAME="huggingface-cli"
+if [[ -x $HF_CLI_PATH ]]; then
+    HF_CLI="$HF_CLI_PATH"
+    HF_CLI_NAME="hf"
+elif [[ -x $HF_CLI_LEGACY ]]; then
+    HF_CLI="$HF_CLI_LEGACY"
+    HF_CLI_NAME="huggingface-cli"
 else
     die "Neither 'hf' nor 'huggingface-cli' found after install."
 fi
 "$HF_CLI" version &>/dev/null || die "'$HF_CLI_NAME' found but fails to run."
 ok "$HF_CLI_NAME ready: $("$HF_CLI" version 2>/dev/null || echo 'ok')"
 
-if [[ -n "${HF_TOKEN:-}" ]]; then
+if [[ -n ${HF_TOKEN:-} ]]; then
     if "$HF_CLI" auth login --token "$HF_TOKEN" 2>/dev/null; then
         ok "HF login completed."
     elif "$HF_CLI" login --token "$HF_TOKEN" 2>/dev/null; then
@@ -497,8 +549,8 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
     else
         ok "HF token ready (may be cached)."
     fi
-    "$HF_CLI" auth whoami &>/dev/null 2>&1 && ok "HF login verified." || \
-        warn "HF login could not be verified — downloads will be unauthenticated."
+    "$HF_CLI" auth whoami &>/dev/null 2>&1 && ok "HF login verified." \
+        || warn "HF login could not be verified — downloads will be unauthenticated."
 fi
 
 # =============================================================================
@@ -520,47 +572,51 @@ while true; do
         break
     fi
     read -rp "$(echo -e "  ${BLD}Enter model number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE
-    if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
+    if [[ $CHOICE == "u" || $CHOICE == "U" ]]; then
         download_from_hf_url
         break
-    elif [[ "$CHOICE" =~ ^[0-9]+$ ]] && (( CHOICE >= 1 && CHOICE <= NUM_MODELS )); then
+    elif [[ $CHOICE =~ ^[0-9]+$ ]] && ((CHOICE >= 1 && CHOICE <= NUM_MODELS)); then
         break
     fi
     warn "Please enter a number between 1 and ${NUM_MODELS}, or 'u'."
 done
 
 # Parse catalogue selection
-if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
+if [[ $CHOICE != "u" && $CHOICE != "U" ]]; then
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
         idx="${idx// /}"
-        if [[ "$idx" == "$CHOICE" ]]; then
+        if [[ $idx == "$CHOICE" ]]; then
             SEL_IDX="$idx"
             SEL_HF_REPO="${hf_repo// /}"
             SEL_GGUF="${gguf_file// /}"
-            SEL_NAME="${dname# }"; SEL_NAME="${SEL_NAME% }"
+            SEL_NAME="${dname# }"
+            SEL_NAME="${SEL_NAME% }"
             SEL_MIN_RAM="${min_ram// /}"
             SEL_MIN_VRAM="${min_vram// /}"
             break
         fi
     done < <(printf '%s\n' "${MODELS[@]}")
 
-    [[ -z "$SEL_GGUF"    ]] && die "Model parse failed: SEL_GGUF empty."
-    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: SEL_MIN_RAM empty."
-    [[ "$SEL_MIN_RAM"  =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='$SEL_MIN_RAM' not numeric."
-    [[ "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM' not numeric."
+    [[ -z $SEL_GGUF ]] && die "Model parse failed: SEL_GGUF empty."
+    [[ -z $SEL_MIN_RAM ]] && die "Model parse failed: SEL_MIN_RAM empty."
+    [[ $SEL_MIN_RAM =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='$SEL_MIN_RAM' not numeric."
+    [[ $SEL_MIN_VRAM =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM' not numeric."
 
     ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
 
     GRADE_SEL=$(grade_model "$SEL_MIN_RAM" "$SEL_MIN_VRAM" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
-    if [[ "$GRADE_SEL" == "F" ]]; then
+    if [[ $GRADE_SEL == "F" ]]; then
         warn "Grade F — this model will likely OOM on your hardware."
         if [[ -t 0 ]]; then
             read -rp "  Continue anyway? [y/N]: " go_anyway
-            [[ "$go_anyway" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+            [[ $go_anyway =~ ^[Yy]$ ]] || {
+                echo "Aborted."
+                exit 0
+            }
         else
             warn "Non-interactive – continuing anyway."
         fi
-    elif [[ "$GRADE_SEL" == "C" ]]; then
+    elif [[ $GRADE_SEL == "C" ]]; then
         warn "Grade C — tight fit, expect slow responses."
     fi
 
@@ -571,37 +627,40 @@ fi
 # =============================================================================
 #  7. Download model from catalogue (if not already present)
 # =============================================================================
-if [[ -f "$GGUF_PATH" ]]; then
+if [[ -f $GGUF_PATH ]]; then
     ok "Model already on disk: ${GGUF_PATH} — skipping download."
-elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
+elif [[ $CHOICE != "u" && $CHOICE != "U" ]]; then
     step "Downloading ${SEL_NAME} from HuggingFace..."
     warn "This may take several minutes depending on model size and connection."
 
     AVAIL_KB=$(df -k "${MODEL_DIR}" | awk 'NR==2 {print $4}')
-    AVAIL_GB=$(( AVAIL_KB / 1024 / 1024 ))
+    AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
 
     # Exact index match to get size (avoids "1" matching "11" or "12")
     REQ_GB=""
     while IFS='|' read -r idx _ _ _ size_gb _ _ _ _ _ _; do
-        [[ "${idx// /}" == "$CHOICE" ]] && { REQ_GB="${size_gb// /}"; break; }
+        [[ ${idx// /} == "$CHOICE" ]] && {
+            REQ_GB="${size_gb// /}"
+            break
+        }
     done < <(printf '%s\n' "${MODELS[@]}")
 
     REQ_GB_INT=${REQ_GB%.*}
-    [[ "$REQ_GB" == *"."* ]] && REQ_GB_INT=$(( REQ_GB_INT + 1 ))
-    REQ_GB_INT=$(( REQ_GB_INT + 2 ))
-    (( REQ_GB_INT < 3 )) && REQ_GB_INT=3
-    (( AVAIL_GB < REQ_GB_INT )) && die "Insufficient disk: need ~${REQ_GB_INT}GB, have ${AVAIL_GB}GB."
+    [[ $REQ_GB == *"."* ]] && REQ_GB_INT=$((REQ_GB_INT + 1))
+    REQ_GB_INT=$((REQ_GB_INT + 2))
+    ((REQ_GB_INT < 3)) && REQ_GB_INT=3
+    ((AVAIL_GB < REQ_GB_INT)) && die "Insufficient disk: need ~${REQ_GB_INT}GB, have ${AVAIL_GB}GB."
     ok "Disk space OK: ${AVAIL_GB}GB available, ~${REQ_GB_INT}GB needed."
 
-    if [[ -n "${HF_TOKEN:-}" ]]; then
+    if [[ -n ${HF_TOKEN:-} ]]; then
         HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}"
     else
         "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}"
     fi
 
-    [[ -f "$GGUF_PATH" ]] || die "Download completed but file not found."
+    [[ -f $GGUF_PATH ]] || die "Download completed but file not found."
     FILE_SIZE=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
-    (( FILE_SIZE < 104857600 )) && die "Downloaded file suspiciously small (${FILE_SIZE} bytes)."
+    ((FILE_SIZE < 104857600)) && die "Downloaded file suspiciously small (${FILE_SIZE} bytes)."
     if command -v numfmt &>/dev/null; then
         ok "Model downloaded: ${GGUF_PATH} ($(numfmt --to=iec-i --suffix=B "${FILE_SIZE}"))"
     else
@@ -617,26 +676,32 @@ step "Checking llama.cpp..."
 find_llama_server() {
     local p version_output
     for p in /usr/local/bin/llama-server /usr/bin/llama-server \
-              "${HOME}/.local/bin/llama-server" \
-              "${HOME}/llama.cpp/build/bin/llama-server"; do
-        if [[ -x "$p" ]]; then
+        "${HOME}/.local/bin/llama-server" \
+        "${HOME}/llama.cpp/build/bin/llama-server"; do
+        if [[ -x $p ]]; then
             version_output=$("$p" --version 2>&1) || continue
-            echo "$version_output" | grep -qiE 'llama|ggml' && { echo "$p"; return 0; }
+            echo "$version_output" | grep -qiE 'llama|ggml' && {
+                echo "$p"
+                return 0
+            }
         fi
     done
     # Generic search under build dir
     local found
     found=$(find "${HOME}/llama.cpp" -name "llama-server" -type f -executable 2>/dev/null | head -1)
-    if [[ -n "$found" ]]; then
+    if [[ -n $found ]]; then
         version_output=$("$found" --version 2>&1) || true
-        echo "$version_output" | grep -qiE 'llama|ggml' && { echo "$found"; return 0; }
+        echo "$version_output" | grep -qiE 'llama|ggml' && {
+            echo "$found"
+            return 0
+        }
     fi
     return 1
 }
 
 LLAMA_SERVER_BIN=$(find_llama_server || true)
 
-if [[ -n "$LLAMA_SERVER_BIN" ]]; then
+if [[ -n $LLAMA_SERVER_BIN ]]; then
     ok "llama-server: ${LLAMA_SERVER_BIN} — skipping build."
     ok "To force rebuild: rm ${LLAMA_SERVER_BIN} and rerun."
 else
@@ -660,7 +725,7 @@ else
     fi
 
     cd "$LLAMA_DIR"
-    if [[ "$HAS_NVIDIA" == "true" ]]; then
+    if [[ $HAS_NVIDIA == "true" ]]; then
         cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
     else
@@ -676,7 +741,7 @@ else
     fi
 
     LLAMA_SERVER_BIN=$(find_llama_server || true)
-    [[ -n "$LLAMA_SERVER_BIN" ]] || die "llama-server not found after build."
+    [[ -n $LLAMA_SERVER_BIN ]] || die "llama-server not found after build."
     ok "llama-server: ${LLAMA_SERVER_BIN}"
 fi
 
@@ -693,8 +758,8 @@ export PATH="${HOME}/.local/bin:${PATH}"
 if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
     ok "Hermes Agent already cloned — updating..."
     cd "${HERMES_AGENT_DIR}"
-    git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || \
-        warn "Hermes git update failed (continuing with existing code)"
+    git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null \
+        || warn "Hermes git update failed (continuing with existing code)"
     cd - >/dev/null
 else
     step "Cloning outsourc-e/hermes-agent..."
@@ -703,7 +768,7 @@ else
 fi
 
 # Create Python 3.11 venv
-if [[ ! -d "${HERMES_VENV}" ]]; then
+if [[ ! -d ${HERMES_VENV} ]]; then
     step "Creating Python 3.11 virtual environment..."
     python3.11 -m venv "${HERMES_VENV}"
     ok "Venv created at ${HERMES_VENV}"
@@ -722,7 +787,7 @@ fi
 
 # Symlink hermes binary
 HERMES_VENV_BIN="${HERMES_VENV}/bin/hermes"
-if [[ -x "$HERMES_VENV_BIN" ]]; then
+if [[ -x $HERMES_VENV_BIN ]]; then
     mkdir -p "${HOME}/.local/bin"
     ln -sf "$HERMES_VENV_BIN" "$HERMES_BIN"
     ok "Symlinked hermes → ${HERMES_BIN}"
@@ -734,7 +799,7 @@ fi
 HERMES_DIR="${HOME}/.hermes"
 mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
-cat > "${HERMES_DIR}/.env" <<ENV
+cat >"${HERMES_DIR}/.env" <<ENV
 OPENAI_API_KEY=llama
 OPENAI_BASE_URL=http://localhost:8080/v1
 LLM_MODEL=${SEL_NAME}
@@ -743,7 +808,7 @@ HERMES_WEBAPI_PORT=8642
 ENV
 ok "~/.hermes/.env written."
 
-cat > "${HERMES_DIR}/config.yaml" <<CONFIG
+cat >"${HERMES_DIR}/config.yaml" <<CONFIG
 # Hermes Agent Configuration — generated by install.sh
 model:
   default: "${SEL_NAME}"
@@ -756,7 +821,7 @@ ok "config.yaml written — Hermes → llama-server (${SEL_NAME})"
 # Hermes WebAPI systemd service
 # Wants= instead of Requires= so cascade failure in WSL2 doesn't block startup
 mkdir -p "${HOME}/.config/systemd/user"
-cat > "${HOME}/.config/systemd/user/hermes-webapi.service" <<WEBAPI_SERVICE
+cat >"${HOME}/.config/systemd/user/hermes-webapi.service" <<WEBAPI_SERVICE
 [Unit]
 Description=Hermes Agent WebAPI
 After=llama-server.service network.target
@@ -801,7 +866,7 @@ ok "pip updated."
 step "Creating launch script..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
 
-cat > "${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
+cat >"${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
 #!/usr/bin/env bash
 # start-llm.sh – generated by install.sh
 # Starts: llama-server (8080) + Hermes WebAPI (8642)
@@ -893,7 +958,7 @@ LAUNCH_TEMPLATE
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA HERMES_AGENT_DIR HERMES_VENV
 
 envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${HERMES_AGENT_DIR} ${HERMES_VENV}' \
-    < "${LAUNCH_SCRIPT}.template" > "$LAUNCH_SCRIPT"
+    <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 
 rm -f "${LAUNCH_SCRIPT}.template"
 chmod +x "$LAUNCH_SCRIPT"
@@ -905,7 +970,7 @@ ok "Launch script: ~/start-llm.sh"
 # =============================================================================
 step "Creating systemd user service for llama-server..."
 mkdir -p "${HOME}/.config/systemd/user"
-cat > "${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
+cat >"${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
 [Unit]
 Description=llama-server LLM inference
 After=network.target
@@ -934,7 +999,7 @@ fi
 
 # Start services now
 step "Starting services..."
-nohup bash "$LAUNCH_SCRIPT" < /dev/null > /tmp/llama-server.log 2>&1 &
+nohup bash "$LAUNCH_SCRIPT" </dev/null >/tmp/llama-server.log 2>&1 &
 ok "Services starting (log: tail -f /tmp/llama-server.log)"
 
 READY=false
@@ -946,8 +1011,8 @@ for i in {1..30}; do
     fi
     sleep 1
 done
-[[ "$READY" == "false" ]] && \
-    warn "llama-server not responding in 30s — check: tail -f /tmp/llama-server.log"
+[[ $READY == "false" ]] \
+    && warn "llama-server not responding in 30s — check: tail -f /tmp/llama-server.log"
 
 # =============================================================================
 #  13. ~/.bashrc helpers
@@ -972,7 +1037,7 @@ if grep -qF "$MARKER" "${HOME}/.bashrc" 2>/dev/null; then
     ok "Helpers already in ~/.bashrc — skipping."
 else
     # Static section — expanded now so installer-time paths go in
-    cat >> "${HOME}/.bashrc" <<BASHRC_EXPANDED
+    cat >>"${HOME}/.bashrc" <<BASHRC_EXPANDED
 
 ${MARKER}
 [[ -n "\${__LLM_BASHRC_LOADED:-}" ]] && return 0
@@ -1008,13 +1073,13 @@ alias stop-hermes-api='pkill -f "python -m webapi" 2>/dev/null; echo "Hermes Web
 BASHRC_EXPANDED
 
     # Write HF_TOKEN if present
-    if [[ -n "${HF_TOKEN:-}" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-        echo "export HF_TOKEN=\"${HF_TOKEN}\"" >> "${HOME}/.bashrc"
+    if [[ -n ${HF_TOKEN:-} ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+        echo "export HF_TOKEN=\"${HF_TOKEN}\"" >>"${HOME}/.bashrc"
         ok "HF_TOKEN added to ~/.bashrc."
     fi
 
     # Pure functions — single-quoted so they go in verbatim (no expansion here)
-    cat >> "${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
+    cat >>"${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
 
 vram() {
     nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu \
@@ -1107,7 +1172,7 @@ fi
 WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r\n' || echo "")
 WSLCONFIG="" WSLCONFIG_DIR=""
 
-if [[ -n "$WIN_USER" ]]; then
+if [[ -n $WIN_USER ]]; then
     for drive in c d e f; do
         [[ -d "/mnt/${drive}/Users/${WIN_USER}" ]] && {
             WSLCONFIG_DIR="/mnt/${drive}/Users/${WIN_USER}"
@@ -1122,14 +1187,14 @@ if [[ -n "$WIN_USER" ]]; then
     done
 fi
 
-if [[ -n "$WSLCONFIG" && ! -f "$WSLCONFIG" && -n "$WSLCONFIG_DIR" ]]; then
+if [[ -n $WSLCONFIG && ! -f $WSLCONFIG && -n $WSLCONFIG_DIR ]]; then
     step "Writing .wslconfig..."
-    WSL_RAM=$(( RAM_GiB * 3 / 4 ))
-    (( WSL_RAM < 4  )) && WSL_RAM=4
-    (( WSL_RAM > 64 )) && WSL_RAM=64
-    WSL_SWAP=$(( WSL_RAM / 4 ))
-    (( WSL_SWAP < 2 )) && WSL_SWAP=2
-    cat > "$WSLCONFIG" <<WSLCFG
+    WSL_RAM=$((RAM_GiB * 3 / 4))
+    ((WSL_RAM < 4)) && WSL_RAM=4
+    ((WSL_RAM > 64)) && WSL_RAM=64
+    WSL_SWAP=$((WSL_RAM / 4))
+    ((WSL_SWAP < 2)) && WSL_SWAP=2
+    cat >"$WSLCONFIG" <<WSLCFG
 ; Generated by install.sh
 [wsl2]
 memory=${WSL_RAM}GB
@@ -1141,7 +1206,7 @@ autoMemoryReclaim=dropcache
 sparseVhd=true
 WSLCFG
     ok ".wslconfig written (${WSL_RAM}GB RAM). Run 'wsl --shutdown' to apply."
-elif [[ -n "$WSLCONFIG" && -f "$WSLCONFIG" ]]; then
+elif [[ -n $WSLCONFIG && -f $WSLCONFIG ]]; then
     ok ".wslconfig already exists — skipping."
 else
     warn "Could not locate Windows user profile — skipping .wslconfig."
