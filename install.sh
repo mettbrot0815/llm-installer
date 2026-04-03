@@ -244,7 +244,7 @@ grade_model() {
     local min_ram="${1:?}" min_vram="${2:?}" ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
     local ram_h=$((ram_gib - min_ram))
 
-    if [[ $min_vram -gt 0 && $has_nvidia == "true" ]]; then
+    if [[ $min_vram -gt 0 && "$has_nvidia" == "true" ]]; then
         local vram_h=$((vram_gib - min_vram))
         if [[ $vram_h -ge 4 ]]; then
             echo "S"
@@ -287,11 +287,11 @@ grade_color() {
     case $1 in
         S | A) echo "${GRN}" ;;
         B | C) echo "${YLW}" ;;
-        *) echo "${RED}" ;;
+        *)     echo "${RED}" ;;
     esac
 }
 
-# ── Infer ctx/jinja from filename ─────────────────────────────────────────────
+# ── Infer ctx/jinja from filename (used for both catalogue and URL downloads) ─
 apply_model_settings() {
     local gguf="$1"
 
@@ -351,11 +351,11 @@ HDR
         tags="${tags// /}"
         gguf_file="${gguf_file// /}"
 
-        if [[ $tier != "$last_tier" ]]; then
+        if [[ "$tier" != "$last_tier" ]]; then
             case $tier in
-                tiny) echo -e "\n  ${BLD}▸ TINY   (< 1 GB · instant · edge/test)${RST}" ;;
+                tiny)  echo -e "\n  ${BLD}▸ TINY   (< 1 GB · instant · edge/test)${RST}" ;;
                 small) echo -e "\n  ${BLD}▸ SMALL  (1–2 GB · fast CPU · everyday use)${RST}" ;;
-                mid) echo -e "\n  ${BLD}▸ MID    (4–17 GB · quality/speed balance)${RST}" ;;
+                mid)   echo -e "\n  ${BLD}▸ MID    (4–17 GB · quality/speed balance)${RST}" ;;
                 large) echo -e "\n  ${BLD}▸ LARGE  (15 GB+ · high-end GPU or lots of RAM)${RST}" ;;
             esac
             last_tier="$tier"
@@ -381,18 +381,18 @@ HDR
     # Show any .gguf files in MODEL_DIR not in the catalogue (manually copied)
     local extra_count=0 f fname
     for f in "${MODEL_DIR}"/*.gguf; do
-        [[ -f $f ]] || continue
+        [[ -f "$f" ]] || continue
         fname=$(basename "$f")
         local in_cat=false
         local _idx _repo cat_gguf _rest
         while IFS='|' read -r _idx _repo cat_gguf _rest; do
-            [[ ${cat_gguf// /} == "$fname" ]] && {
+            [[ "${cat_gguf// /}" == "$fname" ]] && {
                 in_cat=true
                 break
             }
         done < <(printf '%s\n' "${MODELS[@]}")
 
-        if [[ $in_cat == "false" ]]; then
+        if [[ "$in_cat" == "false" ]]; then
             ((extra_count++))
             if ((extra_count == 1)); then
                 echo -e "\n  ${BLD}▸ LOCAL  (in ~/llm-models, not in catalogue)${RST}"
@@ -410,160 +410,7 @@ HDR
     echo -e "  ${YLW}Tip:${RST} @sudoingX used model 5 (Qwen 3.5 9B) on RTX 3060 12GB"
     echo -e "  Enter a number, or ${BLD}u${RST} to download via HuggingFace URL."
     echo ""
-}
-
-# ── HuggingFace URL / repo download ──────────────────────────────────────────
-# Sets: SEL_GGUF  SEL_NAME  GGUF_PATH  SAFE_CTX  USE_JINJA
-# Requires: HF_CLI already set
-download_from_hf_url() {
-    echo ""
-    echo -e "  ${BLD}Download a model via HuggingFace${RST}"
-    echo -e "  Accepted formats:"
-    echo -e "    https://huggingface.co/bartowski/Llama-3.1-8B.../resolve/main/file.gguf"
-    echo -e "    bartowski/Llama-3.1-8B-Instruct-GGUF  (repo — you pick the file)"
-    echo ""
-    read -rp "  Paste URL or repo (owner/name): " HF_INPUT
-    HF_INPUT="${HF_INPUT//[[:space:]]/}"
-    [[ -z $HF_INPUT ]] && die "No input provided."
-
-    if [[ $HF_INPUT =~ ^https?:// ]]; then
-        # ── Direct URL ──────────────────────────────────────────────────────
-        SEL_GGUF=$(basename "$HF_INPUT")
-        SEL_GGUF="${SEL_GGUF%%\?*}" # strip query string
-        [[ $SEL_GGUF != *.gguf ]] && die "URL does not point to a .gguf file: $SEL_GGUF"
-        SEL_NAME="${SEL_GGUF%.gguf}"
-        GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
-        SEL_HF_REPO=""
-
-        if [[ -f $GGUF_PATH ]]; then
-            ok "Already on disk: ${GGUF_PATH}"
-        else
-            step "Downloading ${SEL_GGUF}..."
-            local curl_args=(-fL --progress-bar -o "$GGUF_PATH")
-            [[ -n ${HF_TOKEN:-} ]] && curl_args+=(-H "Authorization: Bearer ${HF_TOKEN}")
-            curl "${curl_args[@]}" "$HF_INPUT" || die "curl download failed."
-            [[ -f $GGUF_PATH ]] || die "File not found after download."
-            local fsize
-            fsize=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
-            ((fsize < 104857600)) && die "Downloaded file too small (${fsize} bytes) — check URL."
-            ok "Downloaded: ${GGUF_PATH}"
-        fi
-    else
-        # ── Repo path (owner/repo) ───────────────────────────────────────────
-        SEL_HF_REPO="$HF_INPUT"
-        step "Listing GGUF files in ${SEL_HF_REPO}..."
-
-        # Try --dry-run to list files (not all CLI versions support it)
-        local list_output="" gf_choice
-        if list_output=$(HF_TOKEN="${HF_TOKEN:-}" "$HF_CLI" download "$SEL_HF_REPO" \
-                --include "*.gguf" --dry-run 2>/dev/null); then
-            mapfile -t GGUF_FILES < <(echo "$list_output" | grep -i '\.gguf$' \
-                | awk '{print $NF}' | xargs -I{} basename {} | sort)
-        else
-            GGUF_FILES=()
-        fi
-
-        if [[ ${#GGUF_FILES[@]} -eq 0 ]]; then
-            warn "Could not auto-list files. Enter the exact GGUF filename manually."
-            read -rp "  Filename (e.g. model-Q4_K_M.gguf): " SEL_GGUF
-            SEL_GGUF="${SEL_GGUF//[[:space:]]/}"
-            [[ -z $SEL_GGUF ]] && die "No filename provided."
-        elif [[ ${#GGUF_FILES[@]} -eq 1 ]]; then
-            SEL_GGUF="${GGUF_FILES[0]}"
-            ok "Only one GGUF found: ${SEL_GGUF}"
-        else
-            echo ""
-            echo -e "  ${BLD}Available GGUF files in ${SEL_HF_REPO}:${RST}"
-            local fi=1
-            for gf in "${GGUF_FILES[@]}"; do
-                printf "  %2d  %s\n" "$fi" "$gf"
-                ((fi++))
-            done
-            echo ""
-            while true; do
-                read -rp "  Enter number [1-${#GGUF_FILES[@]}]: " gf_choice
-                [[ $gf_choice =~ ^[0-9]+$ ]] \
-                    && ((gf_choice >= 1 && gf_choice <= ${#GGUF_FILES[@]})) && break
-                warn "Invalid choice."
-            done
-            SEL_GGUF="${GGUF_FILES[$((gf_choice - 1))]}"
-        fi
-
-        SEL_NAME="${SEL_GGUF%.gguf}"
-        GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
-
-        if [[ -f $GGUF_PATH ]]; then
-            ok "Already on disk: ${GGUF_PATH}"
-        else
-            step "Downloading ${SEL_GGUF} from ${SEL_HF_REPO}..."
-            if [[ -n ${HF_TOKEN:-} ]]; then
-                HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" \
-                    --local-dir "$MODEL_DIR"
-            else
-                "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" --local-dir "$MODEL_DIR"
-            fi
-            [[ -f $GGUF_PATH ]] || die "Download completed but file not found."
-            local fsize
-            fsize=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
-            ((fsize < 104857600)) && die "Downloaded file too small (${fsize} bytes)."
-            ok "Downloaded: ${GGUF_PATH}"
-        fi
-    fi
-
-    apply_model_settings "$SEL_GGUF"
-}
-
-# =============================================================================
-#  6. HuggingFace CLI setup (needed before model selection for URL option)
-# =============================================================================
-step "Setting up HuggingFace CLI..."
-export PATH="${HOME}/.local/bin:${PATH}"
-
-HF_CLI_PATH="${HOME}/.local/bin/hf"
-HF_CLI_LEGACY="${HOME}/.local/bin/huggingface-cli"
-
-if [[ ! -x $HF_CLI_PATH && ! -x $HF_CLI_LEGACY ]]; then
-    pip3 install --quiet --user --break-system-packages huggingface_hub
-fi
-
-# Keep HF CLI up to date
-pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -2
-
-if [[ -x $HF_CLI_PATH ]]; then
-    HF_CLI="$HF_CLI_PATH"
-    HF_CLI_NAME="hf"
-elif [[ -x $HF_CLI_LEGACY ]]; then
-    HF_CLI="$HF_CLI_LEGACY"
-    HF_CLI_NAME="huggingface-cli"
-else
-    die "Neither 'hf' nor 'huggingface-cli' found after install."
-fi
-"$HF_CLI" version &>/dev/null || die "'$HF_CLI_NAME' found but fails to run."
-ok "$HF_CLI_NAME ready: $("$HF_CLI" version 2>/dev/null || echo 'ok')"
-
-if [[ -n ${HF_TOKEN:-} ]]; then
-    if "$HF_CLI" auth login --token "$HF_TOKEN" 2>/dev/null; then
-        ok "HF login completed."
-    elif "$HF_CLI" login --token "$HF_TOKEN" 2>/dev/null; then
-        ok "HF login completed (legacy CLI)."
-    else
-        ok "HF token ready (may be cached)."
-    fi
-    "$HF_CLI" auth whoami &>/dev/null 2>&1 && ok "HF login verified." \
-        || warn "HF login could not be verified — downloads will be unauthenticated."
-fi
-
-# =============================================================================
-#  5 (continued). Run model selector
-# =============================================================================
-NUM_MODELS=${#MODELS[@]}
-SEL_IDX="" SEL_HF_REPO="" SEL_GGUF="" SEL_NAME="" SEL_MIN_RAM="0" SEL_MIN_VRAM="0"
-SAFE_CTX=32768
-USE_JINJA="--jinja"
-GGUF_PATH=""
-CHOICE=""
-
-show_model_table
+}   # ← End of show_model_table
 
 while true; do
     if [[ ! -t 0 ]]; then
