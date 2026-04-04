@@ -25,7 +25,7 @@
 #  Removed: outsourc-e WebAPI, Hermes Workspace, pnpm/Node.js, video gen,
 #           Qwen Code, all workspace aliases
 # =============================================================================
-set -euo pipefail
+set -eu pipefail
 
 # ── Strip Windows /mnt/* from PATH so Windows npm/node are never used ─────────
 _wsl_clean_path=""
@@ -443,87 +443,51 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
     "$HF_CLI" auth whoami &>/dev/null 2>&1 && ok "HF login verified." || \
         warn "HF login could not be verified — downloads may be unauthenticated."
 fi
-
 # =============================================================================
-#  5 (continued). Run model selector
+#  5 (continued). Run model selector - SIMPLIFIED
 # =============================================================================
 NUM_MODELS=${#MODELS[@]}
 SEL_IDX="" SEL_HF_REPO="" SEL_GGUF="" SEL_NAME="" SEL_MIN_RAM="0" SEL_MIN_VRAM="0"
-SAFE_CTX=32768; USE_JINJA="--jinja"; GGUF_PATH=""; CHOICE=""
+SAFE_CTX=32768; USE_JINJA="--jinja"; GGUF_PATH=""
 
 show_model_table
 
+echo ""
 echo -e "${BLD}${CYN}════════════════════════════════════════════════════════════════${RST}"
 echo ""
 
-# Force stdin to be interactive
-exec < /dev/tty 2>/dev/null || true
+# Simple prompt without any tricks
+echo -e -n "${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL: ${RST}"
+read CHOICE
+echo ""
 
-while true; do
-    printf "${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL: ${RST}"
-    read CHOICE
-    echo ""
-    
-    if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
-        download_from_hf_url
-        break
-    elif [[ "$CHOICE" =~ ^[0-9]+$ ]] && (( CHOICE >= 1 && CHOICE <= NUM_MODELS )); then
-        break
-    else
-        warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
-        echo ""
-    fi
-done
-
-exec < /dev/tty 2>/dev/null || true
-
-if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
+if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
+    download_from_hf_url
+else
+    # Parse the selected model
+    SEL_GGUF=""
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
         idx="${idx// /}"
         if [[ "$idx" == "$CHOICE" ]]; then
-            SEL_IDX="$idx"
-            SEL_HF_REPO="${hf_repo// /}"
             SEL_GGUF="${gguf_file// /}"
             SEL_NAME="${dname# }"
             SEL_NAME="${SEL_NAME% }"
             SEL_MIN_RAM="${min_ram// /}"
             SEL_MIN_VRAM="${min_vram// /}"
+            SEL_HF_REPO="${hf_repo// /}"
             break
         fi
     done < <(printf '%s\n' "${MODELS[@]}")
 
-    [[ -z "$SEL_GGUF" ]] && die "Model parse failed: Could not extract model data for choice '$CHOICE'"
-    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: Could not extract RAM requirement"
-    
-    if [[ ! "$SEL_MIN_RAM" =~ ^[0-9]+$ ]]; then
-        die "SEL_MIN_RAM='$SEL_MIN_RAM' is not numeric"
-    fi
-    if [[ ! "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]]; then
-        die "SEL_MIN_VRAM='$SEL_MIN_VRAM' is not numeric"
+    if [[ -z "$SEL_GGUF" ]]; then
+        die "Invalid selection '$CHOICE'"
     fi
 
     ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
-
-    GRADE_SEL=$(grade_model "$SEL_MIN_RAM" "$SEL_MIN_VRAM" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
-    if [[ "$GRADE_SEL" == "F" ]]; then
-        warn "Grade F — this model will likely OOM on your hardware."
-        if [[ -t 0 ]]; then
-            printf "${BLD}Continue anyway? [y/N]: ${RST}"
-            read go_anyway
-            if [[ ! "$go_anyway" =~ ^[Yy]$ ]]; then
-                echo "Aborted."
-                exit 0
-            fi
-        else
-            warn "Non-interactive – continuing anyway."
-        fi
-    elif [[ "$GRADE_SEL" == "C" ]]; then
-        warn "Grade C — tight fit, expect slow responses."
-    fi
-
     apply_model_settings "$SEL_GGUF"
     GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
 fi
+
 
 # =============================================================================
 #  7. Download model from catalogue if not present
