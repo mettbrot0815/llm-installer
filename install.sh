@@ -1,39 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes Agent (official) + Goose
-#
-#  What this installs:
-#    - llama.cpp (CUDA or CPU)       → http://localhost:8080
-#    - Hermes Agent (NousResearch)   → CLI agent, configured for local server
-#    - Goose (block/goose)           → optional CLI agent (offered at end)
-#
-#  Key facts used to write this:
-#    • Official Hermes: NousResearch/hermes-agent (uses uv, NOT outsourc-e fork)
-#      - No WebAPI, no "python -m webapi" — that was a third-party fork
-#      - Config: ~/.hermes/config.yaml  provider: custom + base_url
-#      - OPENAI_BASE_URL / LLM_MODEL env vars are DEPRECATED — use config.yaml
-#      - Install: official script or uv + venv + pip install -e ".[all]"
-#    • Goose (block/goose): OpenAI-compat agent via GOOSE_PROVIDER=openai,
-#      OPENAI_HOST=http://localhost:8080, OPENAI_BASE_PATH=v1/chat/completions
-#      GOOSE_MODEL=<exact gguf filename>, OPENAI_API_KEY=sk-no-key-needed
-#    • Phi-4-mini repo renamed: bartowski/microsoft_Phi-4-mini-instruct-GGUF
-#      filename: microsoft_Phi-4-mini-instruct-Q4_K_M.gguf
-#    • Gemma 4: context 132K (128K + headroom), --no-jinja
-#    • start-llm.sh auto-start: added via ~/.bashrc on first interactive login
-#      using a "first-boot" marker file approach
-#
-#  Removed: outsourc-e WebAPI, Hermes Workspace, pnpm/Node.js, video gen,
-#           Qwen Code, all workspace aliases
 # =============================================================================
-set -eu pipefail
+set -euo pipefail
 
-# ── Strip Windows /mnt/* from PATH so Windows npm/node are never used ─────────
+# ── Strip Windows /mnt/* from PATH ──────────────────────────────────────────
 _wsl_clean_path=""
 IFS=':' read -ra _pp <<< "$PATH"
 for _p in "${_pp[@]}"; do [[ "$_p" == /mnt/* ]] && continue; _wsl_clean_path="${_wsl_clean_path:+${_wsl_clean_path}:}${_p}"; done
 export PATH="$_wsl_clean_path"; unset _wsl_clean_path _pp _p
 
-# ── Colour helpers ─────────────────────────────────────────────────────────────
+# ── Colour helpers ──────────────────────────────────────────────────────────
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 step() { echo -e "\n${CYN}[*] $*${RST}"; }
@@ -41,7 +18,7 @@ ok()   { echo -e "${GRN}[+] $*${RST}"; }
 warn() { echo -e "${YLW}[!] $*${RST}"; }
 die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
 
-# ── Temp file cleanup ──────────────────────────────────────────────────────────
+# ── Temp file cleanup ───────────────────────────────────────────────────────
 TMPFILES=()
 cleanup() {
     local f
@@ -200,8 +177,6 @@ fi
 
 # =============================================================================
 #  5. Model selection
-#
-#  Catalogue: idx|hf_repo|gguf_file|display_name|size_gb|ctx|min_ram|min_vram|tier|tags|desc
 # =============================================================================
 MODELS=(
     "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
@@ -222,7 +197,7 @@ MODELS=(
 MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
 
-# ── Grade helpers ─────────────────────────────────────────────────────────────
+# ── Grade helpers ──────────────────────────────────────────────────────────
 grade_model() {
     local min_ram="${1:?}" min_vram="${2:?}" ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
     local ram_h=$(( ram_gib - min_ram ))
@@ -251,7 +226,7 @@ grade_label() {
 }
 grade_color() { case $1 in S|A) echo "${GRN}";; B|C) echo "${YLW}";; *) echo "${RED}";; esac; }
 
-# ── Context + Jinja settings (FIXED: @sudoingX optimized for 9B on 3060) ─────
+# ── Context + Jinja settings (optimized for 9B on 3060) ─────────────────────
 apply_model_settings() {
     local gguf="$1"
     case "$gguf" in
@@ -269,7 +244,7 @@ apply_model_settings() {
         *google_gemma-3*|*gemma-3*)
             SAFE_CTX=131072
             USE_JINJA="--no-jinja"
-            ok "Gemma 3: Jinja disabled (strict role enforcement)" ;;
+            ok "Gemma 3: Jinja disabled" ;;
         *)
             SAFE_CTX=32768
             USE_JINJA="--jinja" ;;
@@ -277,7 +252,7 @@ apply_model_settings() {
     ok "Context window: ${SAFE_CTX} tokens"
 }
 
-# ── Draw model table ──────────────────────────────────────────────────────────
+# ── Draw model table (no clear) ────────────────────────────────────────────
 show_model_table() {
     echo -e "${BLD}${CYN}"
     cat <<'HDR'
@@ -342,7 +317,7 @@ HDR
     echo ""
 }
 
-# ── HF URL / repo download ────────────────────────────────────────────────────
+# ── HF URL / repo download ──────────────────────────────────────────────────
 download_from_hf_url() {
     echo ""
     echo -e "  ${BLD}Download via HuggingFace${RST}"
@@ -413,7 +388,7 @@ download_from_hf_url() {
 }
 
 # =============================================================================
-#  6. HF CLI setup (must happen before model selection for URL path)
+#  6. HF CLI setup
 # =============================================================================
 step "Setting up HuggingFace CLI..."
 export PATH="${HOME}/.local/bin:${PATH}"
@@ -443,54 +418,88 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
     "$HF_CLI" auth whoami &>/dev/null 2>&1 && ok "HF login verified." || \
         warn "HF login could not be verified — downloads may be unauthenticated."
 fi
+
 # =============================================================================
-#  5 (continued). Run model selector - SIMPLIFIED
+#  5 (continued). Run model selector - ORIGINAL WORKING CODE (restored)
 # =============================================================================
 NUM_MODELS=${#MODELS[@]}
 SEL_IDX="" SEL_HF_REPO="" SEL_GGUF="" SEL_NAME="" SEL_MIN_RAM="0" SEL_MIN_VRAM="0"
-SAFE_CTX=32768; USE_JINJA="--jinja"; GGUF_PATH=""
+SAFE_CTX=32768; USE_JINJA="--jinja"; GGUF_PATH=""; CHOICE=""
 
 show_model_table
 
-echo ""
-echo -e "${BLD}${CYN}════════════════════════════════════════════════════════════════${RST}"
-echo ""
+while true; do
+    if [[ ! -t 0 ]]; then
+        warn "Non-interactive – defaulting to model 5 (Qwen 3.5 9B)"
+        CHOICE="5"
+        break
+    fi
+    # Use read -r with a simple prompt (no complex echo)
+    printf "${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL: ${RST}"
+    read -r CHOICE || true   # || true prevents exit on EOF
+    echo ""
+    
+    if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
+        download_from_hf_url
+        break
+    elif [[ "$CHOICE" =~ ^[0-9]+$ ]] && (( CHOICE >= 1 && CHOICE <= NUM_MODELS )); then
+        break
+    else
+        warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
+        echo ""
+    fi
+done
 
-# Simple prompt without any tricks
-echo -e -n "${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL: ${RST}"
-read CHOICE
-echo ""
-
-if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
-    download_from_hf_url
-else
-    # Parse the selected model
-    SEL_GGUF=""
+if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
         idx="${idx// /}"
         if [[ "$idx" == "$CHOICE" ]]; then
+            SEL_IDX="$idx"
+            SEL_HF_REPO="${hf_repo// /}"
             SEL_GGUF="${gguf_file// /}"
             SEL_NAME="${dname# }"
             SEL_NAME="${SEL_NAME% }"
             SEL_MIN_RAM="${min_ram// /}"
             SEL_MIN_VRAM="${min_vram// /}"
-            SEL_HF_REPO="${hf_repo// /}"
             break
         fi
     done < <(printf '%s\n' "${MODELS[@]}")
 
-    if [[ -z "$SEL_GGUF" ]]; then
-        die "Invalid selection '$CHOICE'"
+    [[ -z "$SEL_GGUF" ]] && die "Model parse failed: Could not extract model data for choice '$CHOICE'"
+    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: Could not extract RAM requirement"
+    
+    if [[ ! "$SEL_MIN_RAM" =~ ^[0-9]+$ ]]; then
+        die "SEL_MIN_RAM='$SEL_MIN_RAM' is not numeric"
+    fi
+    if [[ ! "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]]; then
+        die "SEL_MIN_VRAM='$SEL_MIN_VRAM' is not numeric"
     fi
 
     ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
+
+    GRADE_SEL=$(grade_model "$SEL_MIN_RAM" "$SEL_MIN_VRAM" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
+    if [[ "$GRADE_SEL" == "F" ]]; then
+        warn "Grade F — this model will likely OOM on your hardware."
+        if [[ -t 0 ]]; then
+            printf "${BLD}Continue anyway? [y/N]: ${RST}"
+            read -r go_anyway || true
+            if [[ ! "$go_anyway" =~ ^[Yy]$ ]]; then
+                echo "Aborted."
+                exit 0
+            fi
+        else
+            warn "Non-interactive – continuing anyway."
+        fi
+    elif [[ "$GRADE_SEL" == "C" ]]; then
+        warn "Grade C — tight fit, expect slow responses."
+    fi
+
     apply_model_settings "$SEL_GGUF"
     GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
 fi
 
-
 # =============================================================================
-#  7. Download model from catalogue if not present
+#  7. Download model if not present
 # =============================================================================
 if [[ -f "$GGUF_PATH" ]]; then
     ok "Model already on disk: ${GGUF_PATH} — skipping download."
@@ -595,7 +604,7 @@ else
 fi
 
 # =============================================================================
-#  9. Hermes Agent — official NousResearch repo
+#  9. Hermes Agent
 # =============================================================================
 step "Installing Hermes Agent (official NousResearch)..."
 HERMES_AGENT_DIR="${HOME}/hermes-agent"
@@ -660,13 +669,11 @@ step "Configuring Hermes for local llama-server..."
 mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
 cat > "${HERMES_DIR}/.env" <<ENV
-# Hermes Agent — local llama-server configuration
-# Generated by install.sh
 OPENROUTER_API_KEY=sk-placeholder
 OPENAI_API_KEY=sk-no-key-needed
 OPENAI_BASE_URL=http://localhost:8080/v1
 ENV
-ok "~/.hermes/.env written (with OPENROUTER_API_KEY placeholder)"
+ok "~/.hermes/.env written"
 
 CONFIG_FILE="${HERMES_DIR}/config.yaml"
 EXAMPLE_CFG="${HERMES_AGENT_DIR}/cli-config.yaml.example"
@@ -705,14 +712,13 @@ with open(path, "w") as f:
 print("config.yaml written - PR #2 auto-detection active")
 PYCONF
 
-ok "config.yaml written — Hermes will auto-detect model from llama.cpp (PR #2)"
+ok "config.yaml written — Hermes will auto-detect model"
 
 mkdir -p "${HOME}/.config/systemd/user"
 cat > "${HOME}/.config/systemd/user/hermes-agent.service" <<HERMES_SVC
 [Unit]
-Description=Hermes Agent (NousResearch) — gateway/daemon mode
+Description=Hermes Agent gateway
 After=llama-server.service network.target
-Wants=llama-server.service
 
 [Service]
 Type=simple
@@ -727,7 +733,7 @@ Environment=PATH=${HOME}/.local/bin:/usr/local/cuda/bin:/usr/bin:/bin
 WantedBy=default.target
 HERMES_SVC
 
-ok "Hermes systemd service file created (disabled by default)"
+ok "Hermes systemd service file created"
 
 # =============================================================================
 #  10. Update pip
@@ -850,7 +856,7 @@ done
     warn "llama-server not responding in 30s — check: tail -f /tmp/llama-server.log"
 
 # =============================================================================
-#  13. Optional: Goose (block/goose)
+#  13. Optional: Goose
 # =============================================================================
 GOOSE_INSTALLED=false
 echo ""
