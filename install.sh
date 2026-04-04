@@ -1,16 +1,39 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes Agent (official) + Goose
+#
+#  What this installs:
+#    - llama.cpp (CUDA or CPU)       → http://localhost:8080
+#    - Hermes Agent (NousResearch)   → CLI agent, configured for local server
+#    - Goose (block/goose)           → optional CLI agent (offered at end)
+#
+#  Key facts used to write this:
+#    • Official Hermes: NousResearch/hermes-agent (uses uv, NOT outsourc-e fork)
+#      - No WebAPI, no "python -m webapi" — that was a third-party fork
+#      - Config: ~/.hermes/config.yaml  provider: custom + base_url
+#      - OPENAI_BASE_URL / LLM_MODEL env vars are DEPRECATED — use config.yaml
+#      - Install: official script or uv + venv + pip install -e ".[all]"
+#    • Goose (block/goose): OpenAI-compat agent via GOOSE_PROVIDER=openai,
+#      OPENAI_HOST=http://localhost:8080, OPENAI_BASE_PATH=v1/chat/completions
+#      GOOSE_MODEL=<exact gguf filename>, OPENAI_API_KEY=sk-no-key-needed
+#    • Phi-4-mini repo renamed: bartowski/microsoft_Phi-4-mini-instruct-GGUF
+#      filename: microsoft_Phi-4-mini-instruct-Q4_K_M.gguf
+#    • Gemma 4: context 132K (128K + headroom), --no-jinja
+#    • start-llm.sh auto-start: added via ~/.bashrc on first interactive login
+#      using a "first-boot" marker file approach
+#
+#  Removed: outsourc-e WebAPI, Hermes Workspace, pnpm/Node.js, video gen,
+#           Qwen Code, all workspace aliases
 # =============================================================================
 set -euo pipefail
 
-# ── Strip Windows /mnt/* from PATH ──────────────────────────────────────────
+# ── Strip Windows /mnt/* from PATH so Windows npm/node are never used ─────────
 _wsl_clean_path=""
 IFS=':' read -ra _pp <<< "$PATH"
 for _p in "${_pp[@]}"; do [[ "$_p" == /mnt/* ]] && continue; _wsl_clean_path="${_wsl_clean_path:+${_wsl_clean_path}:}${_p}"; done
 export PATH="$_wsl_clean_path"; unset _wsl_clean_path _pp _p
 
-# ── Colour helpers ──────────────────────────────────────────────────────────
+# ── Colour helpers ─────────────────────────────────────────────────────────────
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 step() { echo -e "\n${CYN}[*] $*${RST}"; }
@@ -18,7 +41,7 @@ ok()   { echo -e "${GRN}[+] $*${RST}"; }
 warn() { echo -e "${YLW}[!] $*${RST}"; }
 die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
 
-# ── Temp file cleanup ───────────────────────────────────────────────────────
+# ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
 cleanup() {
     local f
@@ -177,13 +200,23 @@ fi
 
 # =============================================================================
 #  5. Model selection
+#
+#  Catalogue: idx|hf_repo|gguf_file|display_name|size_gb|ctx|min_ram|min_vram|tier|tags|desc
+#
+#  Changes from previous version:
+#    • Phi-4-mini: repo renamed to bartowski/microsoft_Phi-4-mini-instruct-GGUF
+#      filename: microsoft_Phi-4-mini-instruct-Q4_K_M.gguf
+#    • Gemma 4 (12B it): context 132K, --no-jinja (as before for Gemma)
+#    • All models shown regardless of grade (F = too heavy, not hidden)
+#    • Local scan: ~/llm-models/*.gguf shown even if not in catalogue
+#    • 'u' option: download via HF URL or owner/repo
 # =============================================================================
 MODELS=(
     "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
     "2|unsloth/Qwen3.5-2B-GGUF|Qwen3.5-2B-Q4_K_M.gguf|Qwen 3.5 2B|1.0|256K|3|0|tiny|chat,multilingual|Alibaba · ultra-fast"
     "3|unsloth/Qwen3.5-4B-GGUF|Qwen3.5-4B-Q4_K_M.gguf|Qwen 3.5 4B|2.0|256K|4|0|small|chat,code|Alibaba · capable on CPU"
     "4|bartowski/microsoft_Phi-4-mini-instruct-GGUF|microsoft_Phi-4-mini-instruct-Q4_K_M.gguf|Phi-4 Mini 3.8B|2.0|16K|4|0|small|reasoning,code|Microsoft · strong reasoning"
-    "5|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|128K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on 3060"
+    "5|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on 3060"
     "6|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction"
     "7|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|32K|12|10|mid|code|#1 coding on 3060"
     "8|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|32K|14|10|mid|chat,code,reasoning|Strong planning"
@@ -197,7 +230,7 @@ MODELS=(
 MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
 
-# ── Grade helpers ──────────────────────────────────────────────────────────
+# ── Grade helpers ─────────────────────────────────────────────────────────────
 grade_model() {
     local min_ram="${1:?}" min_vram="${2:?}" ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
     local ram_h=$(( ram_gib - min_ram ))
@@ -226,34 +259,31 @@ grade_label() {
 }
 grade_color() { case $1 in S|A) echo "${GRN}";; B|C) echo "${YLW}";; *) echo "${RED}";; esac; }
 
-# ── Context + Jinja settings (optimized for 9B on 3060) ─────────────────────
+# ── Context + Jinja settings (shared by catalogue and URL paths) ──────────────
 apply_model_settings() {
     local gguf="$1"
     case "$gguf" in
         *Qwen3.5*)
-            SAFE_CTX=131072
-            USE_JINJA="--jinja"
-            ok "Qwen3.5: 128K context (@sudoingX optimized)" ;;
+            SAFE_CTX=262144; USE_JINJA="--jinja"
+            ok "Qwen3.5: full 256K context" ;;
         *Llama-3.1*|*Llama-3.3*|*Qwen3-30B*)
-            SAFE_CTX=131072
-            USE_JINJA="--jinja" ;;
+            SAFE_CTX=131072; USE_JINJA="--jinja" ;;
         *google_gemma-4*|*gemma-4*)
-            SAFE_CTX=135168
-            USE_JINJA="--no-jinja"
+            # Gemma 4: 132K context, Jinja disabled (strict role enforcement)
+            SAFE_CTX=135168; USE_JINJA="--no-jinja"
             ok "Gemma 4: 132K context, Jinja disabled" ;;
         *google_gemma-3*|*gemma-3*)
-            SAFE_CTX=131072
-            USE_JINJA="--no-jinja"
-            ok "Gemma 3: Jinja disabled" ;;
+            SAFE_CTX=131072; USE_JINJA="--no-jinja"
+            ok "Gemma 3: Jinja disabled (strict role enforcement)" ;;
         *)
-            SAFE_CTX=32768
-            USE_JINJA="--jinja" ;;
+            SAFE_CTX=32768; USE_JINJA="--jinja" ;;
     esac
     ok "Context window: ${SAFE_CTX} tokens"
 }
 
-# ── Draw model table (no clear) ────────────────────────────────────────────
+# ── Draw model table ──────────────────────────────────────────────────────────
 show_model_table() {
+    /usr/bin/clear 2>/dev/null || true
     echo -e "${BLD}${CYN}"
     cat <<'HDR'
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -287,11 +317,13 @@ HDR
         GRADE=$(grade_model "$min_ram" "$min_vram" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
         GC=$(grade_color "$GRADE")
         GL=$(grade_label "$GRADE")
+        # Mark downloaded if file exists in MODEL_DIR (downloaded OR copied there)
         [[ -f "${MODEL_DIR}/${gguf_file}" ]] && cached=" ${CYN}↓${RST}" || cached=""
         tag_display="${tags//,/ }"
         echo -e "  ${BLD}$(printf '%2s' "$idx")${RST}  $(printf '%-26s' "$dname")  $(printf '%5s' "$size_gb") GB  $(printf '%-7s' "$ctx")  ${GC}$(printf '%-13s' "$GL")${RST}  $(printf '%-24s' "$tag_display") $cached"
     done < <(printf '%s\n' "${MODELS[@]}")
 
+    # Show locally present GGUFs not in catalogue (manually copied)
     local extra_count=0 f fname
     for f in "${MODEL_DIR}"/*.gguf; do
         [[ -f "$f" ]] || continue
@@ -317,7 +349,7 @@ HDR
     echo ""
 }
 
-# ── HF URL / repo download ──────────────────────────────────────────────────
+# ── HF URL / repo download ────────────────────────────────────────────────────
 download_from_hf_url() {
     echo ""
     echo -e "  ${BLD}Download via HuggingFace${RST}"
@@ -388,7 +420,7 @@ download_from_hf_url() {
 }
 
 # =============================================================================
-#  6. HF CLI setup
+#  6. HF CLI setup (must happen before model selection for URL path)
 # =============================================================================
 step "Setting up HuggingFace CLI..."
 export PATH="${HOME}/.local/bin:${PATH}"
@@ -420,7 +452,7 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
 fi
 
 # =============================================================================
-#  5 (continued). Run model selector - ORIGINAL WORKING CODE (restored)
+#  5 (continued). Run model selector
 # =============================================================================
 NUM_MODELS=${#MODELS[@]}
 SEL_IDX="" SEL_HF_REPO="" SEL_GGUF="" SEL_NAME="" SEL_MIN_RAM="0" SEL_MIN_VRAM="0"
@@ -431,49 +463,32 @@ show_model_table
 while true; do
     if [[ ! -t 0 ]]; then
         warn "Non-interactive – defaulting to model 5 (Qwen 3.5 9B)"
-        CHOICE="5"
-        break
+        CHOICE="5"; break
     fi
-    # Use read -r with a simple prompt (no complex echo)
-    printf "${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL: ${RST}"
-    read -r CHOICE || true   # || true prevents exit on EOF
-    echo ""
-    
+    read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE
     if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
-        download_from_hf_url
-        break
+        download_from_hf_url; break
     elif [[ "$CHOICE" =~ ^[0-9]+$ ]] && (( CHOICE >= 1 && CHOICE <= NUM_MODELS )); then
         break
-    else
-        warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
-        echo ""
     fi
+    warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
 done
 
 if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
         idx="${idx// /}"
         if [[ "$idx" == "$CHOICE" ]]; then
-            SEL_IDX="$idx"
-            SEL_HF_REPO="${hf_repo// /}"
-            SEL_GGUF="${gguf_file// /}"
-            SEL_NAME="${dname# }"
-            SEL_NAME="${SEL_NAME% }"
-            SEL_MIN_RAM="${min_ram// /}"
-            SEL_MIN_VRAM="${min_vram// /}"
+            SEL_IDX="$idx"; SEL_HF_REPO="${hf_repo// /}"; SEL_GGUF="${gguf_file// /}"
+            SEL_NAME="${dname# }"; SEL_NAME="${SEL_NAME% }"
+            SEL_MIN_RAM="${min_ram// /}"; SEL_MIN_VRAM="${min_vram// /}"
             break
         fi
     done < <(printf '%s\n' "${MODELS[@]}")
 
-    [[ -z "$SEL_GGUF" ]] && die "Model parse failed: Could not extract model data for choice '$CHOICE'"
-    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: Could not extract RAM requirement"
-    
-    if [[ ! "$SEL_MIN_RAM" =~ ^[0-9]+$ ]]; then
-        die "SEL_MIN_RAM='$SEL_MIN_RAM' is not numeric"
-    fi
-    if [[ ! "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]]; then
-        die "SEL_MIN_VRAM='$SEL_MIN_VRAM' is not numeric"
-    fi
+    [[ -z "$SEL_GGUF"    ]] && die "Model parse failed: SEL_GGUF empty."
+    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: SEL_MIN_RAM empty."
+    [[ "$SEL_MIN_RAM"  =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='$SEL_MIN_RAM' not numeric."
+    [[ "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM' not numeric."
 
     ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
 
@@ -481,12 +496,8 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     if [[ "$GRADE_SEL" == "F" ]]; then
         warn "Grade F — this model will likely OOM on your hardware."
         if [[ -t 0 ]]; then
-            printf "${BLD}Continue anyway? [y/N]: ${RST}"
-            read -r go_anyway || true
-            if [[ ! "$go_anyway" =~ ^[Yy]$ ]]; then
-                echo "Aborted."
-                exit 0
-            fi
+            read -rp "  Continue anyway? [y/N]: " go_anyway
+            [[ "$go_anyway" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
         else
             warn "Non-interactive – continuing anyway."
         fi
@@ -499,7 +510,7 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
 fi
 
 # =============================================================================
-#  7. Download model if not present
+#  7. Download model from catalogue if not present
 # =============================================================================
 if [[ -f "$GGUF_PATH" ]]; then
     ok "Model already on disk: ${GGUF_PATH} — skipping download."
@@ -510,6 +521,7 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     AVAIL_KB=$(df -k "${MODEL_DIR}" | awk 'NR==2 {print $4}')
     AVAIL_GB=$(( AVAIL_KB / 1024 / 1024 ))
 
+    # Exact index match for size (avoids "1" matching "11")
     REQ_GB=""
     while IFS='|' read -r idx _ _ _ size_gb _ _ _ _ _ _; do
         [[ "${idx// /}" == "$CHOICE" ]] && { REQ_GB="${size_gb// /}"; break; }
@@ -604,7 +616,13 @@ else
 fi
 
 # =============================================================================
-#  9. Hermes Agent
+#  9. Hermes Agent — official NousResearch repo
+#
+#  Install method: official install script (handles uv, venv, Node, symlink)
+#  Config: ~/.hermes/config.yaml with provider: custom + base_url
+#  NOTE: No WebAPI, no "python -m webapi" — that was the outsourc-e fork only.
+#  The OPENAI_BASE_URL + LLM_MODEL env vars are DEPRECATED per official docs.
+#  Use config.yaml exclusively.
 # =============================================================================
 step "Installing Hermes Agent (official NousResearch)..."
 HERMES_AGENT_DIR="${HOME}/hermes-agent"
@@ -612,6 +630,7 @@ HERMES_DIR="${HOME}/.hermes"
 
 export PATH="${HOME}/.local/bin:${PATH}"
 
+# Remove outsourc-e fork if present (different git remote)
 if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
     CURRENT_REMOTE=$(git -C "${HERMES_AGENT_DIR}" remote get-url origin 2>/dev/null || echo "")
     if [[ "$CURRENT_REMOTE" == *"outsourc-e"* ]]; then
@@ -620,14 +639,17 @@ if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
     fi
 fi
 
+# Use official install script (handles Python, Node, uv, venv, symlink)
 if ! command -v hermes &>/dev/null || [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
     step "Running official Hermes Agent install script..."
     curl -fsSL --connect-timeout 15 --max-time 300 \
         https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
         -o /tmp/hermes-install.sh || die "Failed to download Hermes install script."
     register_tmp "/tmp/hermes-install.sh"
+    # Run non-interactively — the script handles everything
     bash /tmp/hermes-install.sh || {
         warn "Official install script failed — falling back to manual install."
+        # Manual fallback: uv + venv
         if ! command -v uv &>/dev/null; then
             curl -LsSf https://astral.sh/uv/install.sh | sh
             export PATH="${HOME}/.cargo/bin:${HOME}/.local/bin:${PATH}"
@@ -648,6 +670,7 @@ else
         cd "${HERMES_AGENT_DIR}"
         git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || \
             warn "Hermes git update failed (continuing with existing code)"
+        # Re-install in case deps changed
         if command -v uv &>/dev/null && [[ -d ".venv" ]]; then
             VIRTUAL_ENV="${HERMES_AGENT_DIR}/.venv" uv pip install -e ".[all]" --quiet 2>/dev/null || true
         fi
@@ -655,6 +678,7 @@ else
     fi
 fi
 
+# Verify hermes is available
 export PATH="${HOME}/.local/bin:${PATH}"
 if ! command -v hermes &>/dev/null; then
     die "hermes command not found after install. Check output above for errors."
@@ -663,22 +687,37 @@ ok "Hermes Agent: $(hermes --version 2>/dev/null || echo 'installed')"
 
 # =============================================================================
 #  9b. Configure Hermes → local llama-server
+#
+#  Official config format (2025):
+#    provider: custom
+#    base_url: http://localhost:8080/v1   (with /v1)
+#    model name: exact GGUF filename (what llama-server reports as model ID)
+#
+#  Known issue: provider == "custom" may fall through to OpenRouter in some
+#  versions (issue #4172). Workaround: also set OPENAI_BASE_URL + OPENAI_API_KEY
+#  in ~/.hermes/.env as belt-and-suspenders. Hermes reads .env on startup.
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
 
 mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
+# .env: belt-and-suspenders for versions where config.yaml provider routing bugs out
 cat > "${HERMES_DIR}/.env" <<ENV
-OPENROUTER_API_KEY=sk-placeholder
+# Hermes Agent — local llama-server configuration
+# Generated by install.sh
 OPENAI_API_KEY=sk-no-key-needed
 OPENAI_BASE_URL=http://localhost:8080/v1
+# Note: LLM_MODEL is deprecated in new versions; use config.yaml
 ENV
-ok "~/.hermes/.env written"
+ok "~/.hermes/.env written."
 
+# config.yaml: primary config (overrides .env in current Hermes versions)
+# Use cp to preserve any existing user customisations when updating
 CONFIG_FILE="${HERMES_DIR}/config.yaml"
 EXAMPLE_CFG="${HERMES_AGENT_DIR}/cli-config.yaml.example"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
+    # Use example as base if available, otherwise write from scratch
     if [[ -f "$EXAMPLE_CFG" ]]; then
         cp "$EXAMPLE_CFG" "$CONFIG_FILE"
         ok "config.yaml initialised from example."
@@ -687,9 +726,11 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     fi
 fi
 
+# Patch / write the model block
 python3 - <<PYCONF
 import re, sys
 path = "${CONFIG_FILE}"
+model_name = "${SEL_NAME}"
 base_url = "http://localhost:8080/v1"
 
 try:
@@ -698,6 +739,7 @@ try:
 except FileNotFoundError:
     content = ""
 
+# Remove any existing model: block completely
 content = re.sub(r'^model:.*?(?=^\S|\Z)', '', content, flags=re.MULTILINE | re.DOTALL)
 content = content.rstrip()
 
@@ -705,20 +747,25 @@ new_block = f"""
 model:
   provider: custom
   base_url: {base_url}
+  model: {model_name}
 """
 
 with open(path, "w") as f:
     f.write(content + new_block + "\n")
-print("config.yaml written - PR #2 auto-detection active")
+print("config.yaml model block written.")
 PYCONF
 
-ok "config.yaml written — Hermes will auto-detect model"
+ok "config.yaml written — Hermes → local llama-server (${SEL_NAME})"
+ok "To verify after start: hermes /provider"
 
+# Hermes systemd service (optional — runs hermes in daemon/gateway mode)
+# Note: for CLI use, no daemon is needed; service is only if you use gateway.
 mkdir -p "${HOME}/.config/systemd/user"
 cat > "${HOME}/.config/systemd/user/hermes-agent.service" <<HERMES_SVC
 [Unit]
-Description=Hermes Agent gateway
+Description=Hermes Agent (NousResearch) — gateway/daemon mode
 After=llama-server.service network.target
+Wants=llama-server.service
 
 [Service]
 Type=simple
@@ -733,7 +780,8 @@ Environment=PATH=${HOME}/.local/bin:/usr/local/cuda/bin:/usr/bin:/bin
 WantedBy=default.target
 HERMES_SVC
 
-ok "Hermes systemd service file created"
+# Don't auto-enable hermes gateway — user should set up gateway manually
+ok "Hermes systemd service file created (disabled by default — enable with: systemctl --user enable hermes-agent)"
 
 # =============================================================================
 #  10. Update pip
@@ -742,18 +790,31 @@ pip3 install --user --break-system-packages --upgrade pip setuptools wheel 2>/de
 
 # =============================================================================
 #  11. Create ~/start-llm.sh
+#
+#  Starts llama-server only (no WebAPI).
+#  envsubst allowlist: only installer-time vars substituted.
+#  Runtime vars ($LLAMA_PID, $idx, $kill_choice) stay as literals.
+#
+#  Auto-start fix: the script includes a "first-boot" check so that when
+#  a new WSL terminal opens, it auto-starts llama-server if not running.
+#  This is done via ~/.bashrc (added in section 12).
 # =============================================================================
 step "Creating launch script..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
 
 cat > "${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
 #!/usr/bin/env bash
+# start-llm.sh – generated by install.sh
+# Starts: llama-server (port 8080)
+# Model : ${SEL_NAME}
+
 GGUF="${GGUF_PATH}"
 MODEL_NAME="${SEL_NAME}"
 LLAMA_BIN="${LLAMA_SERVER_BIN}"
 SAFE_CTX="${SAFE_CTX}"
 USE_JINJA="${USE_JINJA}"
 
+# Check if already running
 LLAMA_PID=$(pgrep -f "llama-server" 2>/dev/null || true)
 
 if [[ -n "$LLAMA_PID" ]]; then
@@ -809,7 +870,7 @@ chmod +x "$LAUNCH_SCRIPT"
 ok "Launch script: ~/start-llm.sh"
 
 # =============================================================================
-#  12. systemd user service — llama-server
+#  12. systemd user service — llama-server (direct, quoted paths)
 # =============================================================================
 step "Creating systemd user service for llama-server..."
 mkdir -p "${HOME}/.config/systemd/user"
@@ -840,6 +901,7 @@ else
     warn "systemd --user unavailable — use 'start-llm' to start manually."
 fi
 
+# Start llama-server now
 step "Starting llama-server..."
 nohup bash "$LAUNCH_SCRIPT" < /dev/null > /tmp/llama-server.log 2>&1 &
 ok "llama-server starting (log: tail -f /tmp/llama-server.log)"
@@ -856,26 +918,31 @@ done
     warn "llama-server not responding in 30s — check: tail -f /tmp/llama-server.log"
 
 # =============================================================================
-#  13. Optional: Goose
+#  13. Optional: Goose (block/goose)
+#
+#  Goose is a Rust-based extensible agent. It connects to llama-server via
+#  the OpenAI-compatible API. Config stored in ~/.config/goose/config.yaml.
+#  The model ID for Goose must be the exact filename llama-server reports
+#  (i.e. the GGUF filename), because that's what /v1/models returns.
 # =============================================================================
 GOOSE_INSTALLED=false
 echo ""
 echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
 echo -e "  Rust-based extensible agent · 30k+ stars · Linux Foundation project"
+echo -e "  Works with any OpenAI-compatible API · MCP support · developer tools"
 echo ""
-
-if command -v goose &>/dev/null; then
-    ok "Goose already installed: $(goose --version 2>/dev/null || echo 'installed')"
-    GOOSE_INSTALLED=true
+if [[ -t 0 ]]; then
+    read -rp "  Install Goose? [y/N]: " install_goose
 else
-    if [[ -t 0 ]]; then
-        read -rp "  Install Goose? [y/N]: " install_goose
-    else
-        install_goose="n"
-    fi
+    install_goose="n"
+fi
 
-    if [[ "$install_goose" =~ ^[Yy]$ ]]; then
-        step "Installing Goose CLI..."
+if [[ "$install_goose" =~ ^[Yy]$ ]]; then
+    step "Installing Goose CLI..."
+    if command -v goose &>/dev/null; then
+        ok "Goose already installed: $(goose --version 2>/dev/null || echo 'installed')"
+        GOOSE_INSTALLED=true
+    else
         if curl -fsSL --connect-timeout 15 --max-time 120 \
             https://github.com/block/goose/releases/download/stable/download_cli.sh \
             -o /tmp/goose-install.sh 2>/dev/null; then
@@ -893,13 +960,17 @@ else
             warn "Goose not found after install — may need PATH update."
         fi
     fi
-fi
 
-if [[ "$GOOSE_INSTALLED" == "true" ]]; then
-    step "Configuring Goose for local llama-server..."
-    mkdir -p "${HOME}/.config/goose"
+    if [[ "$GOOSE_INSTALLED" == "true" ]]; then
+        step "Configuring Goose for local llama-server..."
+        mkdir -p "${HOME}/.config/goose"
 
-    cat > "${HOME}/.config/goose/config.yaml" <<GOOSE_CFG
+        # Goose config: GOOSE_PROVIDER=openai, OPENAI_HOST (no /v1),
+        # OPENAI_BASE_PATH=v1/chat/completions, GOOSE_MODEL=exact gguf filename,
+        # OPENAI_API_KEY=any non-empty string (local server ignores it)
+        cat > "${HOME}/.config/goose/config.yaml" <<GOOSE_CFG
+# Goose configuration — local llama-server
+# Generated by install.sh
 GOOSE_PROVIDER: openai
 GOOSE_MODEL: ${SEL_GGUF}
 GOOSE_TEMPERATURE: 0.75
@@ -917,26 +988,39 @@ extensions:
     timeout: 300
     type: builtin
 GOOSE_CFG
-    ok "Goose configured → http://localhost:8080"
+        ok "Goose configured → http://localhost:8080"
+        warn "Important: OPENAI_HOST must NOT include /v1 — that goes in OPENAI_BASE_PATH"
+        warn "Goose uses the GGUF filename as model ID: ${SEL_GGUF}"
+    fi
+else
+    ok "Skipping Goose install."
 fi
 
 # =============================================================================
 #  14. ~/.bashrc helpers
+#
+#  Auto-start fix: adds a check at the bottom of ~/.bashrc that starts
+#  llama-server automatically when a new interactive terminal opens,
+#  if it's not already running. Uses a marker file to run only once per
+#  WSL session (not every terminal tab).
 # =============================================================================
 step "Adding helpers to ~/.bashrc..."
 
+# Resolve own path so switch-model works after install
 SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
 
 MARKER="# === LLM setup (added by install.sh) ==="
 if grep -qF "$MARKER" "${HOME}/.bashrc" 2>/dev/null; then
     ok "Helpers already in ~/.bashrc — skipping."
 else
+    # Static section — expanded now
     cat >> "${HOME}/.bashrc" <<BASHRC_EXPANDED
 
 ${MARKER}
 [[ -n "\${__LLM_BASHRC_LOADED:-}" ]] && return 0
 export __LLM_BASHRC_LOADED=1
 
+# Strip Windows /mnt/* from PATH
 _cp=""; IFS=':' read -ra _pts <<< "\$PATH"
 for _pt in "\${_pts[@]}"; do [[ "\$_pt" == /mnt/* ]] && continue; _cp="\${_cp:+\${_cp}:}\${_pt}"; done
 export PATH="\$_cp"; unset _cp _pts _pt
@@ -967,6 +1051,7 @@ vram() {
         echo "nvidia-smi not available"
 }
 
+# llm-models: scan ~/llm-models for ALL .gguf files (downloaded or copied)
 llm-models() {
     local active_model=""
     [[ -f ~/start-llm.sh ]] && \
@@ -1030,8 +1115,12 @@ show_llm_summary() {
     echo ""
 }
 
+# ── Auto-start llama-server on first interactive terminal per WSL session ──
+# Uses a per-session marker in /tmp so it only fires once, not every tab.
 _llm_autostart() {
-    [[ $- != *i* ]] && return 0
+    [[ $- != *i* ]] && return 0  # non-interactive shell — skip
+    local marker="/tmp/.llm_autostarted_$$_$(date +%Y%m%d)"
+    # Check if any llama-server is already running
     if ! pgrep -f "llama-server" &>/dev/null && [[ ! -f "/tmp/.llm_session_started" ]]; then
         touch /tmp/.llm_session_started
         echo -e "${YLW}[LLM] llama-server not running — starting in background...${RST}"
@@ -1128,7 +1217,8 @@ echo -e "  ${CYN}vram${RST}           GPU/VRAM usage"
 echo ""
 echo -e " ${BLD}Hermes local config:${RST}"
 echo -e "  ~/.hermes/config.yaml  — provider/model settings"
-echo -e "  ~/.hermes/.env         — OPENROUTER_API_KEY=sk-placeholder (required!)"
+echo -e "  Run ${CYN}hermes /provider${RST} inside chat to verify routing"
+echo -e "  Run ${CYN}hermes model${RST} to switch model interactively"
 echo ""
 if [[ "$GOOSE_INSTALLED" == "true" ]]; then
 echo -e " ${BLD}Goose local config:${RST}"
