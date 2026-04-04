@@ -52,6 +52,18 @@ cleanup() {
 trap cleanup EXIT INT TERM
 register_tmp() { TMPFILES+=("$1"); }
 
+# ── Interactive Input Fix ──────────────────────────────────────────────────────
+# When running via curl | bash, stdin is the pipe. We must read from TTY.
+TTY_INPUT="/dev/tty"
+if [[ ! -c "$TTY_INPUT" ]]; then
+    # If no TTY is available (e.g., strictly non-interactive CI), warn and try default
+    warn "No controlling terminal detected (curl | bash mode)."
+    warn "Interactive prompts will default or fail if input is required."
+    # Fallback: allow script to run non-interactively for specific inputs if designed
+    # But for this script, interaction is key for Model Selection.
+    # We will handle this per-prompt.
+fi
+
 echo -e "${BLD}${CYN}"
 cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════╗
@@ -90,10 +102,11 @@ if [[ -z "$HF_TOKEN" ]]; then
     echo -e "  • Faster downloads · higher rate limits · gated model access"
     echo -e "  ${CYN}https://huggingface.co/settings/tokens${RST}"
     echo ""
-    if [[ -t 0 ]]; then
-        read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn
+    # FIX: Use TTY for read
+    if [[ -c "$TTY_INPUT" ]]; then
+        read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn < "$TTY_INPUT"
         if [[ "$hf_yn" =~ ^[Yy]$ ]]; then
-            read -rp "  Paste your token (starts with hf_): " HF_TOKEN
+            read -rp "  Paste your token (starts with hf_): " HF_TOKEN < "$TTY_INPUT"
             HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
             [[ "$HF_TOKEN" =~ ^hf_ ]] && ok "Token accepted." || \
                 warn "Token doesn't start with 'hf_' — using anyway, double-check it."
@@ -167,8 +180,8 @@ echo -e "  GPU  : ${GPU_NAME}   VRAM: ${VRAM_GiB} GiB   CUDA: ${HAS_NVIDIA}"
 
 if [[ "$HAS_NVIDIA" != "true" ]]; then
     warn "No NVIDIA GPU — llama.cpp will be CPU-only (much slower)."
-    if [[ -t 0 ]]; then
-        read -rp "  Continue with CPU-only build? [y/N]: " cpu_ok
+    if [[ -c "$TTY_INPUT" ]]; then
+        read -rp "  Continue with CPU-only build? [y/N]: " cpu_ok < "$TTY_INPUT"
         [[ "$cpu_ok" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
     else
         warn "Non-interactive – continuing with CPU-only build."
@@ -232,7 +245,13 @@ mkdir -p "$MODEL_DIR"
 
 # ── Grade helpers ─────────────────────────────────────────────────────────────
 grade_model() {
-    local min_ram="${1:?}" min_vram="${2:?}" ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
+    # Robust handling: default to 0 if args empty
+    local min_ram="${1:-0}"
+    local min_vram="${2:-0}"
+    local ram_gib="${3:-0}"
+    local vram_gib="${4:-0}"
+    local has_nvidia="${5:-false}"
+
     local ram_h=$(( ram_gib - min_ram ))
     if [[ $min_vram -gt 0 && "$has_nvidia" == "true" ]]; then
         local vram_h=$(( vram_gib - min_vram ))
@@ -333,7 +352,7 @@ HDR
             [[ "${cat_g// /}" == "$fname" ]] && { in_cat=true; break; }
         done < <(printf '%s\n' "${MODELS[@]}")
         if [[ "$in_cat" == "false" ]]; then
-            (( extra_count++ ))
+            extra_count=$((extra_count + 1))
             (( extra_count == 1 )) && echo -e "\n  ${BLD}▸ LOCAL  (in ~/llm-models, not in catalogue)${RST}"
             local sz; sz=$(du -h "$f" 2>/dev/null | cut -f1)
             echo -e "  ${CYN}↓${RST}  ${fname}  (${sz})"
@@ -357,7 +376,15 @@ download_from_hf_url() {
     echo -e "    https://huggingface.co/owner/repo/resolve/main/file.gguf"
     echo -e "    owner/repo-name  (repo, you pick the file)"
     echo ""
-    read -rp "  Paste URL or repo: " HF_INPUT
+
+    # FIX: Read from TTY
+    local HF_INPUT=""
+    if [[ -c "$TTY_INPUT" ]]; then
+        read -rp "  Paste URL or repo: " HF_INPUT < "$TTY_INPUT"
+    else
+        die "No TTY for input."
+    fi
+
     HF_INPUT="${HF_INPUT//[[:space:]]/}"
     [[ -z "$HF_INPUT" ]] && die "No input provided."
 
@@ -386,16 +413,24 @@ download_from_hf_url() {
             awk '{print $NF}' | xargs -I{} basename {} 2>/dev/null | sort)
         if [[ ${#GGUF_FILES[@]} -eq 0 ]]; then
             warn "Could not auto-list files. Enter filename manually."
-            read -rp "  Filename (e.g. model-Q4_K_M.gguf): " SEL_GGUF
+            if [[ -c "$TTY_INPUT" ]]; then
+                read -rp "  Filename (e.g. model-Q4_K_M.gguf): " SEL_GGUF < "$TTY_INPUT"
+            else
+                die "No TTY for input."
+            fi
             SEL_GGUF="${SEL_GGUF//[[:space:]]/}"; [[ -z "$SEL_GGUF" ]] && die "No filename."
         elif [[ ${#GGUF_FILES[@]} -eq 1 ]]; then
             SEL_GGUF="${GGUF_FILES[0]}"; ok "Only one GGUF: ${SEL_GGUF}"
         else
             echo ""; echo -e "  ${BLD}Available GGUFs:${RST}"
-            local fi=1; for gf in "${GGUF_FILES[@]}"; do printf "  %2d  %s\n" "$fi" "$gf"; (( fi++ )); done
+            local fi=1; for gf in "${GGUF_FILES[@]}"; do printf "  %2d  %s\n" "$fi" "$gf"; fi=$((fi + 1)); done
             echo ""
             while true; do
-                read -rp "  Enter number [1-${#GGUF_FILES[@]}]: " gf_choice
+                if [[ -c "$TTY_INPUT" ]]; then
+                    read -rp "  Enter number [1-${#GGUF_FILES[@]}]: " gf_choice < "$TTY_INPUT"
+                else
+                    die "No TTY for input."
+                fi
                 [[ "$gf_choice" =~ ^[0-9]+$ ]] && (( gf_choice >= 1 && gf_choice <= ${#GGUF_FILES[@]} )) && break
                 warn "Invalid choice."
             done
@@ -461,11 +496,15 @@ SAFE_CTX=32768; USE_JINJA="--jinja"; GGUF_PATH=""; CHOICE=""
 show_model_table
 
 while true; do
-    if [[ ! -t 0 ]]; then
+    # FIX: Check for TTY explicitly
+    if [[ ! -c "$TTY_INPUT" ]]; then
         warn "Non-interactive – defaulting to model 5 (Qwen 3.5 9B)"
         CHOICE="5"; break
     fi
-    read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE
+
+    # FIX: Read from TTY
+    read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE < "$TTY_INPUT"
+
     if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
         download_from_hf_url; break
     elif [[ "$CHOICE" =~ ^[0-9]+$ ]] && (( CHOICE >= 1 && CHOICE <= NUM_MODELS )); then
@@ -495,8 +534,8 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     GRADE_SEL=$(grade_model "$SEL_MIN_RAM" "$SEL_MIN_VRAM" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
     if [[ "$GRADE_SEL" == "F" ]]; then
         warn "Grade F — this model will likely OOM on your hardware."
-        if [[ -t 0 ]]; then
-            read -rp "  Continue anyway? [y/N]: " go_anyway
+        if [[ -c "$TTY_INPUT" ]]; then
+            read -rp "  Continue anyway? [y/N]: " go_anyway < "$TTY_INPUT"
             [[ "$go_anyway" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
         else
             warn "Non-interactive – continuing anyway."
@@ -931,8 +970,9 @@ echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
 echo -e "  Rust-based extensible agent · 30k+ stars · Linux Foundation project"
 echo -e "  Works with any OpenAI-compatible API · MCP support · developer tools"
 echo ""
-if [[ -t 0 ]]; then
-    read -rp "  Install Goose? [y/N]: " install_goose
+
+if [[ -c "$TTY_INPUT" ]]; then
+    read -rp "  Install Goose? [y/N]: " install_goose < "$TTY_INPUT"
 else
     install_goose="n"
 fi
@@ -1016,7 +1056,7 @@ else
     # Static section — expanded now
     cat >> "${HOME}/.bashrc" <<BASHRC_EXPANDED
 
-${MARKER}
+ ${MARKER}
 [[ -n "\${__LLM_BASHRC_LOADED:-}" ]] && return 0
 export __LLM_BASHRC_LOADED=1
 
