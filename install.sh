@@ -202,14 +202,6 @@ fi
 #  5. Model selection
 #
 #  Catalogue: idx|hf_repo|gguf_file|display_name|size_gb|ctx|min_ram|min_vram|tier|tags|desc
-#
-#  Changes from previous version:
-#    • Phi-4-mini: repo renamed to bartowski/microsoft_Phi-4-mini-instruct-GGUF
-#      filename: microsoft_Phi-4-mini-instruct-Q4_K_M.gguf
-#    • Gemma 4 (12B it): context 132K, --no-jinja (as before for Gemma)
-#    • All models shown regardless of grade (F = too heavy, not hidden)
-#    • Local scan: ~/llm-models/*.gguf shown even if not in catalogue
-#    • 'u' option: download via HF URL or owner/repo
 # =============================================================================
 MODELS=(
     "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
@@ -264,8 +256,6 @@ apply_model_settings() {
     local gguf="$1"
     case "$gguf" in
         *Qwen3.5*)
-            # @sudoingX: 128K ist das Sweet Spot für 9B auf 3060 12GB
-            # 256K frisst zu viel VRAM für wenig Mehrwert
             SAFE_CTX=131072
             USE_JINJA="--jinja"
             ok "Qwen3.5: 128K context (@sudoingX optimized)" ;;
@@ -289,7 +279,6 @@ apply_model_settings() {
 
 # ── Draw model table ──────────────────────────────────────────────────────────
 show_model_table() {
-    /usr/bin/clear 2>/dev/null || true
     echo -e "${BLD}${CYN}"
     cat <<'HDR'
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -323,13 +312,11 @@ HDR
         GRADE=$(grade_model "$min_ram" "$min_vram" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
         GC=$(grade_color "$GRADE")
         GL=$(grade_label "$GRADE")
-        # Mark downloaded if file exists in MODEL_DIR (downloaded OR copied there)
         [[ -f "${MODEL_DIR}/${gguf_file}" ]] && cached=" ${CYN}↓${RST}" || cached=""
         tag_display="${tags//,/ }"
         echo -e "  ${BLD}$(printf '%2s' "$idx")${RST}  $(printf '%-26s' "$dname")  $(printf '%5s' "$size_gb") GB  $(printf '%-7s' "$ctx")  ${GC}$(printf '%-13s' "$GL")${RST}  $(printf '%-24s' "$tag_display") $cached"
     done < <(printf '%s\n' "${MODELS[@]}")
 
-    # Show locally present GGUFs not in catalogue (manually copied)
     local extra_count=0 f fname
     for f in "${MODEL_DIR}"/*.gguf; do
         [[ -f "$f" ]] || continue
@@ -466,35 +453,54 @@ SAFE_CTX=32768; USE_JINJA="--jinja"; GGUF_PATH=""; CHOICE=""
 
 show_model_table
 
+echo -e "${BLD}${CYN}════════════════════════════════════════════════════════════════${RST}"
+echo ""
+
+# Force stdin to be interactive
+exec < /dev/tty 2>/dev/null || true
+
 while true; do
-    if [[ ! -t 0 ]]; then
-        warn "Non-interactive – defaulting to model 5 (Qwen 3.5 9B)"
-        CHOICE="5"; break
-    fi
-    read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE
+    printf "${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL: ${RST}"
+    read CHOICE
+    echo ""
+    
     if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
-        download_from_hf_url; break
+        download_from_hf_url
+        break
     elif [[ "$CHOICE" =~ ^[0-9]+$ ]] && (( CHOICE >= 1 && CHOICE <= NUM_MODELS )); then
         break
+    else
+        warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
+        echo ""
     fi
-    warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
 done
+
+exec < /dev/tty 2>/dev/null || true
 
 if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
         idx="${idx// /}"
         if [[ "$idx" == "$CHOICE" ]]; then
-            SEL_IDX="$idx"; SEL_HF_REPO="${hf_repo// /}"; SEL_GGUF="${gguf_file// /}"
-            SEL_NAME="${dname# }"; SEL_NAME="${SEL_NAME% }"
-            SEL_MIN_RAM="${min_ram// /}"; SEL_MIN_VRAM="${min_vram// /}"
+            SEL_IDX="$idx"
+            SEL_HF_REPO="${hf_repo// /}"
+            SEL_GGUF="${gguf_file// /}"
+            SEL_NAME="${dname# }"
+            SEL_NAME="${SEL_NAME% }"
+            SEL_MIN_RAM="${min_ram// /}"
+            SEL_MIN_VRAM="${min_vram// /}"
             break
         fi
     done < <(printf '%s\n' "${MODELS[@]}")
 
-    [[ -z "$SEL_GGUF"    ]] && die "Model parse failed: SEL_GGUF empty."
-    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: SEL_MIN_RAM empty."
-    [[ "$SEL_MIN_RAM"  =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='$SEL_MIN_RAM' not numeric."
-    [[ "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM' not numeric."
+    [[ -z "$SEL_GGUF" ]] && die "Model parse failed: Could not extract model data for choice '$CHOICE'"
+    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: Could not extract RAM requirement"
+    
+    if [[ ! "$SEL_MIN_RAM" =~ ^[0-9]+$ ]]; then
+        die "SEL_MIN_RAM='$SEL_MIN_RAM' is not numeric"
+    fi
+    if [[ ! "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]]; then
+        die "SEL_MIN_VRAM='$SEL_MIN_VRAM' is not numeric"
+    fi
 
     ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
 
@@ -502,8 +508,12 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     if [[ "$GRADE_SEL" == "F" ]]; then
         warn "Grade F — this model will likely OOM on your hardware."
         if [[ -t 0 ]]; then
-            read -rp "  Continue anyway? [y/N]: " go_anyway
-            [[ "$go_anyway" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+            printf "${BLD}Continue anyway? [y/N]: ${RST}"
+            read go_anyway
+            if [[ ! "$go_anyway" =~ ^[Yy]$ ]]; then
+                echo "Aborted."
+                exit 0
+            fi
         else
             warn "Non-interactive – continuing anyway."
         fi
@@ -527,7 +537,6 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     AVAIL_KB=$(df -k "${MODEL_DIR}" | awk 'NR==2 {print $4}')
     AVAIL_GB=$(( AVAIL_KB / 1024 / 1024 ))
 
-    # Exact index match for size (avoids "1" matching "11")
     REQ_GB=""
     while IFS='|' read -r idx _ _ _ size_gb _ _ _ _ _ _; do
         [[ "${idx// /}" == "$CHOICE" ]] && { REQ_GB="${size_gb// /}"; break; }
@@ -623,12 +632,6 @@ fi
 
 # =============================================================================
 #  9. Hermes Agent — official NousResearch repo
-#
-#  Install method: official install script (handles uv, venv, Node, symlink)
-#  Config: ~/.hermes/config.yaml with provider: custom + base_url
-#  NOTE: No WebAPI, no "python -m webapi" — that was the outsourc-e fork only.
-#  The OPENAI_BASE_URL + LLM_MODEL env vars are DEPRECATED per official docs.
-#  Use config.yaml exclusively.
 # =============================================================================
 step "Installing Hermes Agent (official NousResearch)..."
 HERMES_AGENT_DIR="${HOME}/hermes-agent"
@@ -636,7 +639,6 @@ HERMES_DIR="${HOME}/.hermes"
 
 export PATH="${HOME}/.local/bin:${PATH}"
 
-# Remove outsourc-e fork if present (different git remote)
 if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
     CURRENT_REMOTE=$(git -C "${HERMES_AGENT_DIR}" remote get-url origin 2>/dev/null || echo "")
     if [[ "$CURRENT_REMOTE" == *"outsourc-e"* ]]; then
@@ -645,17 +647,14 @@ if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
     fi
 fi
 
-# Use official install script (handles Python, Node, uv, venv, symlink)
 if ! command -v hermes &>/dev/null || [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
     step "Running official Hermes Agent install script..."
     curl -fsSL --connect-timeout 15 --max-time 300 \
         https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
         -o /tmp/hermes-install.sh || die "Failed to download Hermes install script."
     register_tmp "/tmp/hermes-install.sh"
-    # Run non-interactively — the script handles everything
     bash /tmp/hermes-install.sh || {
         warn "Official install script failed — falling back to manual install."
-        # Manual fallback: uv + venv
         if ! command -v uv &>/dev/null; then
             curl -LsSf https://astral.sh/uv/install.sh | sh
             export PATH="${HOME}/.cargo/bin:${HOME}/.local/bin:${PATH}"
@@ -676,7 +675,6 @@ else
         cd "${HERMES_AGENT_DIR}"
         git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || \
             warn "Hermes git update failed (continuing with existing code)"
-        # Re-install in case deps changed
         if command -v uv &>/dev/null && [[ -d ".venv" ]]; then
             VIRTUAL_ENV="${HERMES_AGENT_DIR}/.venv" uv pip install -e ".[all]" --quiet 2>/dev/null || true
         fi
@@ -684,7 +682,6 @@ else
     fi
 fi
 
-# Verify hermes is available
 export PATH="${HOME}/.local/bin:${PATH}"
 if ! command -v hermes &>/dev/null; then
     die "hermes command not found after install. Check output above for errors."
@@ -693,30 +690,20 @@ ok "Hermes Agent: $(hermes --version 2>/dev/null || echo 'installed')"
 
 # =============================================================================
 #  9b. Configure Hermes → local llama-server
-#
-#  PR #2 fix: Hermes now auto-detects model name and context by querying
-#  llama.cpp server on startup. No need to hardcode model name anymore!
-#  @sudoingX fix: OPENROUTER_API_KEY placeholder is REQUIRED for local servers!
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
 
 mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
-# .env: OPENROUTER_API_KEY is REQUIRED for local servers! (yes, really)
-# @sudoingX discovered: Without this key -> 401 error
 cat > "${HERMES_DIR}/.env" <<ENV
 # Hermes Agent — local llama-server configuration
 # Generated by install.sh
-# CRITICAL: OPENROUTER_API_KEY is needed EVEN FOR LOCAL SERVERS!
-# @sudoingX discovered: Without this key -> 401 error
 OPENROUTER_API_KEY=sk-placeholder
 OPENAI_API_KEY=sk-no-key-needed
 OPENAI_BASE_URL=http://localhost:8080/v1
 ENV
 ok "~/.hermes/.env written (with OPENROUTER_API_KEY placeholder)"
 
-# config.yaml: With PR #2, we ONLY need provider + base_url
-# Hermes queries /v1/models and shows the REAL model name!
 CONFIG_FILE="${HERMES_DIR}/config.yaml"
 EXAMPLE_CFG="${HERMES_AGENT_DIR}/cli-config.yaml.example"
 
@@ -729,7 +716,6 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     fi
 fi
 
-# Write the model block - with PR #2, no 'model:' entry needed!
 python3 - <<PYCONF
 import re, sys
 path = "${CONFIG_FILE}"
@@ -741,11 +727,9 @@ try:
 except FileNotFoundError:
     content = ""
 
-# Remove any existing model: block completely
 content = re.sub(r'^model:.*?(?=^\S|\Z)', '', content, flags=re.MULTILINE | re.DOTALL)
 content = content.rstrip()
 
-# PR #2: No 'model:' entry needed! Hermes auto-detects from /v1/models
 new_block = f"""
 model:
   provider: custom
@@ -758,9 +742,7 @@ print("config.yaml written - PR #2 auto-detection active")
 PYCONF
 
 ok "config.yaml written — Hermes will auto-detect model from llama.cpp (PR #2)"
-ok "Run 'hermes /provider' inside chat to verify routing"
 
-# Hermes systemd service (optional — runs hermes in daemon/gateway mode)
 mkdir -p "${HOME}/.config/systemd/user"
 cat > "${HOME}/.config/systemd/user/hermes-agent.service" <<HERMES_SVC
 [Unit]
@@ -796,17 +778,12 @@ LAUNCH_SCRIPT="${HOME}/start-llm.sh"
 
 cat > "${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
 #!/usr/bin/env bash
-# start-llm.sh – generated by install.sh
-# Starts: llama-server (port 8080)
-# Model : ${SEL_NAME}
-
 GGUF="${GGUF_PATH}"
 MODEL_NAME="${SEL_NAME}"
 LLAMA_BIN="${LLAMA_SERVER_BIN}"
 SAFE_CTX="${SAFE_CTX}"
 USE_JINJA="${USE_JINJA}"
 
-# Check if already running
 LLAMA_PID=$(pgrep -f "llama-server" 2>/dev/null || true)
 
 if [[ -n "$LLAMA_PID" ]]; then
@@ -893,7 +870,6 @@ else
     warn "systemd --user unavailable — use 'start-llm' to start manually."
 fi
 
-# Start llama-server now
 step "Starting llama-server..."
 nohup bash "$LAUNCH_SCRIPT" < /dev/null > /tmp/llama-server.log 2>&1 &
 ok "llama-server starting (log: tail -f /tmp/llama-server.log)"
@@ -910,16 +886,14 @@ done
     warn "llama-server not responding in 30s — check: tail -f /tmp/llama-server.log"
 
 # =============================================================================
-#  13. Optional: Goose (block/goose) - SINGLE INSTANCE ONLY
+#  13. Optional: Goose (block/goose)
 # =============================================================================
 GOOSE_INSTALLED=false
 echo ""
 echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
 echo -e "  Rust-based extensible agent · 30k+ stars · Linux Foundation project"
-echo -e "  Works with any OpenAI-compatible API · MCP support · developer tools"
 echo ""
 
-# Check if Goose already installed (prevents duplication)
 if command -v goose &>/dev/null; then
     ok "Goose already installed: $(goose --version 2>/dev/null || echo 'installed')"
     GOOSE_INSTALLED=true
@@ -955,10 +929,7 @@ if [[ "$GOOSE_INSTALLED" == "true" ]]; then
     step "Configuring Goose for local llama-server..."
     mkdir -p "${HOME}/.config/goose"
 
-    # @sudoingX: GOOSE_MODEL must be exact GGUF filename!
     cat > "${HOME}/.config/goose/config.yaml" <<GOOSE_CFG
-# Goose configuration — local llama-server
-# Generated by install.sh
 GOOSE_PROVIDER: openai
 GOOSE_MODEL: ${SEL_GGUF}
 GOOSE_TEMPERATURE: 0.75
@@ -977,10 +948,6 @@ extensions:
     type: builtin
 GOOSE_CFG
     ok "Goose configured → http://localhost:8080"
-    warn "Important: OPENAI_HOST must NOT include /v1 — that goes in OPENAI_BASE_PATH"
-    warn "Goose uses the GGUF filename as model ID: ${SEL_GGUF}"
-else
-    ok "Skipping Goose install."
 fi
 
 # =============================================================================
@@ -988,7 +955,6 @@ fi
 # =============================================================================
 step "Adding helpers to ~/.bashrc..."
 
-# Resolve own path so switch-model works after install
 SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
 
 MARKER="# === LLM setup (added by install.sh) ==="
@@ -1001,7 +967,6 @@ ${MARKER}
 [[ -n "\${__LLM_BASHRC_LOADED:-}" ]] && return 0
 export __LLM_BASHRC_LOADED=1
 
-# Strip Windows /mnt/* from PATH
 _cp=""; IFS=':' read -ra _pts <<< "\$PATH"
 for _pt in "\${_pts[@]}"; do [[ "\$_pt" == /mnt/* ]] && continue; _cp="\${_cp:+\${_cp}:}\${_pt}"; done
 export PATH="\$_cp"; unset _cp _pts _pt
@@ -1194,7 +1159,6 @@ echo ""
 echo -e " ${BLD}Hermes local config:${RST}"
 echo -e "  ~/.hermes/config.yaml  — provider/model settings"
 echo -e "  ~/.hermes/.env         — OPENROUTER_API_KEY=sk-placeholder (required!)"
-echo -e "  Run ${CYN}hermes /provider${RST} inside chat to verify routing"
 echo ""
 if [[ "$GOOSE_INSTALLED" == "true" ]]; then
 echo -e " ${BLD}Goose local config:${RST}"
