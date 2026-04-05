@@ -785,23 +785,47 @@ except FileNotFoundError:
 # Remove any existing model: block completely
 content = re.sub(r'^model:.*?(?=^\S|\Z)', '', content,
                  flags=re.MULTILINE | re.DOTALL)
+# Remove any existing terminal: block
+content = re.sub(r'^terminal:.*?(?=^\S|\Z)', '', content,
+                 flags=re.MULTILINE | re.DOTALL)
+# Remove any existing agent: block
+content = re.sub(r'^agent:.*?(?=^\S|\Z)', '', content,
+                 flags=re.MULTILINE | re.DOTALL)
+# Remove any existing setup_complete marker
+content = re.sub(r'^setup_complete:.*\n?', '', content, flags=re.MULTILINE)
 content = content.rstrip()
 
+# Write a complete config that satisfies all wizard checks so the setup
+# wizard never triggers on first run. The wizard checks for:
+#   model.provider + model.base_url → skip provider step
+#   terminal.backend               → skip terminal step
+#   agent.max_turns                → skip agent settings step
+#   setup_complete: true           → skip wizard entirely (v0.4+)
 new_block = f"""
+setup_complete: true
+
 model:
   provider: custom
   base_url: {base_url}
   default: {model_name}
   context_length: {ctx_length}
+
+terminal:
+  backend: local
+
+agent:
+  max_turns: 90
 """
 
 with open(path, "w") as f:
     f.write(content + new_block + "\n")
 
 print(f"config.yaml written: provider=custom model={model_name} ctx={ctx_length}")
+print("setup_complete: true written — Hermes wizard will not prompt on first run")
 PYCONF
 
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
+ok "setup_complete: true written → setup wizard will not fire on first launch"
 ok "Hermes v0.4+ will show real model name + context via /v1/props auto-detect"
 
 # =============================================================================
@@ -1016,7 +1040,161 @@ else
 fi
 
 # =============================================================================
-#  13b. Optional: AutoAgent (HKUDS/AutoAgent)
+#  13b. Optional: OpenCode (anomalyco/opencode)
+#
+#  Open-source AI coding agent for the terminal. 120k+ GitHub stars.
+#  Built by the creators of terminal.shop, ex-SST team.
+#  Supports 75+ LLM providers including any OpenAI-compatible endpoint.
+#
+#  Config: ~/.config/opencode/opencode.json
+#  Local llama-server provider: @ai-sdk/openai-compatible with baseURL
+#  pointing at http://localhost:8080/v1. Auth stored in auth.json.
+#
+#  Install: binary via curl (no Node.js required for the binary itself).
+#  The binary is ~30MB, Go-compiled, installs to ~/.local/bin/opencode.
+# =============================================================================
+OPENCODE_INSTALLED=false
+
+echo ""
+echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode) — AI Coding Agent${RST}"
+echo -e "  Terminal TUI · 120k+ stars · 75+ LLM providers · LSP + MCP"
+echo -e "  Coding-focused: file edit, run, debug, git, test — all in terminal"
+echo -e "  Works with llama-server via OpenAI-compatible provider config"
+echo ""
+if [[ -t 0 ]]; then
+    read -rp "  Install OpenCode? [y/N]: " install_opencode
+else
+    install_opencode="n"
+fi
+
+if [[ "$install_opencode" =~ ^[Yy]$ ]]; then
+    step "Installing OpenCode..."
+    if command -v opencode &>/dev/null; then
+        ok "OpenCode already installed: $(opencode --version 2>/dev/null || echo 'ok')"
+        OPENCODE_INSTALLED=true
+    else
+        # Install via official script (Go binary, no Node.js required)
+        if XDG_BIN_DIR="${HOME}/.local/bin" curl -fsSL --connect-timeout 15 \
+                --max-time 120 https://opencode.ai/install | bash 2>/dev/null; then
+            export PATH="${HOME}/.local/bin:${PATH}"
+            command -v opencode &>/dev/null && {
+                ok "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
+                OPENCODE_INSTALLED=true
+            } || warn "OpenCode binary not in PATH after install."
+        else
+            warn "OpenCode install script failed — skipping."
+        fi
+    fi
+
+    if [[ "$OPENCODE_INSTALLED" == "true" ]]; then
+        step "Configuring OpenCode for local llama-server..."
+        mkdir -p "${HOME}/.config/opencode"
+
+        # auth.json: credential store for the local provider
+        # 'sk-local' is a placeholder — llama-server ignores auth
+        OPENCODE_AUTH="${HOME}/.local/share/opencode/auth.json"
+        mkdir -p "${HOME}/.local/share/opencode"
+        if [[ ! -f "$OPENCODE_AUTH" ]]; then
+            cat > "$OPENCODE_AUTH" <<OCAUTH
+{
+  "llamacpp": "sk-local"
+}
+OCAUTH
+            ok "OpenCode auth.json written."
+        else
+            # Merge: add llamacpp key if not present
+            python3 - <<PYAUTH
+import json, os
+path = "${OPENCODE_AUTH}"
+try:
+    with open(path) as f:
+        data = json.load(f)
+except:
+    data = {}
+if "llamacpp" not in data:
+    data["llamacpp"] = "sk-local"
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    print("Added llamacpp key to auth.json")
+else:
+    print("auth.json already has llamacpp key")
+PYAUTH
+        fi
+
+        # opencode.json: main config
+        # Uses @ai-sdk/openai-compatible provider pointing at llama-server.
+        # The model key in "models" must match the ID llama-server reports
+        # (/v1/models returns the GGUF filename as model ID).
+        cat > "${HOME}/.config/opencode/opencode.json" <<OCODE_CFG
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama.cpp (local)",
+      "options": {
+        "baseURL": "http://localhost:8080/v1",
+        "apiKey": "sk-local"
+      },
+      "models": {
+        "${SEL_GGUF}": {
+          "name": "${SEL_NAME}",
+          "limit": {
+            "context": ${SAFE_CTX}
+          }
+        }
+      }
+    }
+  },
+  "model": "llamacpp/${SEL_GGUF}",
+  "small_model": "llamacpp/${SEL_GGUF}"
+}
+OCODE_CFG
+        ok "OpenCode configured → http://localhost:8080/v1 (model: ${SEL_GGUF})"
+        warn "OpenCode needs Node.js for @ai-sdk/openai-compatible package at runtime."
+        warn "If 'opencode' fails with provider errors: run 'npm i -g @ai-sdk/openai-compatible'"
+        warn "  Or use 'opencode /connect' to reconfigure interactively."
+
+        # Add opencode alias to bashrc marker check
+        MARKER_OC="# === OpenCode aliases ==="
+        if ! grep -qF "$MARKER_OC" "${HOME}/.bashrc" 2>/dev/null; then
+            cat >> "${HOME}/.bashrc" <<OC_ALIASES
+
+${MARKER_OC}
+alias oc='opencode'
+
+opencode-model() {
+    # Update OpenCode model after switch-model — pass the new GGUF filename
+    local new_model="\${1:?Usage: opencode-model <filename.gguf>}"
+    local new_name="\${new_model%.gguf}"
+    python3 - <<PYOC
+import json, sys
+path = "${HOME}/.config/opencode/opencode.json"
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+    # Update models dict
+    old_models = cfg.get("provider", {}).get("llamacpp", {}).get("models", {})
+    cfg["provider"]["llamacpp"]["models"] = {"\${new_model}": {"name": "\${new_name}"}}
+    cfg["model"] = "llamacpp/\${new_model}"
+    cfg["small_model"] = "llamacpp/\${new_model}"
+    with open(path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print(f"OpenCode model updated to: llamacpp/\${new_model}")
+except Exception as e:
+    print(f"Error: {e}")
+PYOC
+}
+OC_ALIASES
+            ok "OpenCode aliases added to ~/.bashrc."
+        fi
+    fi
+else
+    ok "Skipping OpenCode install."
+fi
+
+# =============================================================================
+#  13c. Optional: AutoAgent (HKUDS/AutoAgent)
 #
 #  Zero-code multi-agent framework. Deep Research mode needs no Docker.
 #  Connects via COMPLETION_MODEL=openai/<gguf-filename> + API_BASE_URL.
@@ -1039,6 +1217,14 @@ else
 fi
 
 if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
+    # FIX: AutoAgent's file_select.py imports tkinter at module level even in
+    # headless CLI mode. Without python3-tk installed, every 'auto' invocation
+    # crashes with: ModuleNotFoundError: No module named 'tkinter'
+    step "Installing python3-tk (required by AutoAgent file selector)..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk 2>/dev/null || \
+        warn "python3-tk install failed — AutoAgent may crash if file selector is used."
+    ok "python3-tk ready."
+
     # Install uv if not present (needed for AutoAgent venv)
     if ! command -v uv &>/dev/null; then
         step "Installing uv (fast Python package manager)..."
@@ -1391,54 +1577,66 @@ echo -e "  llama.cpp UI  →  http://localhost:8080"
 echo -e "  Hermes Agent  →  hermes (CLI) — NousResearch/hermes-agent"
 [[ "$GOOSE_INSTALLED"     == "true" ]] && \
     echo -e "  Goose Agent   →  goose (CLI) — block/goose"
+[[ "$OPENCODE_INSTALLED"  == "true" ]] && \
+    echo -e "  OpenCode      →  opencode (CLI) — anomalyco/opencode"
 [[ "$AUTOAGENT_INSTALLED" == "true" ]] && \
     echo -e "  AutoAgent     →  autoagent (CLI) — HKUDS/AutoAgent"
 echo -e "  Model         →  ${SEL_NAME}  (context: ${SAFE_CTX} tokens)"
 echo ""
 
-echo -e " ${BLD}Chat:${RST}"
-echo -e "  ${CYN}hermes${RST}              Start Hermes Agent"
-echo -e "  ${CYN}hermes model${RST}        Switch provider/model interactively"
-echo -e "  ${CYN}hermes doctor${RST}       Diagnose config issues"
+echo -e " ${BLD}════ QUICK REFERENCE ════${RST}"
+echo ""
+echo -e " ${BLD}Start / Stop:${RST}"
+echo -e "  ${CYN}start-llm${RST}           Start llama-server in background"
+echo -e "  ${CYN}stop-llm${RST}            Stop llama-server"
+echo -e "  ${CYN}restart-llm${RST}         Restart llama-server"
+echo -e "  ${CYN}llm-log${RST}             Tail llama-server log"
+echo -e "  ${CYN}llm-status${RST}          Status + active model"
+echo -e "  ${CYN}llm-models${RST}          List all .gguf in ~/llm-models"
+echo -e "  ${CYN}switch-model${RST}        Pick different model & reconfigure all agents"
+echo -e "  ${CYN}vram${RST}                GPU/VRAM usage"
+echo ""
+echo -e " ${BLD}Agents:${RST}"
+echo -e "  ${CYN}hermes${RST}              Hermes Agent — general purpose, memory, tools"
+echo -e "  ${CYN}hermes model${RST}        Switch Hermes provider/model"
+echo -e "  ${CYN}hermes doctor${RST}       Diagnose Hermes config issues"
+echo -e "  ${CYN}hermes skills${RST}       Browse/install skills"
 [[ "$GOOSE_INSTALLED"     == "true" ]] && \
-    echo -e "  ${CYN}goose${RST}               Start Goose"
+    echo -e "  ${CYN}goose${RST}               Goose — coding/dev tasks"
 [[ "$GOOSE_INSTALLED"     == "true" ]] && \
     echo -e "  ${CYN}goose configure${RST}     Reconfigure Goose"
+[[ "$OPENCODE_INSTALLED"  == "true" ]] && \
+    echo -e "  ${CYN}opencode${RST}  (or ${CYN}oc${RST})  OpenCode — TUI coding agent"
 [[ "$AUTOAGENT_INSTALLED" == "true" ]] && \
-    echo -e "  ${CYN}autoagent${RST}           AutoAgent deep research (no Docker)"
+    echo -e "  ${CYN}autoagent${RST}           AutoAgent — deep research (no Docker)"
 [[ "$AUTOAGENT_INSTALLED" == "true" ]] && \
     echo -e "  ${CYN}autoagent-full${RST}      AutoAgent full mode (needs Docker)"
 echo ""
-
-echo -e " ${BLD}Server:${RST}"
-echo -e "  ${CYN}start-llm${RST}       Start llama-server"
-echo -e "  ${CYN}stop-llm${RST}        Stop llama-server"
-echo -e "  ${CYN}restart-llm${RST}     Restart llama-server"
-echo -e "  ${CYN}switch-model${RST}    Pick a different model & restart"
-echo -e "  ${CYN}llm-status${RST}      Check status + active model"
-echo -e "  ${CYN}llm-log${RST}         Tail llama-server log"
-echo -e "  ${CYN}llm-models${RST}      List all .gguf in ~/llm-models"
-echo -e "  ${CYN}vram${RST}            GPU/VRAM usage"
-echo ""
-
 echo -e " ${BLD}Config files:${RST}"
-echo -e "  ~/.hermes/config.yaml          — Hermes provider/model"
-echo -e "  ~/.hermes/.env                 — Hermes env (belt-and-suspenders)"
+echo -e "  ~/.hermes/config.yaml              Hermes provider/model settings"
+echo -e "  ~/.hermes/.env                     Hermes env vars"
 [[ "$GOOSE_INSTALLED"     == "true" ]] && \
-    echo -e "  ~/.config/goose/config.yaml    — Goose config (GOOSE_MODEL=${SEL_GGUF})"
+    echo -e "  ~/.config/goose/config.yaml        Goose config  (GOOSE_MODEL=${SEL_GGUF})"
+[[ "$OPENCODE_INSTALLED"  == "true" ]] && \
+    echo -e "  ~/.config/opencode/opencode.json   OpenCode config"
 [[ "$AUTOAGENT_INSTALLED" == "true" ]] && \
-    echo -e "  ~/.autoagent/.env              — AutoAgent config"
+    echo -e "  ~/.autoagent/.env                  AutoAgent config"
 echo ""
-
-echo -e " ${BLD}Hermes tips:${RST}"
-echo -e "  Run ${CYN}hermes /provider${RST} inside chat to verify routing"
-echo -e "  Run ${CYN}/statusbar${RST} inside chat to toggle model+ctx info bar"
-[[ "$AUTOAGENT_INSTALLED" == "true" ]] && {
+echo -e " ${BLD}Hermes inside chat:${RST}"
+echo -e "  ${CYN}/provider${RST}    Verify routing (should show custom/local)"
+echo -e "  ${CYN}/statusbar${RST}   Toggle model+context info bar"
+echo -e "  ${CYN}/compress${RST}    Compress session when context gets long"
+echo -e "  ${CYN}/reset${RST}       Start fresh session"
+echo -e "  ${CYN}/skills${RST}      Browse installed skills"
+echo ""
+[[ "$AUTOAGENT_INSTALLED" == "true" || "$OPENCODE_INSTALLED" == "true" ]] && {
+    echo -e " ${YLW}After switch-model, update all agents:${RST}"
+    [[ "$AUTOAGENT_INSTALLED" == "true" ]] && \
+        echo -e "  ${CYN}autoagent-model <new-file.gguf>${RST}"
+    [[ "$OPENCODE_INSTALLED" == "true" ]] && \
+        echo -e "  ${CYN}opencode-model <new-file.gguf>${RST}"
     echo ""
-    echo -e " ${YLW}After switch-model, update AutoAgent:${RST}"
-    echo -e "  ${CYN}autoagent-model <new-file.gguf>${RST}"
 }
-echo ""
 echo -e " ${YLW}Note:${RST}       Run 'source ~/.bashrc' or open a new terminal."
 echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal."
 echo -e " ${GRN}Persistent:${RST} sudo loginctl enable-linger $USER"
