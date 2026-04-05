@@ -997,7 +997,8 @@ if ! curl -sf http://localhost:8080/v1/models &>/dev/null; then
     if [[ ! "$yn" =~ ^[Nn]$ ]]; then
         nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
         echo "  Waiting for llama-server..."
-        for i in {1..30}; do
+        # Extended poll to 60 seconds with log advice
+        for i in {1..60}; do
             curl -sf http://localhost:8080/v1/models &>/dev/null && break
             sleep 1
         done
@@ -1088,14 +1089,13 @@ if [[ ! -d "$MODEL_DIR" ]]; then
     exit 1
 fi
 
-# Re-use model selection logic (simplified)
 TTY_INPUT="/dev/tty"
 if [[ ! -c "$TTY_INPUT" ]]; then
     echo "Non‑interactive mode – cannot switch model."
     exit 1
 fi
 
-# Source hardware info (from existing vars if available, otherwise re-detect)
+# Re-detect hardware (simple)
 RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 RAM_GiB=$(( RAM_KB / 1024 / 1024 ))
 HAS_NVIDIA=false
@@ -1109,7 +1109,7 @@ if command -v nvidia-smi &>/dev/null; then
     fi
 fi
 
-# Same MODELS array as in main installer
+# Same MODELS array as main installer
 MODELS=(
     "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
     "2|unsloth/Qwen3.5-2B-GGUF|Qwen3.5-2B-Q4_K_M.gguf|Qwen 3.5 2B|1.0|256K|3|0|tiny|chat,multilingual|Alibaba · ultra-fast"
@@ -1157,7 +1157,7 @@ apply_model_settings() {
     esac
 }
 
-echo -e "\n  Current model: $(grep '^MODEL_NAME=' ~/start-llm.sh 2>/dev/null | head -1 | sed 's/MODEL_NAME="//;s/".*//' || echo 'unknown')"
+echo -e "\n  Current model: $(grep '^MODEL_NAME=' ~/start-llm.sh 2>/dev/null | head -1 | sed 's/MODEL_NAME="//;s/".*//' | xargs)"
 echo -e "  Select a new model:\n"
 NUM_MODELS=${#MODELS[@]}
 while true; do
@@ -1182,7 +1182,6 @@ done < <(printf '%s\n' "${MODELS[@]}")
 
 [[ -z "$SEL_GGUF" ]] && { echo "ERROR: Failed to parse model."; exit 1; }
 
-# Check if model file exists locally
 GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
 if [[ ! -f "$GGUF_PATH" ]]; then
     echo -e "\n  Model not found in ~/llm-models. Please download it first using the main installer."
@@ -1198,7 +1197,7 @@ sed -i "s|^SAFE_CTX=.*|SAFE_CTX=\"${ctx}\"|" ~/start-llm.sh
 sed -i "s|^USE_JINJA=.*|USE_JINJA=\"${jinja}\"|" ~/start-llm.sh
 echo "  Updated ~/start-llm.sh"
 
-# Update Hermes config
+# Update Hermes config.yaml
 if [[ -f ~/.hermes/config.yaml ]]; then
     python3 -c "
 import re
@@ -1315,7 +1314,7 @@ llm-status() {
     llama_pid=$(pgrep -f "llama-server" 2>/dev/null || true)
     [[ -f ~/start-llm.sh ]] && \
         active_model=$(grep '^MODEL_NAME=' ~/start-llm.sh 2>/dev/null | head -1 | \
-        sed 's/MODEL_NAME="//;s/".*//' || true)
+        sed 's/MODEL_NAME="//;s/".*//' | xargs || true)
 
     echo -e "${BLD}${CYN}╭────────────────────────────────────────────────────────────────╮${RST}"
     echo -e "${BLD}${CYN}│${RST}  ${BLD}LLM Stack Status${RST}"
