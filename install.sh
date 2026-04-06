@@ -110,8 +110,13 @@ fi
 #  1. HuggingFace token
 #     In switch-model mode: only load from existing sources, never prompt.
 # =============================================================================
+# BUG FIX B1: Capture any pre-existing env value BEFORE overwriting the variable.
+# The original code did HF_TOKEN="" then immediately checked -n "${HF_TOKEN:-}",
+# which was always false — silently discarding any HF_TOKEN the user had exported.
+_HF_ENV="${HF_TOKEN:-}"
 HF_TOKEN=""
-if [[ -n "${HF_TOKEN:-}" ]]; then
+if [[ -n "$_HF_ENV" ]]; then
+    HF_TOKEN="$_HF_ENV"
     ok "HF_TOKEN already set in environment."
 elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
     HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
@@ -485,7 +490,10 @@ HF_CLI_B="${HOME}/.local/bin/huggingface-cli"
 if [[ ! -x "$HF_CLI_A" && ! -x "$HF_CLI_B" ]]; then
     pip3 install --quiet --user --break-system-packages huggingface_hub
 fi
-pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -2
+# Only upgrade on full install — in switch-model mode this adds 3–8s for no benefit
+if [[ -z "$_SMO" ]]; then
+    pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -2
+fi
 
 if [[ -x "$HF_CLI_A" ]]; then
     HF_CLI="$HF_CLI_A"; HF_CLI_NAME="hf"
@@ -769,6 +777,9 @@ step "Configuring Hermes for local llama-server..."
 
 mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
+# Export model name safely for the Python heredoc (avoids shell injection into source)
+export _HERMES_MODEL_NAME="${SEL_NAME}"
+
 # .env: belt-and-suspenders for provider routing bug #4172
 cat > "${HERMES_DIR}/.env" <<ENV
 # Hermes Agent — local llama-server (llama.cpp)
@@ -788,10 +799,10 @@ if [[ ! -f "$CONFIG_FILE" ]] && [[ -f "$EXAMPLE_CFG" ]]; then
 fi
 
 python3 - <<PYCONF
-import re
+import re, os
 
 path       = "${CONFIG_FILE}"
-model_name = "${SEL_NAME}"
+model_name = os.environ.get("_HERMES_MODEL_NAME", "local-model")
 base_url   = "http://localhost:8080/v1"
 ctx_length = ${SAFE_CTX}
 
@@ -812,13 +823,27 @@ for pat in [
     content = re.sub(pat, '', content, flags=re.MULTILINE | re.DOTALL)
 content = content.rstrip()
 
+# FIX B1: Pure-Python YAML scalar quoting — no external dependency (PyYAML not
+# guaranteed on minimal Ubuntu), and no multi-line output.
+# yaml.dump() emits a YAML document-end marker '...' on a second line, which would
+# corrupt our config block when interpolated into the f-string.
+# We quote manually: wrap in single quotes if the value contains YAML-special chars,
+# doubling any internal single quotes (YAML single-quoted scalar escaping rule).
+_YAML_UNSAFE = re.compile(r'[:{}\[\]#&*!|>\'\",%@`?]|^[-?]|^\s|\s$')
+if _YAML_UNSAFE.search(model_name) or model_name.lower() in (
+        'true','false','null','yes','no','on','off','~'):
+    # Single-quoted YAML scalar: escape internal ' as ''
+    model_name_yaml = "'" + model_name.replace("'", "''") + "'"
+else:
+    model_name_yaml = model_name
+
 new_block = f"""
 setup_complete: true
 
 model:
   provider: custom
   base_url: {base_url}
-  default: {model_name}
+  default: {model_name_yaml}
   context_length: {ctx_length}
 
 terminal:
@@ -842,10 +867,14 @@ PYCONF
 
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
 ok "Honcho memory: enabled — agent learns your preferences over time"
+unset _HERMES_MODEL_NAME
 
 # =============================================================================
 #  9c. Install recommended Hermes skills (agentskills.io open standard)
 #      [SKIPPED by switch-model — skills persist across model changes]
+#      BUG FIX B5: Moved to AFTER llama-server starts (section 12).
+#                  Skills install is recorded here for reference but the
+#                  actual invocation is at the post-server-start block below.
 #
 #  agentskills.io is an open standard for portable agent skill files (SKILL.md).
 #  Originally developed by Anthropic, now community-maintained.
@@ -857,15 +886,7 @@ ok "Honcho memory: enabled — agent learns your preferences over time"
 #    axolotl            — Fine-tuning LLMs with Axolotl (local ML)
 #    huggingface-hub    — HF Hub CLI: search, download, upload models
 # =============================================================================
-if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
-    step "Installing recommended Hermes skills (agentskills.io)..."
-    for skill in "github-pr-workflow" "axolotl" "huggingface-hub"; do
-        hermes skills install "official/${skill}" --yes 2>/dev/null && \
-            ok "Installed skill: ${skill}" || \
-            warn "Could not install skill '${skill}' — install manually: hermes skills install official/${skill}"
-    done
-    ok "Skills in ~/.hermes/skills/  |  hermes skills browse  |  hermes skills search <query>"
-fi
+# (Skills install runs after llama-server starts — see section 12b below)
 
 # =============================================================================
 #  10. pip update  [SKIPPED by switch-model]
@@ -1007,8 +1028,24 @@ done
     warn "llama-server not responding after 30s — check: tail -f /tmp/llama-server.log"
 
 # =============================================================================
+#  12b. Install recommended Hermes skills (agentskills.io open standard)
+#       [SKIPPED by switch-model — skills persist across model changes]
+#       BUG FIX B5: Runs here (after server start) not before, so Hermes
+#       has a running endpoint when it attempts skill compatibility checks.
+# =============================================================================
+if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
+    step "Installing recommended Hermes skills (agentskills.io)..."
+    for skill in "github-pr-workflow" "axolotl" "huggingface-hub"; do
+        hermes skills install "official/${skill}" --yes 2>/dev/null && \
+            ok "Installed skill: ${skill}" || \
+            warn "Skill '${skill}' not installed — run: hermes skills install official/${skill}"
+    done
+    ok "Skills: ~/.hermes/skills/  |  hermes skills browse  |  hermes skills search <query>"
+fi
+
+# =============================================================================
 #  13. Optional agents  [SKIPPED by switch-model]
-#      Installation only. Config update for all agents happens in section 13d.
+#      Config update for all installed agents happens in section 13d (always runs).
 # =============================================================================
 GOOSE_INSTALLED=false
 OPENCODE_INSTALLED=false
@@ -1327,7 +1364,33 @@ if [[ -z "$_SMO" ]]; then
     step "Adding helpers to ~/.bashrc..."
 
     SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || \
-        realpath "$0" 2>/dev/null || echo "$0")"
+        realpath "$0" 2>/dev/null || echo "")"
+
+    # BUG FIX B4: When script is run via `curl | bash`, BASH_SOURCE[0] is
+    # /dev/stdin or empty, making SCRIPT_SELF unusable as a switch-model target.
+    # Solution: copy the script to a stable location and use that as the target.
+    INSTALL_COPY="${HOME}/.local/bin/install-llm.sh"
+    if [[ "$SCRIPT_SELF" == "/dev/stdin" || -z "$SCRIPT_SELF" || \
+          "$SCRIPT_SELF" == "/proc/"* ]]; then
+        warn "Script run via pipe — copying to ${INSTALL_COPY} for switch-model."
+        mkdir -p "${HOME}/.local/bin"
+        # Can't copy /dev/stdin (already consumed), but we can write a stub that
+        # re-downloads. Use the known GitHub URL as fallback.
+        cat > "$INSTALL_COPY" <<'STUB'
+#!/usr/bin/env bash
+echo "Re-running install from GitHub..."
+curl -fsSL https://raw.githubusercontent.com/mettbrot0815/llm-installer/refs/heads/main/install.sh | bash
+STUB
+        chmod +x "$INSTALL_COPY"
+        SCRIPT_SELF="$INSTALL_COPY"
+        warn "switch-model will re-download the installer. For a local copy:"
+        warn "  curl -fsSL <url> -o ~/install-llm.sh && chmod +x ~/install-llm.sh"
+    elif [[ -f "$SCRIPT_SELF" ]]; then
+        # Script exists on disk — copy to stable location for switch-model
+        mkdir -p "${HOME}/.local/bin"
+        cp -f "$SCRIPT_SELF" "$INSTALL_COPY" 2>/dev/null && \
+            chmod +x "$INSTALL_COPY" && SCRIPT_SELF="$INSTALL_COPY" || true
+    fi
 
     MARKER="# === LLM setup (added by install.sh) ==="
     if grep -qF "$MARKER" "${HOME}/.bashrc" 2>/dev/null; then
@@ -1362,7 +1425,7 @@ alias llm-log='tail -f /tmp/llama-server.log'
 #        systemd, bashrc helpers, .wslconfig, optional agent install prompts.
 # Runs:  HF CLI refresh → model table → pick → download → start-llm.sh regen
 #        → Hermes/Goose/OpenCode/AutoAgent config update → restart llama-server.
-alias switch-model='SWITCH_MODEL_ONLY=1 bash ${SCRIPT_SELF}'
+alias switch-model='SWITCH_MODEL_ONLY=1 bash ${INSTALL_COPY}'
 BASHRC_EXPANDED
 
         if [[ -n "${HF_TOKEN:-}" ]] && \
