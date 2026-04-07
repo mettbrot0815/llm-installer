@@ -588,7 +588,7 @@ while true; do
     warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
 done
 
-# Parse catalogue — exact index match
+# Parse catalogue — exact index match (only if not 'u')
 if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
             min_ram min_vram tier tags desc; do
@@ -607,7 +607,7 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     [[ -z "$SEL_GGUF"    ]] && die "Model parse failed: SEL_GGUF empty."
     [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: SEL_MIN_RAM empty."
     [[ "$SEL_MIN_RAM"  =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='$SEL_MIN_RAM' not numeric."
-    [[ "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM" not numeric."
+    [[ "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM' not numeric."
     ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
 
     GRADE_SEL=$(grade_model "$SEL_MIN_RAM" "$SEL_MIN_VRAM" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
@@ -840,17 +840,18 @@ if [[ ! -f "$CONFIG_FILE" ]] && [[ -f "$EXAMPLE_CFG" ]]; then
     ok "config.yaml initialised from example template."
 fi
 
-python3 - <<'PYCONF' "${SEL_NAME}" "${SAFE_CTX}"
+# Pass CONFIG_FILE as third argument so Python can read it
+python3 - "${SEL_NAME}" "${SAFE_CTX}" "${CONFIG_FILE}" <<'PYCONF'
 import re
 import sys
 
-path = "${CONFIG_FILE}"
 model_name = sys.argv[1]
 base_url   = "http://localhost:8080/v1"
 ctx_length = int(sys.argv[2])
+config_path = sys.argv[3]
 
 try:
-    with open(path, "r") as f:
+    with open(config_path, "r") as f:
         content = f.read()
 except FileNotFoundError:
     content = ""
@@ -890,7 +891,7 @@ memory:
     enabled: true
 """
 
-with open(path, "w") as f:
+with open(config_path, "w") as f:
     f.write((content + "\n" if content else "") + new_block + "\n")
 
 print(f"config.yaml: model={model_name}  ctx={ctx_length}")
