@@ -80,37 +80,6 @@ ok()   { echo -e "${GRN}[+] $*${RST}"; }
 warn() { echo -e "${YLW}[!] $*${RST}"; }
 die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
 
-# ── AutoAgent dirs (needed by _SMO) ─────────────────────────────────────────────
-AUTOAGENT_DIR="${HOME}/autoagent"
-AUTOAGENT_VENV="${AUTOAGENT_DIR}/.venv"
-
-# ── Find llama-server function (needed by _SMO) ─────────────────────────────────
-find_llama_server() {
-    local p vo
-    for p in /usr/local/bin/llama-server /usr/bin/llama-server \
-              "${HOME}/.local/bin/llama-server" \
-              "${HOME}/llama.cpp/build/bin/llama-server"; do
-        if [[ -x "$p" ]]; then
-            vo=$("$p" --version 2>&1) || continue
-            if echo "$vo" | grep -qiE 'llama|ggml'; then
-                echo "$p"
-                return 0
-            fi
-        fi
-    done
-    local found
-    found=$(find "${HOME}/llama.cpp" -name "llama-server" -type f \
-        -executable 2>/dev/null | head -1)
-    if [[ -n "$found" ]]; then
-        vo=$("$found" --version 2>&1) || true
-        if echo "$vo" | grep -qiE 'llama|ggml'; then
-            echo "$found"
-            return 0
-        fi
-    fi
-    return 1
-}
-
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
 cleanup() {
@@ -609,28 +578,23 @@ while true; do
         CHOICE="5"
         break
     fi
-
     read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE
-
-    if [[ "${CHOICE}" == "u" || "${CHOICE}" == "U" ]]; then
+    if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
         download_from_hf_url
         break
-    elif [[ "${CHOICE}" =~ ^[0-9]+$ ]] && (( CHOICE >= 1 && CHOICE <= NUM_MODELS )); then
+    elif [[ "$CHOICE" =~ ^[0-9]+$ ]] && (( CHOICE >= 1 && CHOICE <= NUM_MODELS )); then
         break
     fi
-
     warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
 done
 
-# ====================== PROCESS SELECTED MODEL ======================
-
-if [[ "${CHOICE}" != "u" && "${CHOICE}" != "U" ]]; then
-    # Parse catalogue — exact index match
+# Parse catalogue — exact index match
+if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
             min_ram min_vram tier tags desc; do
         idx="${idx// /}"
-        if [[ "${idx}" == "${CHOICE}" ]]; then
-            SEL_IDX="${idx}"
+        if [[ "$idx" == "$CHOICE" ]]; then
+            SEL_IDX="$idx"
             SEL_HF_REPO="${hf_repo// /}"
             SEL_GGUF="${gguf_file// /}"
             SEL_NAME="${dname# }"; SEL_NAME="${SEL_NAME% }"
@@ -640,35 +604,32 @@ if [[ "${CHOICE}" != "u" && "${CHOICE}" != "U" ]]; then
         fi
     done < <(printf '%s\n' "${MODELS[@]}")
 
-    [[ -z "${SEL_GGUF}" ]]    && die "Model parse failed: SEL_GGUF empty."
-    [[ -z "${SEL_MIN_RAM}" ]] && die "Model parse failed: SEL_MIN_RAM empty."
-    [[ "${SEL_MIN_RAM}"  =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='${SEL_MIN_RAM}' not numeric."
-    [[ "${SEL_MIN_VRAM}" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='${SEL_MIN_VRAM}' not numeric."
+    [[ -z "$SEL_GGUF"    ]] && die "Model parse failed: SEL_GGUF empty."
+    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: SEL_MIN_RAM empty."
+    [[ "$SEL_MIN_RAM"  =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='$SEL_MIN_RAM' not numeric."
+    [[ "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM" not numeric."
+    ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
 
-    ok "Selected: ${SEL_NAME} (${SEL_GGUF})"
-fi
-
-# ====================== POST-SELECTION (runs for both catalogue and URL) ======================
-
-GRADE_SEL=$(grade_model "${SEL_MIN_RAM}" "${SEL_MIN_VRAM}" "${RAM_GiB}" "${VRAM_GiB}" "${HAS_NVIDIA}")
-
-if [[ "${GRADE_SEL}" == "F" ]]; then
-    warn "Grade F — this model will likely OOM on your hardware."
-    if [[ -t 0 ]]; then
-        read -rp "  Continue anyway? [y/N]: " go_anyway
-        if [[ ! "${go_anyway}" =~ ^[Yy]$ ]]; then
-            echo "Aborted."
-            exit 0
+    GRADE_SEL=$(grade_model "$SEL_MIN_RAM" "$SEL_MIN_VRAM" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
+    if [[ "$GRADE_SEL" == "F" ]]; then
+        warn "Grade F — this model will likely OOM on your hardware."
+        if [[ -t 0 ]]; then
+            read -rp "  Continue anyway? [y/N]: " go_anyway
+            if [[ ! "$go_anyway" =~ ^[Yy]$ ]]; then
+                echo "Aborted."
+                exit 0
+            fi
+        else
+            warn "Non-interactive — continuing anyway."
         fi
-    else
-        warn "Non-interactive — continuing anyway."
+    elif [[ "$GRADE_SEL" == "C" ]]; then
+        warn "Grade C — tight fit, expect slow responses."
     fi
-elif [[ "${GRADE_SEL}" == "C" ]]; then
-    warn "Grade C — tight fit, expect slow responses."
+
+    apply_model_settings "$SEL_GGUF"
+    GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
 fi
 
-apply_model_settings "${SEL_GGUF}"
-GGUF_PATH="${MODEL_DIR}/${SEL_GGUF}"
 # =============================================================================
 #  7. Download model from catalogue if not present  (always runs)
 # =============================================================================
@@ -717,6 +678,32 @@ fi
 # =============================================================================
 #  8. Build llama.cpp  [SKIPPED by switch-model]
 # =============================================================================
+find_llama_server() {
+    local p vo
+    for p in /usr/local/bin/llama-server /usr/bin/llama-server \
+              "${HOME}/.local/bin/llama-server" \
+              "${HOME}/llama.cpp/build/bin/llama-server"; do
+        if [[ -x "$p" ]]; then
+            vo=$("$p" --version 2>&1) || continue
+            if echo "$vo" | grep -qiE 'llama|ggml'; then
+                echo "$p"
+                return 0
+            fi
+        fi
+    done
+    local found
+    found=$(find "${HOME}/llama.cpp" -name "llama-server" -type f \
+        -executable 2>/dev/null | head -1)
+    if [[ -n "$found" ]]; then
+        vo=$("$found" --version 2>&1) || true
+        if echo "$vo" | grep -qiE 'llama|ggml'; then
+            echo "$found"
+            return 0
+        fi
+    fi
+    return 1
+}
+
 if [[ -n "$_SMO" ]]; then
     step "Locating llama-server (switch-model — skipping build)..."
     LLAMA_SERVER_BIN=$(find_llama_server || true)
@@ -853,12 +840,11 @@ if [[ ! -f "$CONFIG_FILE" ]] && [[ -f "$EXAMPLE_CFG" ]]; then
     ok "config.yaml initialised from example template."
 fi
 
-# FIX: Pass CONFIG_FILE as third argument (was unexpanded due to quoted heredoc)
-python3 - <<'PYCONF' "${SEL_NAME}" "${SAFE_CTX}" "${CONFIG_FILE}"
+python3 - <<'PYCONF' "${SEL_NAME}" "${SAFE_CTX}"
 import re
 import sys
 
-path = sys.argv[3]          # was: path = "${CONFIG_FILE}" → now correctly passed
+path = "${CONFIG_FILE}"
 model_name = sys.argv[1]
 base_url   = "http://localhost:8080/v1"
 ctx_length = int(sys.argv[2])
@@ -927,13 +913,6 @@ fi
 # =============================================================================
 #  11. Create ~/start-llm.sh  (always runs)
 # =============================================================================
-if [[ -z "${LLAMA_SERVER_BIN:-}" ]]; then
-    step "Locating llama-server..."
-    LLAMA_SERVER_BIN=$(find_llama_server || true)
-    [[ -z "$LLAMA_SERVER_BIN" ]] && die "llama-server not found."
-    ok "Found: ${LLAMA_SERVER_BIN}"
-fi
-
 step "Generating ~/start-llm.sh..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
 
@@ -1086,6 +1065,8 @@ fi
 GOOSE_INSTALLED=false
 OPENCODE_INSTALLED=false
 AUTOAGENT_INSTALLED=false
+AUTOAGENT_DIR="${HOME}/autoagent"
+AUTOAGENT_VENV="${AUTOAGENT_DIR}/.venv"
 
 if [[ -z "$_SMO" ]]; then
 
@@ -1543,14 +1524,16 @@ show_llm_summary() {
     echo ""
 }
 
-# FIX: Use a fixed per-user marker instead of uptime-based one
+# Auto-start llama-server on first interactive terminal per WSL session.
 _llm_autostart() {
     [[ $- != *i* ]] && return 0
     pgrep -f "llama-server" &>/dev/null && return 0
     [[ -f ~/start-llm.sh ]] || return 0
-    local marker="/tmp/.llm_autostarted_${USER}"
-    [[ -f "$marker" ]] && return 0
-    touch "$marker"
+    local uptime_min
+    uptime_min=$(awk '{print int($1/60)}' /proc/uptime 2>/dev/null || echo "0")
+    local session_marker="/tmp/.llm_autostarted_${uptime_min}"
+    [[ -f "$session_marker" ]] && return 0
+    touch "$session_marker"
     echo -e "${YLW}[LLM] llama-server not running — auto-starting...${RST}"
     nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
     disown
