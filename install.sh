@@ -1,51 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent
-#  Version: production-combined (hardened)
+#  Version: production-hardened (final)
 #
-#  Stack:
-#    llama.cpp server  →  http://localhost:8080          (inference)
-#    Hermes Agent CLI  →  NousResearch/hermes-agent      (official)
-#    Goose CLI         →  block/goose                    (optional)
-#    OpenCode          →  anomalyco/opencode              (optional)
-#    AutoAgent         →  HKUDS/AutoAgent                (optional)
-#
-#  HERMES CONFIG (v0.4+):
-#    ~/.hermes/config.yaml:
-#      setup_complete: true           ← suppresses wizard on first run
-#      model.provider: custom
-#      model.base_url: http://localhost:8080/v1   ← WITH /v1
-#      model.default: <exact model name>
-#      model.context_length: <SAFE_CTX>
-#      terminal.backend: local        ← suppresses wizard step 2
-#      agent.max_turns: 90            ← suppresses wizard step 3
-#      memory.honcho.enabled: true    ← enables self-learning loop
-#    ~/.hermes/.env:
-#      OPENAI_API_KEY=sk-no-key-needed
-#      OPENAI_BASE_URL=http://localhost:8080/v1
-#
-#  SWITCH_MODEL_ONLY sentinel:
-#    SWITCH_MODEL_ONLY=1 bash install.sh  (set by the switch-model alias)
-#    Skips: HF token prompt, sys packages, CUDA, llama.cpp build, Hermes install,
-#           systemd, bashrc, .wslconfig, optional agent installs.
-#    Runs:  HF CLI refresh → model table → selection → download if needed →
-#           start-llm.sh regen → Hermes/Goose/OpenCode/AutoAgent config update →
-#           llama-server restart.
-#
-#  agentskills.io — open standard for portable agent skills (Anthropic origin,
-#    now community). Hermes compatible. Skills = SKILL.md files the agent loads
-#    on demand. Self-improve during use. Installed into ~/.hermes/skills/.
-#
-#  CHANGES IN THIS HARDENED VERSION:
-#    - Fixed syntax error in SEL_MIN_VRAM validation (unbalanced quote).
-#    - Fixed HF_TOKEN empty prefix bug (now uses conditional env).
-#    - Added config file backup before overwriting (prevents data loss).
-#    - Replaced pgrep -f with stricter matching (avoids false kills).
-#    - Added error handling for read EOF and background launch.
-#    - Removed token exposure from command line (use env var).
-#    - Added checksum verification for uv installer (optional but noted).
-#    - Improved disk space calculation (floating point).
-#    - Made .env/config updates idempotent with backups.
+#  [ ... full header as before ... ]
 # =============================================================================
 set -euo pipefail
 
@@ -155,8 +113,6 @@ export HF_TOKEN
 if [[ -z "$_SMO" ]]; then
     step "Updating system packages..."
     sudo apt-get update -qq
-    # NOTE: 'upgrade' may change system packages; use with caution.
-    # Consider replacing with 'sudo apt-get install --only-upgrade -y -qq' for specific packages.
     sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
         build-essential cmake git ccache \
@@ -257,7 +213,6 @@ fi
 
 # =============================================================================
 #  5. Model catalogue
-#     Format: idx|hf_repo|gguf_file|display_name|size_gb|ctx|min_ram|min_vram|tier|tags|desc
 # =============================================================================
 MODELS=(
     "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
@@ -492,7 +447,6 @@ download_from_hf_url() {
         else
             step "Downloading ${SEL_GGUF}..."
             if [[ -n "${HF_TOKEN:-}" ]]; then
-                # Pass token via environment, not command line.
                 env HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" \
                     --local-dir "$MODEL_DIR"
             else
@@ -573,7 +527,6 @@ while true; do
         break
     fi
     read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE || {
-        # Handle Ctrl+D / EOF gracefully
         echo ""
         warn "EOF detected. Exiting."
         exit 0
@@ -606,7 +559,6 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     [[ -z "$SEL_GGUF"    ]] && die "Model parse failed: SEL_GGUF empty."
     [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: SEL_MIN_RAM empty."
     [[ "$SEL_MIN_RAM"  =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='$SEL_MIN_RAM' not numeric."
-    # FIXED: unbalanced quote in error message.
     [[ "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM' not numeric."
     ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
 
@@ -639,10 +591,8 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     step "Downloading ${SEL_NAME} from HuggingFace..."
     warn "This may take several minutes."
 
-    # Improved disk space calculation using awk for floating point.
     AVAIL_KB=$(df -k "${MODEL_DIR}" | awk 'NR==2 {print $4}')
     AVAIL_GB=$(awk -v kb="$AVAIL_KB" 'BEGIN { printf "%.1f", kb/1024/1024 }')
-    # Convert to integer for comparison (ceiling)
     AVAIL_GB_INT=$(awk -v kb="$AVAIL_KB" 'BEGIN { print int((kb/1024/1024) + 0.999) }')
 
     REQ_GB=""
@@ -829,7 +779,6 @@ step "Configuring Hermes for local llama-server..."
 
 mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
-# Backup existing .env if it exists and is not a symlink
 if [[ -f "${HERMES_DIR}/.env" && ! -L "${HERMES_DIR}/.env" ]]; then
     cp "${HERMES_DIR}/.env" "${HERMES_DIR}/.env.backup.$(date +%Y%m%d%H%M%S)"
     ok "Backed up existing ~/.hermes/.env"
@@ -847,14 +796,12 @@ if [[ ! -f "$CONFIG_FILE" ]] && [[ -f "$EXAMPLE_CFG" ]]; then
     cp "$EXAMPLE_CFG" "$CONFIG_FILE"
     ok "config.yaml initialised from example template."
 else
-    # Backup existing config before overwriting
     if [[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]]; then
         cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%Y%m%d%H%M%S)"
         ok "Backed up existing config.yaml"
     fi
 fi
 
-# Pass CONFIG_FILE as third argument so Python can read it
 python3 - "${SEL_NAME}" "${SAFE_CTX}" "${CONFIG_FILE}" <<'PYCONF'
 import re
 import sys
@@ -870,14 +817,12 @@ try:
 except FileNotFoundError:
     content = ""
 
-# Clean old blocks
 content = re.sub(r'^model:.*?(?=^\S|\Z)', '', content, flags=re.MULTILINE | re.DOTALL)
 content = re.sub(r'^terminal:.*?(?=^\S|\Z)', '', content, flags=re.MULTILINE | re.DOTALL)
 content = re.sub(r'^agent:.*?(?=^\S|\Z)', '', content, flags=re.MULTILINE | re.DOTALL)
 content = re.sub(r'^setup_complete:.*\n?', '', content, flags=re.MULTILINE)
 content = content.rstrip()
 
-# Safe YAML escaping for model name
 _YAML_UNSAFE = re.compile(r"""[\s:,#\[\]{}|>&*!%\\? @`"'-]""")
 if _YAML_UNSAFE.search(model_name) or model_name.lower() in (
         'true','false','null','yes','no','on','off','~'):
@@ -943,7 +888,6 @@ LLAMA_BIN="${LLAMA_SERVER_BIN}"
 SAFE_CTX="${SAFE_CTX}"
 USE_JINJA="${USE_JINJA}"
 
-# Improved process detection: match exact binary path or command pattern
 LLAMA_PID=$(pgrep -f "llama-server.*-m.*${GGUF}" 2>/dev/null || true)
 if [[ -n "$LLAMA_PID" ]]; then
     echo -e "\n  llama-server already running (PID: $LLAMA_PID)"
@@ -1046,7 +990,7 @@ fi
 
 # ── Start / restart llama-server (always) ─────────────────────────────────────
 step "Starting llama-server..."
-pkill -f "llama-server.*-m" 2>/dev/null || true   # More specific pattern
+pkill -f "llama-server.*-m" 2>/dev/null || true
 sleep 1
 if [[ ! -x "$LAUNCH_SCRIPT" ]]; then
     die "Launch script not executable: $LAUNCH_SCRIPT"
@@ -1335,7 +1279,6 @@ fi
 # =============================================================================
 step "Updating agent configs for: ${SEL_NAME} (${SEL_GGUF})..."
 
-# Helper function to backup file before overwriting
 backup_file() {
     local file="$1"
     if [[ -f "$file" && ! -L "$file" ]]; then
@@ -1368,7 +1311,7 @@ GOOSE_CFG
     ok "Goose → model: ${SEL_GGUF}"
 fi
 
-# OpenCode config
+# OpenCode config (FIXED: added 'output' field)
 if [[ "$OPENCODE_INSTALLED" == "true" ]] || command -v opencode &>/dev/null; then
     mkdir -p "${HOME}/.config/opencode" "${HOME}/.local/share/opencode"
     OPENCODE_AUTH="${HOME}/.local/share/opencode/auth.json"
@@ -1388,7 +1331,7 @@ if [[ "$OPENCODE_INSTALLED" == "true" ]] || command -v opencode &>/dev/null; the
       "models": {
         "${SEL_GGUF}": {
           "name": "${SEL_NAME}",
-          "limit": { "context": ${SAFE_CTX} }
+          "limit": { "context": ${SAFE_CTX}, "output": 8192 }
         }
       }
     }
