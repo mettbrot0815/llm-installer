@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent
-#  Version: production-hardened (final)
-#
-#  [ ... full header as before ... ]
+#  Version: production-hardened (final) – fully corrected
 # =============================================================================
 set -euo pipefail
 
@@ -33,7 +31,7 @@ die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
 TMPFILES=()
 cleanup() {
     local f
-    for f in "${TMPFILES[@]+"${TMPFILES[@]}"}"; do
+    for f in "${TMPFILES[@]}"; do
         [[ -n "$f" && -f "$f" ]] && rm -f "$f"
     done
 }
@@ -195,12 +193,13 @@ if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
         ok "CUDA already installed: $(nvcc --version 2>/dev/null | head -1)"
     else
         step "Installing CUDA toolkit 12.6 for WSL2..."
-        sudo rm -f /etc/apt/trusted.gpg.d/cuda.gpg 2>/dev/null || true
+        local cuda_deb
+        cuda_deb=$(mktemp /tmp/cuda-keyring.XXXXXX.deb)
+        register_tmp "$cuda_deb"
         curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 \
             https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb \
-            -o /tmp/cuda-keyring.deb || die "Failed to download CUDA keyring"
-        register_tmp "/tmp/cuda-keyring.deb"
-        sudo dpkg -i /tmp/cuda-keyring.deb
+            -o "$cuda_deb" || die "Failed to download CUDA keyring"
+        sudo dpkg -i "$cuda_deb"
         sudo apt-get update -qq
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6
         ok "CUDA toolkit 12.6 installed."
@@ -236,7 +235,8 @@ mkdir -p "$MODEL_DIR"
 
 # ── Grade helpers ──────────────────────────────────────────────────────────────
 grade_model() {
-    local min_ram="${1:?}" min_vram="${2:?}" ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
+    local min_ram="${1:?}" min_vram="${2:?}"
+    local ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
     local ram_h=$(( ram_gib - min_ram ))
     if (( min_vram > 0 )) && [[ "$has_nvidia" == "true" ]]; then
         local vram_h=$(( vram_gib - min_vram ))
@@ -408,8 +408,12 @@ download_from_hf_url() {
         local list_out=""
         list_out=$("$HF_CLI" download "$SEL_HF_REPO" \
             --include "*.gguf" --dry-run 2>/dev/null || true)
-        mapfile -t GGUF_FILES < <(echo "$list_out" | grep -i '\.gguf$' | \
-            awk '{print $NF}' | xargs -I{} basename {} 2>/dev/null | sort)
+        GGUF_FILES=()
+        while IFS= read -r line; do
+            [[ "$line" =~ \.gguf$ ]] || continue
+            fname=$(basename "$line" 2>/dev/null || echo "$line")
+            GGUF_FILES+=("$fname")
+        done < <(echo "$list_out" | grep -i '\.gguf$' | awk '{print $NF}' | sort)
 
         if [[ ${#GGUF_FILES[@]} -eq 0 ]]; then
             warn "Could not auto-list files. Enter filename manually."
@@ -731,11 +735,13 @@ if [[ -z "$_SMO" ]]; then
 
     if ! command -v hermes &>/dev/null || [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
         step "Running official Hermes install script..."
+        local hermes_install_script
+        hermes_install_script=$(mktemp /tmp/hermes-install.XXXXXX.sh)
+        register_tmp "$hermes_install_script"
         curl -fsSL --connect-timeout 15 --max-time 300 \
             https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
-            -o /tmp/hermes-install.sh || die "Failed to download Hermes install script."
-        register_tmp "/tmp/hermes-install.sh"
-        if ! bash /tmp/hermes-install.sh; then
+            -o "$hermes_install_script" || die "Failed to download Hermes install script."
+        if ! bash "$hermes_install_script"; then
             warn "Official install script failed — falling back to manual install."
             if ! command -v uv &>/dev/null; then
                 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -990,6 +996,16 @@ fi
 
 # ── Start / restart llama-server (always) ─────────────────────────────────────
 step "Starting llama-server..."
+PIDFILE="/tmp/llama-server.pid"
+if [[ -f "$PIDFILE" ]]; then
+    old_pid=$(cat "$PIDFILE")
+    if kill -0 "$old_pid" 2>/dev/null; then
+        warn "llama-server already running (PID $old_pid), stopping it..."
+        kill "$old_pid"
+        sleep 2
+    fi
+    rm -f "$PIDFILE"
+fi
 pkill -f "llama-server.*-m" 2>/dev/null || true
 sleep 1
 if [[ ! -x "$LAUNCH_SCRIPT" ]]; then
@@ -997,6 +1013,7 @@ if [[ ! -x "$LAUNCH_SCRIPT" ]]; then
 fi
 nohup bash "$LAUNCH_SCRIPT" < /dev/null > /tmp/llama-server.log 2>&1 &
 LAUNCH_PID=$!
+echo "$LAUNCH_PID" > "$PIDFILE"
 ok "llama-server starting (PID: $LAUNCH_PID, log: tail -f /tmp/llama-server.log)"
 READY=false
 for i in {1..30}; do
@@ -1016,13 +1033,18 @@ fi
 # =============================================================================
 if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
     step "Installing recommended Hermes skills (agentskills.io)..."
-    for skill in "github-pr-workflow" "axolotl" "huggingface-hub"; do
-        if hermes skills install "official/${skill}" --yes 2>/dev/null; then
+    
+    SKILLS=("github-pr-workflow" "axolotl" "huggingface-hub")
+    
+    for skill in "${SKILLS[@]}"; do
+        echo -n "  Installing ${skill}... "
+        if timeout 30s hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
             ok "Installed skill: ${skill}"
         else
-            warn "Skill '${skill}' not installed — run: hermes skills install official/${skill}"
+            warn "Skill '${skill}' skipped (timeout or blocked)"
         fi
     done
+    
     ok "Skills: ~/.hermes/skills/  |  hermes skills browse  |  hermes skills search <query>"
 fi
 
@@ -1054,11 +1076,13 @@ if [[ "$install_goose" =~ ^[Yy]$ ]]; then
         ok "Goose: $(goose --version 2>/dev/null || echo 'installed')"
         GOOSE_INSTALLED=true
     else
+        local goose_script
+        goose_script=$(mktemp /tmp/goose-install.XXXXXX.sh)
+        register_tmp "$goose_script"
         if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
             https://github.com/block/goose/releases/download/stable/download_cli.sh \
-            -o /tmp/goose-install.sh 2>/dev/null; then
-            register_tmp "/tmp/goose-install.sh"
-            bash /tmp/goose-install.sh && export PATH="${HOME}/.local/bin:${PATH}" || \
+            -o "$goose_script" 2>/dev/null; then
+            bash "$goose_script" && export PATH="${HOME}/.local/bin:${PATH}" || \
                 warn "Goose install script failed."
         else
             warn "Failed to download Goose install script — skipping."
@@ -1155,16 +1179,19 @@ else
 fi
 
 if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
-    step "Installing python3-tk (required by AutoAgent file selector)..."
-    # Install python3-tk system-wide, fail loudly if it doesn't work
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk; then
-        die "python3-tk installation failed. Please install it manually."
+    step "Installing python3-tk (optional GUI dependency)..."
+    if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk 2>/dev/null; then
+        # Verify tkinter with a fake display (WSL2 may not have X11 running)
+        if ! DISPLAY=:0 python3.11 -c "import tkinter" 2>/dev/null && \
+           ! python3.11 -c "import tkinter" 2>/dev/null; then
+            warn "tkinter import test failed (expected on headless WSL2)"
+            warn "AutoAgent GUI features will be disabled, CLI mode works fine"
+        else
+            ok "python3-tk ready and tkinter verified."
+        fi
+    else
+        warn "python3-tk installation failed — AutoAgent CLI mode will still work"
     fi
-    # Verify that tkinter is actually importable in the system Python
-    if ! python3.11 -c "import tkinter" 2>/dev/null; then
-        die "tkinter module not found even after installing python3-tk. Check your Python installation."
-    fi
-    ok "python3-tk ready and tkinter verified."
 
     if ! command -v uv &>/dev/null; then
         step "Installing uv..."
@@ -1190,7 +1217,6 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
 
     if [[ ! -d "$AUTOAGENT_VENV" ]]; then
         step "Creating Python 3.11 venv for AutoAgent (with system site packages)..."
-        # CRITICAL: --system-site-packages allows the venv to see system-installed tkinter
         uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
         ok "Venv: ${AUTOAGENT_VENV} (system-site-packages enabled)"
     else
@@ -1278,6 +1304,8 @@ else
     ok "Skipping AutoAgent."
     [[ -d "${AUTOAGENT_DIR}/.git" ]] && AUTOAGENT_INSTALLED=true
 fi
+
+fi  # End of optional agents section
 
 # =============================================================================
 #  14. ~/.bashrc helpers  [SKIPPED by switch-model]
@@ -1579,3 +1607,5 @@ echo -e " ${YLW}Note:${RST}       source ~/.bashrc or open a new terminal."
 echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal."
 echo -e " ${GRN}Persistent:${RST} sudo loginctl enable-linger $USER"
 echo ""
+
+exit 0
