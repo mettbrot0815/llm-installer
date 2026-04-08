@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
-#  Version: production-hardened (final) – tkinter optional, summary always shown
+#  Version: production-hardened (final) – smart update checks, summary always shown
 # =============================================================================
 set -euo pipefail
 
@@ -633,6 +633,24 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
 fi
 
 # =============================================================================
+#  Helper: Check if a Git repository has updates (returns 0 if updates available)
+# =============================================================================
+git_has_updates() {
+    local repo_dir="$1"
+    local branch="${2:-main}"
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        return 0  # no repo -> need to clone
+    fi
+    cd "$repo_dir"
+    git fetch origin "$branch" 2>/dev/null || true
+    local local_commit remote_commit
+    local_commit=$(git rev-parse HEAD 2>/dev/null || echo "")
+    remote_commit=$(git rev-parse "origin/$branch" 2>/dev/null || echo "")
+    cd - >/dev/null
+    [[ -n "$local_commit" && -n "$remote_commit" && "$local_commit" != "$remote_commit" ]]
+}
+
+# =============================================================================
 #  8. Build llama.cpp  [SKIPPED by switch-model]
 # =============================================================================
 find_llama_server() {
@@ -674,38 +692,34 @@ else
         ok "llama-server: ${LLAMA_SERVER_BIN} — skipping build."
         ok "To force rebuild: rm ${LLAMA_SERVER_BIN} and rerun."
     else
-        step "Building llama.cpp from source (5–15 min first time, ~1 min with ccache)..."
-        if command -v ccache &>/dev/null; then
-            ok "ccache: $(ccache --version | head -1)"
-            export CC="ccache gcc" CXX="ccache g++"
-        else
-            warn "ccache not found — building without cache"
-            export CC="gcc" CXX="g++"
-        fi
-
         LLAMA_DIR="${HOME}/llama.cpp"
-        if [[ -d "$LLAMA_DIR/.git" ]]; then
-            step "Updating llama.cpp repo..."
-            git -C "$LLAMA_DIR" fetch origin
-            git -C "$LLAMA_DIR" reset --hard origin/HEAD
-        else
-            git clone https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
-        fi
+        if git_has_updates "$LLAMA_DIR" "master"; then
+            step "Updates available for llama.cpp — building..."
+            if [[ -d "$LLAMA_DIR/.git" ]]; then
+                git -C "$LLAMA_DIR" fetch origin
+                git -C "$LLAMA_DIR" reset --hard origin/master
+            else
+                git clone https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+            fi
 
-        cd "$LLAMA_DIR"
-        if [[ "$HAS_NVIDIA" == "true" ]]; then
-            cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
-                -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
-        else
-            cmake -B build -DGGML_CCACHE=ON
-        fi
-        cmake --build build --config Release -j"$(nproc)"
-        sudo cmake --install build || warn "System install failed — using build directory."
-        cd ~
+            cd "$LLAMA_DIR"
+            if command -v ccache &>/dev/null; then
+                export CC="ccache gcc" CXX="ccache g++"
+            else
+                export CC="gcc" CXX="g++"
+            fi
 
-        if command -v ccache &>/dev/null; then
-            ok "ccache stats:"
-            ccache -s 2>/dev/null | grep -E "cache (hit|miss)|cache size|max size" || true
+            if [[ "$HAS_NVIDIA" == "true" ]]; then
+                cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
+                    -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
+            else
+                cmake -B build -DGGML_CCACHE=ON
+            fi
+            cmake --build build --config Release -j"$(nproc)"
+            sudo cmake --install build || warn "System install failed — using build directory."
+            cd ~
+        else
+            ok "llama.cpp already up‑to‑date."
         fi
 
         LLAMA_SERVER_BIN=$(find_llama_server || true)
@@ -715,63 +729,59 @@ else
 fi
 
 # =============================================================================
-#  9. Hermes Agent install  [SKIPPED by switch-model]
+#  9. Hermes Agent install  [SKIPPED by switch-model]  (git + uv, update‑aware)
 # =============================================================================
 HERMES_AGENT_DIR="${HOME}/hermes-agent"
 HERMES_DIR="${HOME}/.hermes"
 export PATH="${HOME}/.local/bin:${PATH}"
 
 if [[ -z "$_SMO" ]]; then
-    step "Installing Hermes Agent (official NousResearch)..."
+    step "Installing Hermes Agent (official NousResearch via git+uv)..."
 
-    # Remove outsourc-e fork if present
-    if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
-        CURRENT_REMOTE=$(git -C "${HERMES_AGENT_DIR}" remote get-url origin 2>/dev/null || echo "")
-        if [[ "$CURRENT_REMOTE" == *"outsourc-e"* ]]; then
-            warn "outsourc-e fork detected — removing and replacing with official repo."
-            rm -rf "${HERMES_AGENT_DIR}"
-        fi
-    fi
-
-    if ! command -v hermes &>/dev/null || [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
-        step "Running official Hermes install script..."
-        local hermes_install_script
-        hermes_install_script=$(mktemp /tmp/hermes-install.XXXXXX.sh)
-        register_tmp "$hermes_install_script"
-        curl -fsSL --connect-timeout 15 --max-time 300 \
-            https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
-            -o "$hermes_install_script" || die "Failed to download Hermes install script."
-        if ! bash "$hermes_install_script"; then
-            warn "Official install script failed — falling back to manual install."
-            if ! command -v uv &>/dev/null; then
-                curl -LsSf https://astral.sh/uv/install.sh | sh
-                source "${HOME}/.cargo/env" 2>/dev/null || true
-                export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
-            fi
-            if [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
-                git clone --recurse-submodules \
-                    https://github.com/NousResearch/hermes-agent.git "${HERMES_AGENT_DIR}"
-            fi
+    if git_has_updates "$HERMES_AGENT_DIR" "main"; then
+        if [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
+            git clone https://github.com/NousResearch/hermes-agent.git "${HERMES_AGENT_DIR}"
+        else
+            ok "Updates available — pulling Hermes Agent..."
             cd "${HERMES_AGENT_DIR}"
-            uv venv .venv --python 3.11
-            VIRTUAL_ENV="${HERMES_AGENT_DIR}/.venv" uv pip install -e ".[all]"
-            mkdir -p "${HOME}/.local/bin"
-            ln -sf "${HERMES_AGENT_DIR}/.venv/bin/hermes" "${HOME}/.local/bin/hermes"
-            cd ~
+            git fetch origin
+            git reset --hard origin/main
+            cd - >/dev/null
         fi
     else
-        ok "Hermes Agent already installed — updating..."
-        if [[ -d "${HERMES_AGENT_DIR}/.git" ]]; then
-            cd "${HERMES_AGENT_DIR}"
-            git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || \
-                warn "Hermes git update failed (continuing with existing code)"
-            if command -v uv &>/dev/null && [[ -d ".venv" ]]; then
-                VIRTUAL_ENV="${HERMES_AGENT_DIR}/.venv" uv pip install -e ".[all]" \
-                    --quiet 2>/dev/null || true
-            fi
-            cd ~
-        fi
+        ok "Hermes Agent already up‑to‑date."
     fi
+
+    # Install uv if not present
+    if ! command -v uv &>/dev/null; then
+        step "Installing uv..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        source "${HOME}/.cargo/env" 2>/dev/null || true
+        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+    fi
+
+    cd "${HERMES_AGENT_DIR}"
+
+    # Create venv if missing
+    if [[ ! -d "venv" ]]; then
+        uv venv venv --python 3.11
+    fi
+
+    # Activate and install/update
+    source venv/bin/activate
+    uv pip install -e ".[all,dev]"
+
+    # Run tests (optional, non‑fatal)
+    if python -m pytest tests/ -q 2>/dev/null; then
+        ok "Hermes tests passed."
+    else
+        warn "Hermes tests failed or pytest not available — continuing anyway."
+    fi
+
+    # Symlink hermes binary to ~/.local/bin
+    mkdir -p "${HOME}/.local/bin"
+    ln -sf "${HERMES_AGENT_DIR}/venv/bin/hermes" "${HOME}/.local/bin/hermes"
+    cd ~
 
     export PATH="${HOME}/.local/bin:${PATH}"
     command -v hermes &>/dev/null || die "hermes not found after install. Check output above."
@@ -1077,7 +1087,6 @@ if [[ "$install_goose" =~ ^[Yy]$ ]]; then
         ok "Goose: $(goose --version 2>/dev/null || echo 'installed')"
         GOOSE_INSTALLED=true
     else
-        local goose_script
         goose_script=$(mktemp /tmp/goose-install.XXXXXX.sh)
         register_tmp "$goose_script"
         if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
@@ -1195,16 +1204,19 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
         ok "uv: $(uv --version)"
     fi
 
-    if [[ -d "${AUTOAGENT_DIR}/.git" ]]; then
-        ok "AutoAgent already cloned — updating..."
-        cd "${AUTOAGENT_DIR}"
-        git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || \
-            warn "AutoAgent update failed — continuing with existing code."
-        cd - >/dev/null
+    if git_has_updates "$AUTOAGENT_DIR" "main"; then
+        if [[ ! -d "${AUTOAGENT_DIR}/.git" ]]; then
+            step "Cloning HKUDS/AutoAgent..."
+            git clone https://github.com/HKUDS/AutoAgent.git "${AUTOAGENT_DIR}"
+        else
+            ok "Updates available — pulling AutoAgent..."
+            cd "${AUTOAGENT_DIR}"
+            git fetch origin
+            git reset --hard origin/main
+            cd - >/dev/null
+        fi
     else
-        step "Cloning HKUDS/AutoAgent..."
-        git clone https://github.com/HKUDS/AutoAgent.git "${AUTOAGENT_DIR}" 2>&1 | tail -3
-        ok "AutoAgent cloned."
+        ok "AutoAgent already up‑to‑date."
     fi
 
     if [[ ! -d "$AUTOAGENT_VENV" ]]; then
@@ -1213,7 +1225,7 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
         ok "Venv: ${AUTOAGENT_VENV}"
     fi
 
-    step "Installing AutoAgent dependencies..."
+    step "Installing/updating AutoAgent dependencies..."
     (
         export VIRTUAL_ENV="${AUTOAGENT_VENV}"
         export PATH="${AUTOAGENT_VENV}/bin:${PATH}"
@@ -1644,17 +1656,22 @@ OPECONF
     ok "OpenCode config written to ~/.config/opencode/opencode.json"
 
     # -------------------------------------------------------------------------
-    # 16b. Install Superpowers plugin (manual steps required by plugin)
+    # 16b. Install Superpowers plugin (with update check)
     # -------------------------------------------------------------------------
     step "Installing Superpowers plugin for OpenCode..."
 
     SUPER_DIR="${HOME}/.config/opencode/superpowers"
     PLUGIN_DIR="${HOME}/.config/opencode/plugin"
 
-    if [[ ! -d "$SUPER_DIR/.git" ]]; then
-        git clone https://github.com/obra/superpowers.git "$SUPER_DIR"
+    if git_has_updates "$SUPER_DIR" "main"; then
+        if [[ ! -d "$SUPER_DIR/.git" ]]; then
+            git clone https://github.com/obra/superpowers.git "$SUPER_DIR"
+        else
+            ok "Updates available — pulling Superpowers..."
+            git -C "$SUPER_DIR" pull --quiet
+        fi
     else
-        git -C "$SUPER_DIR" pull --quiet
+        ok "Superpowers already up‑to‑date."
     fi
 
     mkdir -p "$PLUGIN_DIR"
