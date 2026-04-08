@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
-#  Version: production-hardened (final) – smart update checks, summary always shown
+#  Version: production-hardened (final) – GitHub token, summary always shown
 # =============================================================================
 set -euo pipefail
 
@@ -104,6 +104,54 @@ if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
     fi
 fi
 export HF_TOKEN
+
+# =============================================================================
+#  1b. GitHub token (classic PAT) – optional, but recommended for repo access
+# =============================================================================
+_GH_ENV="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+GITHUB_TOKEN=""
+if [[ -n "$_GH_ENV" ]]; then
+    GITHUB_TOKEN="$_GH_ENV"
+    ok "GitHub token already set in environment."
+elif grep -qF "export GITHUB_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+    GITHUB_TOKEN=$(grep "export GITHUB_TOKEN=" "${HOME}/.bashrc" | head -1 | \
+        sed 's/.*export GITHUB_TOKEN=//' | sed "s/^[\"']//" | sed "s/[\"']$//")
+    [[ -n "$GITHUB_TOKEN" ]] && ok "GitHub token found in ~/.bashrc."
+fi
+
+if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
+    echo ""
+    echo -e "  ${BLD}Why add a GitHub token?${RST}"
+    echo -e "  Higher API rate limits (5,000 vs 60) · access private repositories"
+    echo -e "  ${CYN}https://github.com/settings/tokens${RST} → Generate new token (classic)"
+    echo -e "  Required scopes: ${YLW}repo${RST}, ${YLW}read:org${RST} (optional)"
+    echo ""
+    if [[ -t 0 ]]; then
+        read -rp "  Do you have a GitHub token to add? [y/N]: " gh_yn
+        if [[ "$gh_yn" =~ ^[Yy]$ ]]; then
+            read -rp "  Paste your token (starts with ghp_): " GITHUB_TOKEN
+            GITHUB_TOKEN="${GITHUB_TOKEN//[[:space:]]/}"
+            if [[ "$GITHUB_TOKEN" =~ ^ghp_ ]]; then
+                ok "Token accepted."
+            else
+                warn "Token doesn't start with 'ghp_' — using anyway."
+            fi
+        else
+            ok "Skipping — unauthenticated GitHub access (rate-limited)."
+        fi
+    else
+        ok "Non-interactive — skipping GitHub token prompt."
+    fi
+fi
+
+if [[ -n "$GITHUB_TOKEN" ]]; then
+    export GITHUB_TOKEN
+    # Configure git to use the token for HTTPS (only if not already set)
+    if ! git config --global --get url."https://${GITHUB_TOKEN}@github.com/".insteadOf &>/dev/null; then
+        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        ok "Git configured to use GitHub token for HTTPS."
+    fi
+fi
 
 # =============================================================================
 #  2. System packages  [SKIPPED by switch-model]
@@ -727,6 +775,7 @@ else
         ok "llama-server: ${LLAMA_SERVER_BIN}"
     fi
 fi
+
 # =============================================================================
 #  9. Hermes Agent install  [SKIPPED by switch-model]  (git + uv, update‑aware, NO TESTS)
 # =============================================================================
@@ -766,7 +815,7 @@ if [[ -z "$_SMO" ]]; then
         uv venv venv --python 3.11
     fi
 
-    # Activate and install/update (production dependencies only, NO dev extras)
+    # Activate and install/update (production only)
     source venv/bin/activate
     uv pip install -e ".[all]"
 
@@ -1400,6 +1449,12 @@ BASHRC_EXPANDED
                 ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
             echo "export HF_TOKEN=\"${HF_TOKEN}\"" >> "${HOME}/.bashrc"
             ok "HF_TOKEN added to ~/.bashrc."
+        fi
+
+        if [[ -n "${GITHUB_TOKEN:-}" ]] && \
+                ! grep -qF "export GITHUB_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+            echo "export GITHUB_TOKEN=\"${GITHUB_TOKEN}\"" >> "${HOME}/.bashrc"
+            ok "GITHUB_TOKEN added to ~/.bashrc."
         fi
 
         cat >> "${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
