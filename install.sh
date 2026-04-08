@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
-#  Version: production-hardened (final) – local fixes, immediate token saving, summary always shown
+#  Version: production-hardened (final) – Node.js 22 + sudo npm fix
 # =============================================================================
 set -euo pipefail
 
@@ -251,7 +251,6 @@ if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
         ok "CUDA already installed: $(nvcc --version 2>/dev/null | head -1)"
     else
         step "Installing CUDA toolkit 12.6 for WSL2..."
-        # FIX: removed 'local' from main body
         cuda_deb=$(mktemp /tmp/cuda-keyring.XXXXXX.deb)
         register_tmp "$cuda_deb"
         curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 \
@@ -1372,11 +1371,18 @@ fi
 
 if [[ "$install_openclaude" =~ ^[Yy]$ ]]; then
     step "Installing OpenClaude..."
-    if ! command -v npm &>/dev/null; then
-        warn "npm not found. Installing Node.js and npm..."
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm
+
+    # Install Node.js 22.x (LTS) if not already present or version < 20
+    if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
+        warn "Node.js >=20 required. Installing Node.js 22.x..."
+        # Add NodeSource repository
+        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+        sudo apt-get install -y -qq nodejs
     fi
-    npm install -g @gitlawb/openclaude@latest
+
+    # Install OpenClaude globally (use sudo to avoid permission errors)
+    sudo npm install -g @gitlawb/openclaude@latest
+
     if command -v openclaude &>/dev/null; then
         ok "OpenClaude: $(openclaude --version 2>/dev/null || echo 'installed')"
         OPENCLAUDE_INSTALLED=true
