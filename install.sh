@@ -727,9 +727,8 @@ else
         ok "llama-server: ${LLAMA_SERVER_BIN}"
     fi
 fi
-
 # =============================================================================
-#  9. Hermes Agent install  [SKIPPED by switch-model]  (git + uv, update‑aware)
+#  9. Hermes Agent install  [SKIPPED by switch-model]  (git + uv, update‑aware, NO TESTS)
 # =============================================================================
 HERMES_AGENT_DIR="${HOME}/hermes-agent"
 HERMES_DIR="${HOME}/.hermes"
@@ -767,16 +766,9 @@ if [[ -z "$_SMO" ]]; then
         uv venv venv --python 3.11
     fi
 
-    # Activate and install/update
+    # Activate and install/update (production dependencies only, NO dev extras)
     source venv/bin/activate
-    uv pip install -e ".[all,dev]"
-
-    # Run tests (optional, non‑fatal)
-    if python -m pytest tests/ -q 2>/dev/null; then
-        ok "Hermes tests passed."
-    else
-        warn "Hermes tests failed or pytest not available — continuing anyway."
-    fi
+    uv pip install -e ".[all]"
 
     # Symlink hermes binary to ~/.local/bin
     mkdir -p "${HOME}/.local/bin"
