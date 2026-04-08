@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
-#  Version: production-hardened (final) – with OpenCode, Claude config, Superpowers, OpenClaude
+#  Version: production-hardened (final) – tkinter fix + summary on every terminal
 # =============================================================================
 set -euo pipefail
 
@@ -1180,17 +1180,16 @@ else
 fi
 
 if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
-    step "Installing python3-tk (optional GUI dependency)..."
-    if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk 2>/dev/null; then
-        if ! DISPLAY=:0 python3.11 -c "import tkinter" 2>/dev/null && \
-           ! python3.11 -c "import tkinter" 2>/dev/null; then
-            warn "tkinter import test failed (expected on headless WSL2)"
-            warn "AutoAgent GUI features will be disabled, CLI mode works fine"
-        else
-            ok "python3-tk ready and tkinter verified."
-        fi
+    step "Installing python3-tk (required for AutoAgent file selector)..."
+    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk; then
+        warn "python3-tk installation failed — AutoAgent may not work"
+    fi
+
+    # Ensure tkinter is importable in system Python
+    if ! python3.11 -c "import tkinter" 2>/dev/null; then
+        warn "tkinter not importable in system Python — AutoAgent GUI features disabled"
     else
-        warn "python3-tk installation failed — AutoAgent CLI mode will still work"
+        ok "python3-tk ready and tkinter verified."
     fi
 
     if ! command -v uv &>/dev/null; then
@@ -1215,16 +1214,15 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
         ok "AutoAgent cloned."
     fi
 
-    if [[ ! -d "$AUTOAGENT_VENV" ]]; then
-        step "Creating Python 3.11 venv for AutoAgent (with system site packages)..."
-        uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
-        ok "Venv: ${AUTOAGENT_VENV} (system-site-packages enabled)"
-    else
-        if ! "${AUTOAGENT_VENV}/bin/python" -c "import tkinter" 2>/dev/null; then
-            warn "Existing venv lacks tkinter. Recreating with --system-site-packages..."
+    # Recreate venv if missing or tkinter not importable inside it
+    if [[ ! -d "$AUTOAGENT_VENV" ]] || ! "${AUTOAGENT_VENV}/bin/python" -c "import tkinter" 2>/dev/null; then
+        if [[ -d "$AUTOAGENT_VENV" ]]; then
+            warn "Existing venv lacks tkinter — recreating..."
             rm -rf "$AUTOAGENT_VENV"
-            uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
         fi
+        step "Creating Python 3.11 venv for AutoAgent (with system site packages)..."
+        python3.11 -m venv "${AUTOAGENT_VENV}" --system-site-packages
+        ok "Venv: ${AUTOAGENT_VENV} (system-site-packages enabled)"
     fi
 
     step "Installing AutoAgent dependencies..."
@@ -1322,12 +1320,8 @@ if [[ "$install_openclaude" =~ ^[Yy]$ ]]; then
         warn "npm not found. Installing Node.js and npm..."
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm
     fi
-    if npm list -g @gitlawb/openclaude &>/dev/null; then
-        ok "OpenClaude already installed. Updating to latest..."
-        npm update -g @gitlawb/openclaude@latest
-    else
-        npm install -g @gitlawb/openclaude@latest
-    fi
+    # Use npm install -g @gitlawb/openclaude@latest for both install and upgrade
+    npm install -g @gitlawb/openclaude@latest
     if command -v openclaude &>/dev/null; then
         ok "OpenClaude: $(openclaude --version 2>/dev/null || echo 'installed')"
         OPENCLAUDE_INSTALLED=true
@@ -1485,6 +1479,11 @@ show_llm_summary() {
     echo ""
 }
 
+# Always show summary on interactive shell start
+if [[ $- == *i* ]]; then
+    show_llm_summary
+fi
+
 # Auto-start llama-server on first interactive terminal per WSL session.
 _llm_autostart() {
     [[ $- != *i* ]] && return 0
@@ -1501,10 +1500,8 @@ _llm_autostart() {
 }
 _llm_autostart
 
-if [[ $- == *i* && ! -f "${HOME}/.llm_summary_shown" ]]; then
-    show_llm_summary
-    touch "${HOME}/.llm_summary_shown"
-fi
+# Alias clear to show summary then clear screen
+alias clear='show_llm_summary; command clear'
 BASHRC_FUNCTIONS
 
         ok "Helpers written to ~/.bashrc."
