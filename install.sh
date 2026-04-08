@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent
-#  Version: production-hardened (final) – fully corrected
+#  Version: production-hardened (final) – with OpenCode config + Superpowers
 # =============================================================================
 set -euo pipefail
 
@@ -1033,9 +1033,9 @@ fi
 # =============================================================================
 if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
     step "Installing recommended Hermes skills (agentskills.io)..."
-    
+
     SKILLS=("github-pr-workflow" "axolotl" "huggingface-hub")
-    
+
     for skill in "${SKILLS[@]}"; do
         echo -n "  Installing ${skill}... "
         if timeout 30s hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
@@ -1044,7 +1044,7 @@ if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
             warn "Skill '${skill}' skipped (timeout or blocked)"
         fi
     done
-    
+
     ok "Skills: ~/.hermes/skills/  |  hermes skills browse  |  hermes skills search <query>"
 fi
 
@@ -1220,7 +1220,6 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
         uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
         ok "Venv: ${AUTOAGENT_VENV} (system-site-packages enabled)"
     else
-        # If venv already exists, ensure it was created with --system-site-packages
         if ! "${AUTOAGENT_VENV}/bin/python" -c "import tkinter" 2>/dev/null; then
             warn "Existing venv lacks tkinter. Recreating with --system-site-packages..."
             rm -rf "$AUTOAGENT_VENV"
@@ -1521,6 +1520,123 @@ WSLCFG
     else
         warn "Could not locate Windows user profile — skipping .wslconfig."
     fi
+fi
+
+# =============================================================================
+#  16. OpenCode Configuration & Superpowers Plugin (NEW)
+# =============================================================================
+if [[ -z "$_SMO" ]] && command -v opencode &>/dev/null; then
+    step "Configuring OpenCode with local model and Superpowers plugin..."
+
+    OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+    mkdir -p "$OPENCODE_CONFIG_DIR"
+
+    # -------------------------------------------------------------------------
+    # 16a. Write opencode.json with providers and selected model
+    # -------------------------------------------------------------------------
+    cat > "${OPENCODE_CONFIG_DIR}/opencode.json" <<OPECONF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama.cpp (local)",
+      "options": {
+        "baseURL": "http://localhost:8080/v1",
+        "apiKey": "sk-local"
+      },
+      "models": {
+        "${SEL_GGUF}": {
+          "name": "${SEL_NAME}",
+          "limit": {
+            "context": ${SAFE_CTX},
+            "output": 8192
+          }
+        }
+      }
+    },
+    "nvidia": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NVIDIA NIM",
+      "options": {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{env:NVIDIA_API_KEY}"
+      },
+      "models": {
+        "mistralai/devstral-2-123b-instruct-2512": { "name": "Devstral 2 123B" },
+        "qwen/qwen3-next-80b-a3b-instruct": { "name": "Qwen3 80B Instruct" },
+        "minimaxai/minimax-m2.5": { "name": "MiniMax M2.5" },
+        "moonshotai/kimi-k2.5": { "name": "Kimi K2.5" },
+        "z-ai/glm5": { "name": "GLM 5" },
+        "qwen/qwen3-next-80b-a3b-thinking": { "name": "Qwen3 80B Thinking" },
+        "meta/llama-4-maverick-17b-128e-instruct": { "name": "Llama 4 Maverick" },
+        "stepfun-ai/step-3.5-flash": { "name": "Step 3.5 Flash" },
+        "qwen/qwen3-coder-480b-a35b-instruct": { "name": "Qwen3 Coder 480B" }
+      }
+    },
+    "together": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Together AI",
+      "options": {
+        "baseURL": "https://api.together.xyz/v1",
+        "apiKey": "{env:TOGETHER_API_KEY}"
+      },
+      "models": {
+        "MiniMaxAI/MiniMax-M2.5": { "name": "MiniMax M2.5" }
+      }
+    },
+    "sambanova": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "SambaNova",
+      "options": {
+        "baseURL": "https://api.sambanova.ai/v1",
+        "apiKey": "{env:SAMBANOVA_API_KEY}"
+      },
+      "models": {
+        "MiniMax-M2.5": { "name": "MiniMax M2.5" }
+      }
+    },
+    "scaleway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Scaleway",
+      "options": {
+        "baseURL": "https://api.scaleway.ai/v1",
+        "apiKey": "{env:SCALEWAY_API_KEY}"
+      },
+      "models": {
+        "devstral-2-123b-instruct-2512": { "name": "Devstral 2 123B" }
+      }
+    }
+  },
+  "model": "nvidia/stepfun-ai/step-3.5-flash",
+  "small_model": "llamacpp/${SEL_GGUF}",
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git"
+  ]
+}
+OPECONF
+
+    ok "OpenCode config written to ~/.config/opencode/opencode.json"
+
+    # -------------------------------------------------------------------------
+    # 16b. Install Superpowers plugin (manual steps required by plugin)
+    # -------------------------------------------------------------------------
+    step "Installing Superpowers plugin for OpenCode..."
+
+    SUPER_DIR="${HOME}/.config/opencode/superpowers"
+    PLUGIN_DIR="${HOME}/.config/opencode/plugin"
+
+    if [[ ! -d "$SUPER_DIR/.git" ]]; then
+        git clone https://github.com/obra/superpowers.git "$SUPER_DIR"
+    else
+        git -C "$SUPER_DIR" pull --quiet
+    fi
+
+    mkdir -p "$PLUGIN_DIR"
+    ln -sf "${SUPER_DIR}/.opencode/plugin/superpowers.js" "${PLUGIN_DIR}/superpowers.js"
+
+    ok "Superpowers plugin installed (symlink created)"
+    warn "Note: OpenCode must be restarted for plugin to take effect."
 fi
 
 # =============================================================================
