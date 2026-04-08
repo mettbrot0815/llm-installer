@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
-#  Version: production-hardened (final) – tkinter fix + summary on every terminal
+#  Version: production-hardened (final) – tkinter optional, summary always shown
 # =============================================================================
 set -euo pipefail
 
@@ -1180,16 +1180,9 @@ else
 fi
 
 if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
-    step "Installing python3-tk (required for AutoAgent file selector)..."
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk; then
-        warn "python3-tk installation failed — AutoAgent may not work"
-    fi
-
-    # Ensure tkinter is importable in system Python
-    if ! python3.11 -c "import tkinter" 2>/dev/null; then
-        warn "tkinter not importable in system Python — AutoAgent GUI features disabled"
-    else
-        ok "python3-tk ready and tkinter verified."
+    step "Installing python3-tk (optional for GUI)..."
+    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk 2>/dev/null; then
+        warn "python3-tk installation skipped — GUI features will be disabled"
     fi
 
     if ! command -v uv &>/dev/null; then
@@ -1214,15 +1207,10 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
         ok "AutoAgent cloned."
     fi
 
-    # Recreate venv if missing or tkinter not importable inside it
-    if [[ ! -d "$AUTOAGENT_VENV" ]] || ! "${AUTOAGENT_VENV}/bin/python" -c "import tkinter" 2>/dev/null; then
-        if [[ -d "$AUTOAGENT_VENV" ]]; then
-            warn "Existing venv lacks tkinter — recreating..."
-            rm -rf "$AUTOAGENT_VENV"
-        fi
-        step "Creating Python 3.11 venv for AutoAgent (with system site packages)..."
-        python3.11 -m venv "${AUTOAGENT_VENV}" --system-site-packages
-        ok "Venv: ${AUTOAGENT_VENV} (system-site-packages enabled)"
+    if [[ ! -d "$AUTOAGENT_VENV" ]]; then
+        step "Creating Python 3.11 venv for AutoAgent..."
+        uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
+        ok "Venv: ${AUTOAGENT_VENV}"
     fi
 
     step "Installing AutoAgent dependencies..."
@@ -1232,6 +1220,11 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
         cd "${AUTOAGENT_DIR}"
         uv pip install -e "." 2>&1 | tail -5
     ) && ok "AutoAgent installed." || die "AutoAgent install failed."
+
+    # Warn if tkinter is missing (non-fatal)
+    if ! "${AUTOAGENT_VENV}/bin/python" -c "import tkinter" 2>/dev/null; then
+        warn "tkinter not available in venv — AutoAgent GUI features disabled"
+    fi
 
     cat > "${HOME}/start-autoagent.sh" <<AUTOAGENT_LAUNCHER
 #!/usr/bin/env bash
@@ -1320,7 +1313,6 @@ if [[ "$install_openclaude" =~ ^[Yy]$ ]]; then
         warn "npm not found. Installing Node.js and npm..."
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm
     fi
-    # Use npm install -g @gitlawb/openclaude@latest for both install and upgrade
     npm install -g @gitlawb/openclaude@latest
     if command -v openclaude &>/dev/null; then
         ok "OpenClaude: $(openclaude --version 2>/dev/null || echo 'installed')"
