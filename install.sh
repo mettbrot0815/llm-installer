@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
-#  Version: production-hardened (final) – GitHub token, summary always shown
+#  Version: production-hardened (final) – local fixes, immediate token saving, summary always shown
 # =============================================================================
 set -euo pipefail
 
@@ -96,6 +96,11 @@ if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
             else
                 warn "Token doesn't start with 'hf_' — using anyway."
             fi
+            # Immediately save to ~/.bashrc if not already present
+            if ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+                echo "export HF_TOKEN=\"${HF_TOKEN}\"" >> "${HOME}/.bashrc"
+                ok "HF_TOKEN saved to ~/.bashrc."
+            fi
         else
             ok "Skipping — unauthenticated downloads (slower, rate-limited)."
         fi
@@ -135,6 +140,11 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
                 ok "Token accepted."
             else
                 warn "Token doesn't start with 'ghp_' — using anyway."
+            fi
+            # Immediately save to ~/.bashrc if not already present
+            if ! grep -qF "export GITHUB_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+                echo "export GITHUB_TOKEN=\"${GITHUB_TOKEN}\"" >> "${HOME}/.bashrc"
+                ok "GITHUB_TOKEN saved to ~/.bashrc."
             fi
         else
             ok "Skipping — unauthenticated GitHub access (rate-limited)."
@@ -241,7 +251,7 @@ if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
         ok "CUDA already installed: $(nvcc --version 2>/dev/null | head -1)"
     else
         step "Installing CUDA toolkit 12.6 for WSL2..."
-        local cuda_deb
+        # FIX: removed 'local' from main body
         cuda_deb=$(mktemp /tmp/cuda-keyring.XXXXXX.deb)
         register_tmp "$cuda_deb"
         curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 \
@@ -1445,16 +1455,12 @@ alias llm-log='tail -f /tmp/llama-server.log'
 alias switch-model='SWITCH_MODEL_ONLY=1 bash ${INSTALL_COPY}'
 BASHRC_EXPANDED
 
-        if [[ -n "${HF_TOKEN:-}" ]] && \
-                ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+        # Tokens are already saved immediately when entered; this is just a backup
+        if [[ -n "${HF_TOKEN:-}" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
             echo "export HF_TOKEN=\"${HF_TOKEN}\"" >> "${HOME}/.bashrc"
-            ok "HF_TOKEN added to ~/.bashrc."
         fi
-
-        if [[ -n "${GITHUB_TOKEN:-}" ]] && \
-                ! grep -qF "export GITHUB_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
+        if [[ -n "${GITHUB_TOKEN:-}" ]] && ! grep -qF "export GITHUB_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
             echo "export GITHUB_TOKEN=\"${GITHUB_TOKEN}\"" >> "${HOME}/.bashrc"
-            ok "GITHUB_TOKEN added to ~/.bashrc."
         fi
 
         cat >> "${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
