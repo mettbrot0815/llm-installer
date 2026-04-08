@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent
-#  Version: production-hardened (final) – with OpenCode & Claude config + Superpowers
+#  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
+#  Version: production-hardened (final) – with OpenCode, Claude config, Superpowers, OpenClaude
 # =============================================================================
 set -euo pipefail
 
@@ -1054,6 +1054,7 @@ fi
 GOOSE_INSTALLED=false
 OPENCODE_INSTALLED=false
 AUTOAGENT_INSTALLED=false
+OPENCLAUDE_INSTALLED=false
 AUTOAGENT_DIR="${HOME}/autoagent"
 AUTOAGENT_VENV="${AUTOAGENT_DIR}/.venv"
 
@@ -1303,6 +1304,41 @@ else
     [[ -d "${AUTOAGENT_DIR}/.git" ]] && AUTOAGENT_INSTALLED=true
 fi
 
+# ── 13d. OpenClaude ───────────────────────────────────────────────────────────
+echo ""
+echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
+echo -e "  Claude-compatible CLI with local model support · npm package"
+echo -e "  ${YLW}Info:${RST} https://www.npmjs.com/package/@gitlawb/openclaude"
+echo ""
+if [[ -t 0 ]]; then
+    read -rp "  Install OpenClaude? [y/N]: " install_openclaude
+else
+    install_openclaude="n"
+fi
+
+if [[ "$install_openclaude" =~ ^[Yy]$ ]]; then
+    step "Installing OpenClaude..."
+    if ! command -v npm &>/dev/null; then
+        warn "npm not found. Installing Node.js and npm..."
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm
+    fi
+    if npm list -g @gitlawb/openclaude &>/dev/null; then
+        ok "OpenClaude already installed. Updating to latest..."
+        npm update -g @gitlawb/openclaude@latest
+    else
+        npm install -g @gitlawb/openclaude@latest
+    fi
+    if command -v openclaude &>/dev/null; then
+        ok "OpenClaude: $(openclaude --version 2>/dev/null || echo 'installed')"
+        OPENCLAUDE_INSTALLED=true
+    else
+        warn "OpenClaude binary not found in PATH after install."
+    fi
+else
+    ok "Skipping OpenClaude."
+    command -v openclaude &>/dev/null && OPENCLAUDE_INSTALLED=true
+fi
+
 fi  # End of optional agents section
 
 # =============================================================================
@@ -1434,6 +1470,7 @@ show_llm_summary() {
     echo -e "${BLD}${CYN}│${RST}  ${CYN}goose${RST}         Goose (if installed)"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}opencode${RST}      OpenCode coding agent (if installed)"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}autoagent${RST}     AutoAgent deep research (if installed)"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}openclaude${RST}    OpenClaude CLI (if installed)"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}start-llm${RST}     Start llama-server"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}stop-llm${RST}      Stop llama-server"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}restart-llm${RST}   Restart llama-server"
@@ -1794,6 +1831,7 @@ if [[ -z "$_SMO" ]]; then
     [[ "$GOOSE_INSTALLED"     == "true" ]] && echo -e "  Goose         →  goose"
     [[ "$OPENCODE_INSTALLED"  == "true" ]] && echo -e "  OpenCode      →  opencode  (alias: oc)"
     [[ "$AUTOAGENT_INSTALLED" == "true" ]] && echo -e "  AutoAgent     →  autoagent"
+    [[ "$OPENCLAUDE_INSTALLED" == "true" ]] && echo -e "  OpenClaude    →  openclaude"
     echo ""
 fi
 
@@ -1820,6 +1858,8 @@ echo -e "  ${CYN}hermes skills${RST}   Browse/install skills (agentskills.io)"
     echo -e "  ${CYN}opencode${RST} / ${CYN}oc${RST}  OpenCode TUI coding agent"
 [[ "$AUTOAGENT_INSTALLED" == "true" ]] && \
     echo -e "  ${CYN}autoagent${RST}       AutoAgent deep research (no Docker)"
+[[ "$OPENCLAUDE_INSTALLED" == "true" ]] && \
+    echo -e "  ${CYN}openclaude${RST}      OpenClaude CLI"
 echo ""
 echo -e " ${BLD}Hermes inside chat:${RST}"
 echo -e "  ${CYN}/provider${RST}    Verify routing (should show: custom/local)"
