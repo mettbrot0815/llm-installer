@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent
-#  Version: production-hardened (final) – with OpenCode config + Superpowers
+#  Version: production-hardened (final) – with OpenCode & Claude config + Superpowers
 # =============================================================================
 set -euo pipefail
 
@@ -1181,7 +1181,6 @@ fi
 if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
     step "Installing python3-tk (optional GUI dependency)..."
     if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk 2>/dev/null; then
-        # Verify tkinter with a fake display (WSL2 may not have X11 running)
         if ! DISPLAY=:0 python3.11 -c "import tkinter" 2>/dev/null && \
            ! python3.11 -c "import tkinter" 2>/dev/null; then
             warn "tkinter import test failed (expected on headless WSL2)"
@@ -1523,7 +1522,7 @@ WSLCFG
 fi
 
 # =============================================================================
-#  16. OpenCode Configuration & Superpowers Plugin (NEW)
+#  16. OpenCode Configuration & Superpowers Plugin
 # =============================================================================
 if [[ -z "$_SMO" ]] && command -v opencode &>/dev/null; then
     step "Configuring OpenCode with local model and Superpowers plugin..."
@@ -1640,6 +1639,130 @@ OPECONF
 fi
 
 # =============================================================================
+#  17. Claude Configuration (Claude Code / Claude Desktop)
+# =============================================================================
+if [[ -z "$_SMO" ]] && (command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]); then
+    step "Configuring Claude to use local llama.cpp server..."
+
+    CLAUDE_CONFIG_DIR="${HOME}/.claude"
+    mkdir -p "$CLAUDE_CONFIG_DIR"
+
+    # Write Claude config with local provider using selected model
+    cat > "${CLAUDE_CONFIG_DIR}/config.json" <<CLAUDE
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${HOME}/.claude/hooks/gsd-check-update.js\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOME}/.claude/hooks/gsd-session-state.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${HOME}/.claude/hooks/gsd-context-monitor.js\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOME}/.claude/hooks/gsd-phase-boundary.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${HOME}/.claude/hooks/gsd-prompt-guard.js\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${HOME}/.claude/hooks/gsd-read-guard.js\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${HOME}/.claude/hooks/gsd-workflow-guard.js\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOME}/.claude/hooks/gsd-validate-commit.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "node \"${HOME}/.claude/hooks/gsd-statusline.js\""
+  },
+  "agentModels": {
+    "primary": "local/${SEL_GGUF}"
+  },
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "apiKey": "local",
+      "models": {
+        "${SEL_GGUF}": {
+          "name": "${SEL_NAME}",
+          "contextWindow": ${SAFE_CTX},
+          "maxTokens": 16384,
+          "reasoning": false
+        }
+      }
+    }
+  }
+}
+CLAUDE
+
+    ok "Claude config written to ~/.claude/config.json"
+    warn "Note: Restart Claude for changes to take effect."
+fi
+
+# =============================================================================
 #  Done — Summary
 # =============================================================================
 echo ""
@@ -1714,6 +1837,7 @@ echo -e "  ~/.hermes/.env                Hermes env vars"
     echo -e "  ~/.config/opencode/opencode.json  OpenCode"
 [[ "$AUTOAGENT_INSTALLED" == "true" ]] && \
     echo -e "  ~/.autoagent/.env             AutoAgent"
+echo -e "  ~/.claude/config.json         Claude (local provider)"
 echo ""
 echo -e " ${GRN}Honcho memory:${RST}  enabled — Hermes learns your patterns across sessions"
 echo -e " ${GRN}Skills:${RST}         hermes skills browse  |  hermes skills search <query>"
