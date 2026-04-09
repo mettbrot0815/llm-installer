@@ -1236,53 +1236,76 @@ OPENCLAUDE
         ok "OpenClaude configured."
     fi
 fi
-
 # =============================================================================
-#  13e. Hermes WebUI
+#  13e. Hermes WebUI (Python-based) – Browser interface for Hermes
 # =============================================================================
 HERMES_WEBUI_DIR="${HOME}/hermes-webui"
 
 if $INSTALL_WEBUI; then
     step "Installing Hermes WebUI..."
+
+    # Clone or update
     if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
         git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
     else
         git -C "$HERMES_WEBUI_DIR" pull --quiet
     fi
 
-    if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 18 ]]; then
-        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-        sudo apt-get install -y -qq nodejs
+    # The WebUI runs inside the existing Hermes agent venv
+    HERMES_VENV="${HOME}/hermes-agent/venv"
+    if [[ ! -d "$HERMES_VENV" ]]; then
+        warn "Hermes agent venv not found – WebUI may not function correctly."
     fi
 
-    cd "$HERMES_WEBUI_DIR"
-    npm install
-    cat >".env.local" <<WEBUIENV
-VITE_HERMES_API_URL=http://localhost:8080/v1
-VITE_HERMES_AGENT_API=http://localhost:8000
-WEBUIENV
-    npm run build
+    # Install Python dependencies (if any) into the Hermes venv
+    if [[ -f "${HERMES_WEBUI_DIR}/requirements.txt" ]]; then
+        if [[ -x "${HERMES_VENV}/bin/pip" ]]; then
+            "${HERMES_VENV}/bin/pip" install -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet
+        else
+            pip3 install --user --break-system-packages -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet
+        fi
+    fi
 
+    # Create a convenient start script
     cat >"${HOME}/start-webui.sh" <<WEBUISTART
 #!/usr/bin/env bash
 cd "${HERMES_WEBUI_DIR}"
-echo "Starting Hermes WebUI on http://localhost:3000"
-npm run preview -- --host 0.0.0.0 --port 3000
+# Use the Hermes agent venv's Python if available
+if [[ -x "${HERMES_VENV}/bin/python" ]]; then
+    export PATH="${HERMES_VENV}/bin:\${PATH}"
+fi
+echo "Starting Hermes WebUI on http://localhost:8787"
+./start.sh
 WEBUISTART
     chmod +x "${HOME}/start-webui.sh"
-    cd ~
-    ok "Hermes WebUI installed. Start with: ~/start-webui.sh"
-fi
 
-# =============================================================================
-#  10. pip update  [SKIPPED by switch-model]
-# =============================================================================
-if [[ -z "$_SMO" ]]; then
-    if [[ ! -f /usr/lib/python3.*/EXTERNALLY-MANAGED ]]; then
-        pip3 install --user --upgrade pip setuptools wheel 2>/dev/null || true
-    else
-        pip3 install --user --break-system-packages --upgrade pip setuptools wheel 2>/dev/null || true
+    # Optional: systemd service for WebUI
+    if systemctl --user daemon-reload 2>/dev/null; then
+        mkdir -p "${HOME}/.config/systemd/user"
+        cat >"${HOME}/.config/systemd/user/hermes-webui.service" <<WEBUISERVICE
+[Unit]
+Description=Hermes WebUI
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${HERMES_WEBUI_DIR}
+ExecStart=${HOME}/start-webui.sh
+Restart=on-failure
+RestartSec=5
+Environment=HERMES_WEBUI_HOST=127.0.0.1
+Environment=HERMES_WEBUI_PORT=8787
+StandardOutput=file:/tmp/hermes-webui.log
+StandardError=file:/tmp/hermes-webui.log
+
+[Install]
+WantedBy=default.target
+WEBUISERVICE
+        systemctl --user enable hermes-webui.service 2>/dev/null || true
+        ok "WebUI systemd service enabled (starts on login)."
     fi
+
+    ok "Hermes WebUI installed. Start with: ~/start-webui.sh  →  http://localhost:8787"
 fi
 
 # =============================================================================
