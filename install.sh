@@ -1243,12 +1243,16 @@ OPENCLAUDE
         ok "OpenClaude configured."
     fi
 fi
-
 # =============================================================================
 #  13e. OpenAI Codex CLI
 # =============================================================================
 if $INSTALL_CODEX; then
     step "Installing OpenAI Codex CLI..."
+    
+    # Install bubblewrap (required by Codex)
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bubblewrap 2>/dev/null || \
+        warn "bubblewrap installation failed – Codex will use vendored version."
+    
     # Ensure Node.js and npm are installed
     if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
         curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -1258,7 +1262,21 @@ if $INSTALL_CODEX; then
 
     if command -v codex &>/dev/null; then
         ok "Codex installed: $(codex --version 2>/dev/null || echo 'installed')"
-        warn "Please install bubblewrap with your package manager (e.g., sudo apt install bubblewrap). Codex will use the vendored bubblewrap in the meantime."
+        
+        # Configure Codex to use local llama-server
+        mkdir -p "${HOME}/.codex"
+        cat >"${HOME}/.codex/config.json" <<CODEXCONF
+{
+  "apiKey": "sk-local",
+  "baseURL": "http://localhost:8080/v1",
+  "model": "${SEL_NAME}"
+}
+CODEXCONF
+        # Also set environment variables for compatibility
+        export OPENAI_API_KEY="sk-local"
+        export OPENAI_BASE_URL="http://localhost:8080/v1"
+        
+        ok "Codex configured to use local model: ${SEL_NAME}"
     else
         warn "Codex installation may have failed. Check npm output."
     fi
