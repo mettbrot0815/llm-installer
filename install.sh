@@ -1253,35 +1253,36 @@ if $INSTALL_CODEX; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bubblewrap 2>/dev/null || \
         warn "bubblewrap installation failed – Codex will use vendored version."
     
-    # Ensure Node.js and npm are installed
-    if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
-        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-        sudo apt-get install -y -qq nodejs npm
-    fi
-    sudo npm install -g @openai/codex
-
+    # Install Codex using the official script
+    curl -fsSL https://raw.githubusercontent.com/openai/codex/main/install | bash
+    
     if command -v codex &>/dev/null; then
         ok "Codex installed: $(codex --version 2>/dev/null || echo 'installed')"
         
-        # Configure Codex to use local llama-server
+        # Create config directory and write TOML configuration
         mkdir -p "${HOME}/.codex"
-        cat >"${HOME}/.codex/config.json" <<CODEXCONF
-{
-  "apiKey": "sk-local",
-  "baseURL": "http://localhost:8080/v1",
-  "model": "${SEL_NAME}"
-}
+        cat >"${HOME}/.codex/config.toml" <<CODEXCONF
+model_provider = "openai-generic"
+
+[model_providers.openai-generic]
+name = "Local LLM"
+base_url = "http://localhost:8080/v1"
+env_key = "OPENAI_API_KEY"
+
+model = "${SEL_NAME}"
 CODEXCONF
-        # Also set environment variables for compatibility
+        
+        # Set environment variable for API key
         export OPENAI_API_KEY="sk-local"
-        export OPENAI_BASE_URL="http://localhost:8080/v1"
+        if ! grep -qF "export OPENAI_API_KEY=" "${HOME}/.bashrc" 2>/dev/null; then
+            echo 'export OPENAI_API_KEY="sk-local"' >>"${HOME}/.bashrc"
+        fi
         
         ok "Codex configured to use local model: ${SEL_NAME}"
     else
-        warn "Codex installation may have failed. Check npm output."
+        warn "Codex installation may have failed. Check output above."
     fi
 fi
-
 # =============================================================================
 #  13f. Hermes WebUI (Python-based) – Browser interface for Hermes
 # =============================================================================
