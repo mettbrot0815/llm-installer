@@ -874,7 +874,7 @@ else
 fi
 
 # =============================================================================
-#  9. Hermes Agent install  [SKIPPED by switch-model] – Official NousResearch installer
+#  9. Hermes Agent install  [SKIPPED by switch-model] – Official installer, wizard skipped
 # =============================================================================
 HERMES_DIR="${HOME}/.hermes"
 export PATH="${HOME}/.local/bin:${PATH}"
@@ -882,29 +882,34 @@ export PATH="${HOME}/.local/bin:${PATH}"
 if [[ -z "$_SMO" ]]; then
     step "Installing Hermes Agent (official NousResearch installer)..."
 
-    # Download the official installer script and execute it
     hermes_installer=$(mktemp /tmp/hermes-install.XXXXXX.sh)
     register_tmp "$hermes_installer"
     curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
         https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
         -o "$hermes_installer" || die "Failed to download Hermes installer"
-    bash "$hermes_installer" || die "Hermes installation failed"
 
-    # Ensure hermes is in PATH
+    # Run installer with --no-setup to skip the interactive wizard
+    bash "$hermes_installer" --no-setup || {
+        # Fallback if --no-setup not supported: set environment variable
+        warn "--no-setup flag not supported; trying HERMES_SKIP_SETUP=1"
+        HERMES_SKIP_SETUP=1 bash "$hermes_installer" || die "Hermes installation failed"
+    }
+
     if [[ -x "${HOME}/.local/bin/hermes" ]]; then
-        ok "Hermes Agent installed successfully."
+        ok "Hermes Agent installed successfully (wizard skipped)."
     else
         die "Hermes binary not found after installation."
     fi
 fi
 
 # =============================================================================
-#  9b. Configure Hermes for local llama-server – uses ruamel.yaml for safe YAML editing
+#  9b. Configure Hermes for local llama-server – clean YAML overwrite
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
 
 mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
+# Backup and write .env
 if [[ -f "${HERMES_DIR}/.env" && ! -L "${HERMES_DIR}/.env" ]]; then
     cp "${HERMES_DIR}/.env" "${HERMES_DIR}/.env.backup.$(date +%Y%m%d%H%M%S)"
     ok "Backed up existing ~/.hermes/.env"
@@ -917,52 +922,33 @@ ok "~/.hermes/.env written."
 
 CONFIG_FILE="${HERMES_DIR}/config.yaml"
 
-# Install ruamel.yaml temporarily for safe YAML editing
-pip3 install --quiet --user --break-system-packages ruamel.yaml || die "Failed to install ruamel.yaml"
+# Backup existing config
+if [[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]]; then
+    cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%Y%m%d%H%M%S)"
+    ok "Backed up existing config.yaml"
+fi
 
-# Python script using ruamel.yaml to update config (idempotent, preserves formatting)
-_hermes_config_py=$(mktemp /tmp/hermes-config.XXXXXX.py)
-register_tmp "$_hermes_config_py"
-cat >"$_hermes_config_py" <<'PYCONF'
-#!/usr/bin/env python3
-import sys
-from ruamel.yaml import YAML
+# Write a clean, minimal config.yaml with the selected model
+cat >"$CONFIG_FILE" <<YAML
+setup_complete: true
 
-model_name = sys.argv[1]
-ctx_length = int(sys.argv[2])
-config_path = sys.argv[3]
+model:
+  provider: custom
+  base_url: http://localhost:8080/v1
+  default: "${SEL_NAME}"
+  context_length: ${SAFE_CTX}
 
-yaml = YAML()
-yaml.preserve_quotes = True
-yaml.indent(mapping=2, sequence=4, offset=2)
+terminal:
+  backend: local
 
-# Load existing config or create empty dict
-try:
-    with open(config_path, 'r') as f:
-        config = yaml.load(f) or {}
-except FileNotFoundError:
-    config = {}
+agent:
+  max_turns: 90
 
-# Update only the relevant sections
-config['setup_complete'] = True
-config['model'] = {
-    'provider': 'custom',
-    'base_url': 'http://localhost:8080/v1',
-    'default': model_name,
-    'context_length': ctx_length,
-}
-config['terminal'] = {'backend': 'local'}
-config['agent'] = {'max_turns': 90}
-config.setdefault('memory', {})['honcho'] = {'enabled': True}
+memory:
+  honcho:
+    enabled: true
+YAML
 
-# Write back
-with open(config_path, 'w') as f:
-    yaml.dump(config, f)
-
-print(f"config.yaml: model={model_name}  ctx={ctx_length}")
-PYCONF
-
-python3 "$_hermes_config_py" "${SEL_NAME}" "${SAFE_CTX}" "${CONFIG_FILE}"
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
 ok "setup_complete: true written → setup wizard will not fire"
 ok "Hermes ready with local backend"
