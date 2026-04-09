@@ -2,6 +2,7 @@
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
 #  Version: production-hardened (final) – SECURITY & ROBUSTNESS FIXES
+#  Hermes now installed via official NousResearch script; YAML config uses ruamel.yaml.
 # =============================================================================
 set -euo pipefail
 
@@ -172,7 +173,6 @@ fi
 if [[ -n "$GITHUB_TOKEN" ]]; then
     export GITHUB_TOKEN
     # Use a git credential helper that reads from GITHUB_TOKEN environment variable
-    # This is safe and standard.
     if ! git config --global credential.helper '!f() { echo "username=${GITHUB_TOKEN}"; echo "password=x-oauth-basic"; }; f' 2>/dev/null; then
         warn "Could not set git credential helper. GitHub operations may be unauthenticated."
     else
@@ -874,64 +874,32 @@ else
 fi
 
 # =============================================================================
-#  9. Hermes Agent install  [SKIPPED by switch-model]  (git + uv, update‑aware, NO TESTS)
+#  9. Hermes Agent install  [SKIPPED by switch-model] – Official NousResearch installer
 # =============================================================================
-HERMES_AGENT_DIR="${HOME}/hermes-agent"
 HERMES_DIR="${HOME}/.hermes"
 export PATH="${HOME}/.local/bin:${PATH}"
 
 if [[ -z "$_SMO" ]]; then
-    step "Installing Hermes Agent (official NousResearch via git+uv)..."
+    step "Installing Hermes Agent (official NousResearch installer)..."
 
-    if git_has_updates "$HERMES_AGENT_DIR" "main"; then
-        if [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
-            git clone https://github.com/NousResearch/hermes-agent.git "${HERMES_AGENT_DIR}"
-        else
-            ok "Updates available — pulling Hermes Agent..."
-            git -C "$HERMES_AGENT_DIR" fetch origin
-            git -C "$HERMES_AGENT_DIR" reset --hard origin/main
-        fi
+    # Download the official installer script and execute it
+    hermes_installer=$(mktemp /tmp/hermes-install.XXXXXX.sh)
+    register_tmp "$hermes_installer"
+    curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
+        https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
+        -o "$hermes_installer" || die "Failed to download Hermes installer"
+    bash "$hermes_installer" || die "Hermes installation failed"
+
+    # Ensure hermes is in PATH
+    if [[ -x "${HOME}/.local/bin/hermes" ]]; then
+        ok "Hermes Agent installed successfully."
     else
-        ok "Hermes Agent already up‑to‑date."
+        die "Hermes binary not found after installation."
     fi
-
-    # Install uv if not present (secure: download then verify or use package manager)
-    if ! command -v uv &>/dev/null; then
-        step "Installing uv..."
-        uv_installer=$(mktemp /tmp/uv-install.XXXXXX.sh)
-        register_tmp "$uv_installer"
-        curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
-            https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
-        bash "$uv_installer" || die "uv installation failed"
-        # shellcheck disable=SC1091
-        source "${HOME}/.cargo/env" 2>/dev/null || true
-        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
-    fi
-
-    cd "${HERMES_AGENT_DIR}"
-
-    # Create venv if missing
-    if [[ ! -d "venv" ]]; then
-        uv venv venv --python 3.11
-    fi
-
-    # Activate and install/update (production only)
-    # shellcheck disable=SC1091
-    source venv/bin/activate
-    uv pip install -e ".[all]"
-
-    # Symlink hermes binary to ~/.local/bin
-    mkdir -p "${HOME}/.local/bin"
-    ln -sf "${HERMES_AGENT_DIR}/venv/bin/hermes" "${HOME}/.local/bin/hermes"
-    cd ~
-
-    export PATH="${HOME}/.local/bin:${PATH}"
-    command -v hermes &>/dev/null || die "hermes not found after install. Check output above."
-    ok "Hermes Agent: $(hermes --version 2>/dev/null || echo 'installed')"
 fi
 
 # =============================================================================
-#  9b. Configure Hermes for local llama-server (idempotent with backup, YAML‑clean)
+#  9b. Configure Hermes for local llama-server – uses ruamel.yaml for safe YAML editing
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
 
@@ -948,85 +916,48 @@ ENV
 ok "~/.hermes/.env written."
 
 CONFIG_FILE="${HERMES_DIR}/config.yaml"
-EXAMPLE_CFG="${HERMES_AGENT_DIR}/cli-config.yaml.example"
 
-if [[ ! -f "$CONFIG_FILE" ]] && [[ -f "$EXAMPLE_CFG" ]]; then
-    cp "$EXAMPLE_CFG" "$CONFIG_FILE"
-    ok "config.yaml initialised from example template."
-else
-    if [[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]]; then
-        cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%Y%m%d%H%M%S)"
-        ok "Backed up existing config.yaml"
-    fi
-fi
+# Install ruamel.yaml temporarily for safe YAML editing
+pip3 install --quiet --user --break-system-packages ruamel.yaml || die "Failed to install ruamel.yaml"
 
-# Python config script moved to a temporary file for maintainability
+# Python script using ruamel.yaml to update config (idempotent, preserves formatting)
 _hermes_config_py=$(mktemp /tmp/hermes-config.XXXXXX.py)
 register_tmp "$_hermes_config_py"
 cat >"$_hermes_config_py" <<'PYCONF'
+#!/usr/bin/env python3
 import sys
-import os
-import re
+from ruamel.yaml import YAML
 
 model_name = sys.argv[1]
 ctx_length = int(sys.argv[2])
 config_path = sys.argv[3]
 
-# Read existing config or start fresh
-if os.path.exists(config_path):
-    with open(config_path, "r") as f:
-        content = f.read()
-else:
-    content = ""
+yaml = YAML()
+yaml.preserve_quotes = True
+yaml.indent(mapping=2, sequence=4, offset=2)
 
-# Remove any existing Hermes-managed blocks (model, terminal, agent, memory, setup_complete)
-patterns = [
-    r'(?m)^model:.*?(?=^[a-z_]+:|\Z)',
-    r'(?m)^terminal:.*?(?=^[a-z_]+:|\Z)',
-    r'(?m)^agent:.*?(?=^[a-z_]+:|\Z)',
-    r'(?m)^memory:.*?(?=^[a-z_]+:|\Z)',
-    r'(?m)^setup_complete:.*?\n?',
-]
-for pat in patterns:
-    content = re.sub(pat, '', content, flags=re.DOTALL)
+# Load existing config or create empty dict
+try:
+    with open(config_path, 'r') as f:
+        config = yaml.load(f) or {}
+except FileNotFoundError:
+    config = {}
 
-# Remove trailing whitespace and blank lines
-content = '\n'.join(line for line in content.splitlines() if line.strip() != '')
+# Update only the relevant sections
+config['setup_complete'] = True
+config['model'] = {
+    'provider': 'custom',
+    'base_url': 'http://localhost:8080/v1',
+    'default': model_name,
+    'context_length': ctx_length,
+}
+config['terminal'] = {'backend': 'local'}
+config['agent'] = {'max_turns': 90}
+config.setdefault('memory', {})['honcho'] = {'enabled': True}
 
-# Safely quote model name for YAML
-_YAML_UNSAFE = re.compile(r"""[\s:,#\[\]{}|>&*!%\\?@`"'-]""")
-if _YAML_UNSAFE.search(model_name) or model_name.lower() in (
-        'true','false','null','yes','no','on','off','~'):
-    model_name_yaml = "'" + model_name.replace("'", "''") + "'"
-else:
-    model_name_yaml = model_name
-
-# Build the new configuration block
-new_block = f"""
-setup_complete: true
-
-model:
-  provider: custom
-  base_url: http://localhost:8080/v1
-  default: {model_name_yaml}
-  context_length: {ctx_length}
-
-terminal:
-  backend: local
-
-agent:
-  max_turns: 90
-
-memory:
-  honcho:
-    enabled: true
-"""
-
-# Combine existing content (if any) with new block
-final_content = content.rstrip() + "\n" + new_block.lstrip() + "\n"
-
-with open(config_path, "w") as f:
-    f.write(final_content)
+# Write back
+with open(config_path, 'w') as f:
+    yaml.dump(config, f)
 
 print(f"config.yaml: model={model_name}  ctx={ctx_length}")
 PYCONF
@@ -1209,7 +1140,6 @@ pkill -f "llama-server.*-m" 2>/dev/null || true
 sleep 1
 
 # Start llama-server via the improved launch script, which writes correct PID.
-# The launch script will background the server and write its PID.
 bash "$LAUNCH_SCRIPT" >/tmp/llama-server.log 2>&1 &
 LAUNCH_PID=$!
 # Wait a bit for the launch script to write the PID file
@@ -1352,7 +1282,7 @@ GOOSECONF
             ok "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
             OPENCODE_INSTALLED=true
         else
-            # Download installer, inspect, then run (still curl|sh but better than nothing)
+            # Download installer, inspect, then run
             opencode_installer=$(mktemp /tmp/opencode-install.XXXXXX.sh)
             register_tmp "$opencode_installer"
             if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
@@ -1405,7 +1335,7 @@ OC_ALIASES
         command -v opencode &>/dev/null && OPENCODE_INSTALLED=true
     fi
 
-    # Always configure OpenCode if installed (or if we just installed it)
+    # Always configure OpenCode if installed
     if command -v opencode &>/dev/null; then
         step "Configuring OpenCode with local model..."
         OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
@@ -1441,7 +1371,7 @@ OC_ALIASES
 OPECONF
         ok "OpenCode configured."
 
-        # Install Superpowers plugin (with update check)
+        # Install Superpowers plugin
         SUPER_DIR="${HOME}/.config/opencode/superpowers"
         PLUGIN_DIR="${HOME}/.config/opencode/plugin"
         if git_has_updates "$SUPER_DIR" "main"; then
@@ -1603,7 +1533,7 @@ AUTOAGENT_ALIASES
     if [[ "$install_openclaude" =~ ^[Yy]$ ]]; then
         step "Installing OpenClaude..."
 
-        # Install Node.js 22.x (LTS) if not already present or version < 20
+        # Install Node.js 22.x if needed
         if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
             warn "Node.js >=20 required. Installing Node.js 22.x..."
             curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -1623,7 +1553,7 @@ AUTOAGENT_ALIASES
         command -v openclaude &>/dev/null && OPENCLAUDE_INSTALLED=true
     fi
 
-    # Always configure OpenClaude if installed
+    # Configure OpenClaude if installed
     if command -v openclaude &>/dev/null; then
         step "Configuring OpenClaude for local llama-server..."
         mkdir -p "${HOME}/.openclaude"
@@ -1872,7 +1802,6 @@ if [[ -z "$_SMO" ]] && (command -v claude &>/dev/null || [[ -d "${HOME}/.claude"
     CLAUDE_CONFIG_DIR="${HOME}/.claude"
     mkdir -p "$CLAUDE_CONFIG_DIR"
 
-    # Write Claude config with local provider using selected model
     cat >"${CLAUDE_CONFIG_DIR}/config.json" <<CLAUDE
 {
   "hooks": {
