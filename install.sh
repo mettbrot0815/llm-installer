@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
+#  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude + WebUI
 #  Version: production-hardened (final) – SECURITY & ROBUSTNESS FIXES
-#  Hermes now installed via official NousResearch script; YAML config uses ruamel.yaml.
+#  Optional components selected via single multi‑select menu (whiptail).
 # =============================================================================
 set -euo pipefail
 
@@ -169,10 +169,8 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
 fi
 
 # Configure git to use token via environment (git credential helper)
-# Avoid embedding token in URL to prevent command injection.
 if [[ -n "$GITHUB_TOKEN" ]]; then
     export GITHUB_TOKEN
-    # Use a git credential helper that reads from GITHUB_TOKEN environment variable
     if ! git config --global credential.helper '!f() { echo "username=${GITHUB_TOKEN}"; echo "password=x-oauth-basic"; }; f' 2>/dev/null; then
         warn "Could not set git credential helper. GitHub operations may be unauthenticated."
     else
@@ -311,7 +309,6 @@ MODELS=(
 grade_model() {
     local min_ram="${1:?}" min_vram="${2:?}"
     local ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
-    # Validate that inputs are numeric to avoid arithmetic errors
     if [[ ! "$min_ram" =~ ^[0-9]+$ || ! "$min_vram" =~ ^[0-9]+$ ]]; then
         echo "F"
         return 1
@@ -453,7 +450,6 @@ HDR
             "  ${GC}$(printf '%-13s' "$GL")${RST}  $(printf '%-24s' "$tag_display") $cached"
     done < <(printf '%s\n' "${MODELS[@]}")
 
-    # Show locally present GGUFs not in catalogue (optimized with associative array)
     declare -A catalogued
     while IFS='|' read -r _ _ cat_g _; do
         catalogued["${cat_g// /}"]=1
@@ -492,7 +488,7 @@ HDR
     echo ""
 }
 
-# ── HF URL / repo download – SAFE PARSING using Python script ──────────────────
+# ── HF URL / repo download ─────────────────────────────────────────────────────
 download_from_hf_url() {
     echo ""
     echo -e "  ${BLD}Download via HuggingFace${RST}"
@@ -527,8 +523,6 @@ download_from_hf_url() {
     else
         SEL_HF_REPO="$HF_INPUT"
         step "Listing GGUFs in ${SEL_HF_REPO}..."
-
-        # Use Python huggingface_hub API to list files reliably
         local list_py
         list_py=$(mktemp /tmp/hf_list.XXXXXX.py)
         register_tmp "$list_py"
@@ -682,7 +676,6 @@ while true; do
     warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
 done
 
-# Parse catalogue — exact index match (only if not 'u')
 if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
         min_ram min_vram tier tags desc; do
@@ -775,13 +768,13 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
 fi
 
 # =============================================================================
-#  Helper: Check if a Git repository has updates (returns 0 if updates available)
+#  Helper: Check if a Git repository has updates
 # =============================================================================
 git_has_updates() {
     local repo_dir="$1"
     local branch="${2:-main}"
     if [[ ! -d "$repo_dir/.git" ]]; then
-        return 0 # no repo -> need to clone
+        return 0
     fi
     git -C "$repo_dir" fetch origin "$branch" 2>/dev/null || true
     local local_commit remote_commit
@@ -856,7 +849,6 @@ else
                 cmake -B build -DGGML_CCACHE=ON
             fi
             cmake --build build --config Release -j"$(nproc)"
-            # Check for passwordless sudo to avoid hanging
             if sudo -n true 2>/dev/null; then
                 sudo cmake --install build || warn "System install failed — using build directory."
             else
@@ -874,32 +866,56 @@ else
 fi
 
 # =============================================================================
-#  9. Hermes Agent install  [SKIPPED by switch-model] – Official installer, wizard skipped
+#  9. Hermes Agent install  [SKIPPED by switch-model] – Manual install (no wizard)
 # =============================================================================
+HERMES_AGENT_DIR="${HOME}/hermes-agent"
 HERMES_DIR="${HOME}/.hermes"
 export PATH="${HOME}/.local/bin:${PATH}"
 
 if [[ -z "$_SMO" ]]; then
-    step "Installing Hermes Agent (official NousResearch installer)..."
+    step "Installing Hermes Agent (manual, wizard‑free)..."
 
-    hermes_installer=$(mktemp /tmp/hermes-install.XXXXXX.sh)
-    register_tmp "$hermes_installer"
-    curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
-        https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
-        -o "$hermes_installer" || die "Failed to download Hermes installer"
-
-    # Run installer with --no-setup to skip the interactive wizard
-    bash "$hermes_installer" --no-setup || {
-        # Fallback if --no-setup not supported: set environment variable
-        warn "--no-setup flag not supported; trying HERMES_SKIP_SETUP=1"
-        HERMES_SKIP_SETUP=1 bash "$hermes_installer" || die "Hermes installation failed"
-    }
-
-    if [[ -x "${HOME}/.local/bin/hermes" ]]; then
-        ok "Hermes Agent installed successfully (wizard skipped)."
+    if git_has_updates "$HERMES_AGENT_DIR" "main"; then
+        if [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
+            git clone https://github.com/NousResearch/hermes-agent.git "${HERMES_AGENT_DIR}"
+        else
+            ok "Updates available — pulling Hermes Agent..."
+            git -C "$HERMES_AGENT_DIR" fetch origin
+            git -C "$HERMES_AGENT_DIR" reset --hard origin/main
+        fi
     else
-        die "Hermes binary not found after installation."
+        ok "Hermes Agent already up‑to‑date."
     fi
+
+    if ! command -v uv &>/dev/null; then
+        step "Installing uv..."
+        uv_installer=$(mktemp /tmp/uv-install.XXXXXX.sh)
+        register_tmp "$uv_installer"
+        curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
+            https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
+        bash "$uv_installer" || die "uv installation failed"
+        # shellcheck disable=SC1091
+        source "${HOME}/.cargo/env" 2>/dev/null || true
+        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+    fi
+
+    cd "${HERMES_AGENT_DIR}"
+
+    if [[ ! -d "venv" ]]; then
+        uv venv venv --python 3.11
+    fi
+
+    # shellcheck disable=SC1091
+    source venv/bin/activate
+    uv pip install -e ".[all]"
+
+    mkdir -p "${HOME}/.local/bin"
+    ln -sf "${HERMES_AGENT_DIR}/venv/bin/hermes" "${HOME}/.local/bin/hermes"
+    cd ~
+
+    export PATH="${HOME}/.local/bin:${PATH}"
+    command -v hermes &>/dev/null || die "hermes not found after install."
+    ok "Hermes Agent installed (wizard skipped)."
 fi
 
 # =============================================================================
@@ -909,7 +925,6 @@ step "Configuring Hermes for local llama-server..."
 
 mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
-# Backup and write .env
 if [[ -f "${HERMES_DIR}/.env" && ! -L "${HERMES_DIR}/.env" ]]; then
     cp "${HERMES_DIR}/.env" "${HERMES_DIR}/.env.backup.$(date +%Y%m%d%H%M%S)"
     ok "Backed up existing ~/.hermes/.env"
@@ -922,13 +937,11 @@ ok "~/.hermes/.env written."
 
 CONFIG_FILE="${HERMES_DIR}/config.yaml"
 
-# Backup existing config
 if [[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]]; then
     cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%Y%m%d%H%M%S)"
     ok "Backed up existing config.yaml"
 fi
 
-# Write a clean, minimal config.yaml with the selected model
 cat >"$CONFIG_FILE" <<YAML
 setup_complete: true
 
@@ -952,88 +965,319 @@ YAML
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
 ok "setup_complete: true written → setup wizard will not fire"
 ok "Hermes ready with local backend"
-# =============================================================================
-#  9c. Hermes WebUI (optional) – Web interface for Hermes Agent
-# =============================================================================
-HERMES_WEBUI_DIR="${HOME}/hermes-webui"
-HERMES_WEBUI_INSTALLED=false
 
-if [[ -z "$_SMO" ]]; then
-    echo ""
-    echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
-    echo -e "  Browser-based interface for Hermes Agent"
-    echo -e "  ${CYN}https://github.com/nesquena/hermes-webui${RST}"
-    echo ""
-    if [[ -t 0 ]]; then
-        read -rp "  Install Hermes WebUI? [y/N]: " install_webui
-    else
-        install_webui="n"
+# =============================================================================
+#  Optional components selection (multi‑select menu)
+# =============================================================================
+select_optional_components() {
+    # Return if not interactive
+    [[ ! -t 0 ]] && return 1
+
+    # Check if whiptail is available
+    if ! command -v whiptail &>/dev/null; then
+        warn "whiptail not found – using simple yes/no prompts (install 'whiptail' for better menu)."
+        return 1
     fi
 
-    if [[ "$install_webui" =~ ^[Yy]$ ]]; then
-        step "Installing Hermes WebUI..."
+    local choices
+    choices=$(whiptail --title "Optional Components" --checklist \
+        "Select additional components to install (use SPACE to toggle, ENTER to confirm):" \
+        20 80 6 \
+        "goose" "Goose AI Agent (Rust CLI, 30k+ stars)" OFF \
+        "opencode" "OpenCode (Terminal TUI coding agent)" OFF \
+        "autoagent" "AutoAgent (Deep research multi-agent)" OFF \
+        "openclaude" "OpenClaude (Claude-compatible CLI)" OFF \
+        "webui" "Hermes WebUI (Browser interface for Hermes)" OFF \
+        3>&1 1>&2 2>&3)
 
-        # Clone or update the repository
-        if git_has_updates "$HERMES_WEBUI_DIR" "main"; then
-            if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
-                git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
-            else
-                ok "Updates available — pulling Hermes WebUI..."
-                git -C "$HERMES_WEBUI_DIR" fetch origin
-                git -C "$HERMES_WEBUI_DIR" reset --hard origin/main
-            fi
+    # whiptail returns non-zero on cancel
+    if [[ $? -ne 0 ]]; then
+        echo ""
+        ok "No optional components selected."
+        return 1
+    fi
+
+    # Parse the quoted output
+    local sel=()
+    IFS=' ' read -ra sel <<< "$(echo "$choices" | tr -d '"')"
+
+    # Reset all flags
+    INSTALL_GOOSE=false
+    INSTALL_OPENCODE=false
+    INSTALL_AUTOAGENT=false
+    INSTALL_OPENCLAUDE=false
+    INSTALL_WEBUI=false
+
+    for item in "${sel[@]}"; do
+        case "$item" in
+            goose) INSTALL_GOOSE=true ;;
+            opencode) INSTALL_OPENCODE=true ;;
+            autoagent) INSTALL_AUTOAGENT=true ;;
+            openclaude) INSTALL_OPENCLAUDE=true ;;
+            webui) INSTALL_WEBUI=true ;;
+        esac
+    done
+
+    echo ""
+    local count=0
+    $INSTALL_GOOSE && { echo "  ✓ Goose"; count=$((count+1)); }
+    $INSTALL_OPENCODE && { echo "  ✓ OpenCode"; count=$((count+1)); }
+    $INSTALL_AUTOAGENT && { echo "  ✓ AutoAgent"; count=$((count+1)); }
+    $INSTALL_OPENCLAUDE && { echo "  ✓ OpenClaude"; count=$((count+1)); }
+    $INSTALL_WEBUI && { echo "  ✓ Hermes WebUI"; count=$((count+1)); }
+
+    if [[ $count -eq 0 ]]; then
+        ok "No optional components selected."
+        return 1
+    else
+        ok "$count component(s) selected for installation."
+        return 0
+    fi
+}
+
+# Initialize flags
+INSTALL_GOOSE=false
+INSTALL_OPENCODE=false
+INSTALL_AUTOAGENT=false
+INSTALL_OPENCLAUDE=false
+INSTALL_WEBUI=false
+
+if [[ -z "$_SMO" ]]; then
+    step "Optional components selection"
+    if ! select_optional_components; then
+        # Fallback to individual prompts if whiptail missing or user cancelled
+        echo ""
+        echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
+        read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
+        echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}"
+        read -rp "  Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
+        echo -e "  ${BLD}Optional: AutoAgent (HKUDS)${RST}"
+        read -rp "  Install AutoAgent? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_AUTOAGENT=true
+        echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
+        read -rp "  Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
+        echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
+        read -rp "  Install Hermes WebUI? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_WEBUI=true
+    fi
+fi
+
+# =============================================================================
+#  13a. Goose
+# =============================================================================
+if $INSTALL_GOOSE; then
+    step "Installing Goose CLI..."
+    if command -v goose &>/dev/null; then
+        ok "Goose: $(goose --version 2>/dev/null || echo 'installed')"
+    else
+        goose_script=$(mktemp /tmp/goose-install.XXXXXX.sh)
+        register_tmp "$goose_script"
+        if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+            https://github.com/block/goose/releases/download/stable/download_cli.sh \
+            -o "$goose_script" 2>/dev/null; then
+            bash "$goose_script" && export PATH="${HOME}/.local/bin:${PATH}" ||
+                warn "Goose install script failed."
         else
-            ok "Hermes WebUI already up‑to‑date."
+            warn "Failed to download Goose install script — skipping."
         fi
+    fi
 
-        # Install Node.js if needed (WebUI requires Node.js 18+)
-        if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 18 ]]; then
-            warn "Node.js >=18 required. Installing Node.js 22.x..."
-            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-            sudo apt-get install -y -qq nodejs
+    if command -v goose &>/dev/null; then
+        step "Configuring Goose for local llama-server..."
+        mkdir -p "${HOME}/.config/goose"
+        cat >"${HOME}/.config/goose/config.yaml" <<GOOSECONF
+models:
+  - name: local
+    provider: openai
+    base_url: http://localhost:8080/v1
+    api_key: sk-local
+    default: true
+GOOSECONF
+        ok "Goose configured."
+    fi
+fi
+
+# =============================================================================
+#  13b. OpenCode
+# =============================================================================
+if $INSTALL_OPENCODE; then
+    step "Installing OpenCode..."
+    if command -v opencode &>/dev/null; then
+        ok "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
+    else
+        opencode_installer=$(mktemp /tmp/opencode-install.XXXXXX.sh)
+        register_tmp "$opencode_installer"
+        if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+            https://opencode.ai/install -o "$opencode_installer" 2>/dev/null; then
+            XDG_BIN_DIR="${HOME}/.local/bin" bash "$opencode_installer" 2>/dev/null &&
+                export PATH="${HOME}/.local/bin:${PATH}"
+        else
+            warn "OpenCode install script download failed — skipping."
         fi
+    fi
 
-        cd "$HERMES_WEBUI_DIR"
+    if command -v opencode &>/dev/null; then
+        step "Configuring OpenCode with local model..."
+        mkdir -p "${HOME}/.config/opencode"
+        cat >"${HOME}/.config/opencode/opencode.json" <<OPECONF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama.cpp (local)",
+      "options": {
+        "baseURL": "http://localhost:8080/v1",
+        "apiKey": "sk-local"
+      },
+      "models": {
+        "${SEL_GGUF}": {
+          "name": "${SEL_NAME}",
+          "limit": {
+            "context": ${SAFE_CTX},
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "model": "llamacpp/${SEL_GGUF}",
+  "small_model": "llamacpp/${SEL_GGUF}",
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git"
+  ]
+}
+OPECONF
+        ok "OpenCode configured."
+    fi
+fi
 
-        # Install dependencies
-        step "Installing WebUI dependencies (npm)..."
-        npm install
+# =============================================================================
+#  13c. AutoAgent
+# =============================================================================
+AUTOAGENT_DIR="${HOME}/autoagent"
+AUTOAGENT_VENV="${AUTOAGENT_DIR}/.venv"
 
-        # Create .env.local with configuration
-        cat >".env.local" <<WEBUIENV
-# Hermes WebUI configuration
+if $INSTALL_AUTOAGENT; then
+    step "Installing AutoAgent..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk 2>/dev/null || true
+
+    if ! command -v uv &>/dev/null; then
+        step "Installing uv..."
+        uv_installer=$(mktemp /tmp/uv-install.XXXXXX.sh)
+        register_tmp "$uv_installer"
+        curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
+            https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
+        bash "$uv_installer" || die "uv installation failed"
+        # shellcheck disable=SC1091
+        source "${HOME}/.cargo/env" 2>/dev/null || true
+        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+    fi
+
+    if [[ ! -d "${AUTOAGENT_DIR}/.git" ]]; then
+        git clone https://github.com/HKUDS/AutoAgent.git "${AUTOAGENT_DIR}"
+    else
+        git -C "$AUTOAGENT_DIR" fetch origin
+        git -C "$AUTOAGENT_DIR" reset --hard origin/main
+    fi
+
+    sed -i '1s/^/try:\n    import tkinter as tk\n    from tkinter import filedialog\n    TKINTER_AVAILABLE = True\nexcept ImportError:\n    TKINTER_AVAILABLE = False\n\n/' "${AUTOAGENT_DIR}/autoagent/cli_utils/file_select.py" 2>/dev/null || true
+
+    if [[ ! -d "$AUTOAGENT_VENV" ]]; then
+        uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
+    fi
+
+    (
+        export VIRTUAL_ENV="${AUTOAGENT_VENV}"
+        export PATH="${AUTOAGENT_VENV}/bin:${PATH}"
+        cd "${AUTOAGENT_DIR}"
+        uv pip install -e "." 2>&1 | tail -5
+    ) && ok "AutoAgent installed." || die "AutoAgent install failed."
+
+    cat >"${HOME}/start-autoagent.sh" <<AUTOAGENT_LAUNCHER
+#!/usr/bin/env bash
+AUTOAGENT_VENV="${AUTOAGENT_VENV}"
+AUTOAGENT_DIR="${AUTOAGENT_DIR}"
+if ! curl -sf http://localhost:8080/v1/models &>/dev/null; then
+    echo "llama-server not running. Start with: start-llm"
+    exit 1
+fi
+source "\${AUTOAGENT_VENV}/bin/activate"
+cd "\${AUTOAGENT_DIR}"
+set -a; source "${HOME}/.autoagent/.env" 2>/dev/null || true; set +a
+auto deep-research
+AUTOAGENT_LAUNCHER
+    chmod +x "${HOME}/start-autoagent.sh"
+    ok "Created ~/start-autoagent.sh"
+fi
+
+# =============================================================================
+#  13d. OpenClaude
+# =============================================================================
+if $INSTALL_OPENCLAUDE; then
+    step "Installing OpenClaude..."
+    if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
+        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+        sudo apt-get install -y -qq nodejs
+    fi
+    sudo npm install -g @gitlawb/openclaude@latest
+
+    if command -v openclaude &>/dev/null; then
+        mkdir -p "${HOME}/.openclaude"
+        cat >"${HOME}/.openclaude/config.json" <<OPENCLAUDE
+{
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "apiKey": "local"
+    }
+  },
+  "model": "local/${SEL_GGUF}"
+}
+OPENCLAUDE
+        ok "OpenClaude configured."
+    fi
+fi
+
+# =============================================================================
+#  13e. Hermes WebUI
+# =============================================================================
+HERMES_WEBUI_DIR="${HOME}/hermes-webui"
+
+if $INSTALL_WEBUI; then
+    step "Installing Hermes WebUI..."
+    if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
+        git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
+    else
+        git -C "$HERMES_WEBUI_DIR" pull --quiet
+    fi
+
+    if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 18 ]]; then
+        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+        sudo apt-get install -y -qq nodejs
+    fi
+
+    cd "$HERMES_WEBUI_DIR"
+    npm install
+    cat >".env.local" <<WEBUIENV
 VITE_HERMES_API_URL=http://localhost:8080/v1
 VITE_HERMES_AGENT_API=http://localhost:8000
 WEBUIENV
-        ok "WebUI environment configured."
+    npm run build
 
-        # Build the production version
-        step "Building WebUI (this may take a minute)..."
-        npm run build
-
-        # Create a start script
-        cat >"${HOME}/start-webui.sh" <<WEBUISTART
+    cat >"${HOME}/start-webui.sh" <<WEBUISTART
 #!/usr/bin/env bash
 cd "${HERMES_WEBUI_DIR}"
 echo "Starting Hermes WebUI on http://localhost:3000"
 npm run preview -- --host 0.0.0.0 --port 3000
 WEBUISTART
-        chmod +x "${HOME}/start-webui.sh"
-
-        cd ~
-        HERMES_WEBUI_INSTALLED=true
-        ok "Hermes WebUI installed."
-        ok "Start with: ~/start-webui.sh  →  http://localhost:3000"
-    else
-        ok "Skipping Hermes WebUI."
-        [[ -d "${HERMES_WEBUI_DIR}/.git" ]] && HERMES_WEBUI_INSTALLED=true
-    fi
+    chmod +x "${HOME}/start-webui.sh"
+    cd ~
+    ok "Hermes WebUI installed. Start with: ~/start-webui.sh"
 fi
+
 # =============================================================================
-#  10. pip update  [SKIPPED by switch-model] – safer upgrade
+#  10. pip update  [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
-    # Only upgrade pip if not in a system-managed environment, suppress warnings
     if [[ ! -f /usr/lib/python3.*/EXTERNALLY-MANAGED ]]; then
         pip3 install --user --upgrade pip setuptools wheel 2>/dev/null || true
     else
@@ -1042,18 +1286,13 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-#  11. Create ~/start-llm.sh  (always runs) – FIXED PID CAPTURE
+#  11. Create ~/start-llm.sh  (always runs)
 # =============================================================================
 step "Generating ~/start-llm.sh..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
 
-# The launch script now writes the PID of llama-server to a file.
 cat >"${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
 #!/usr/bin/env bash
-# start-llm.sh — generated by install.sh
-# Model : ${SEL_NAME}
-# Ctx   : ${SAFE_CTX} tokens
-
 GGUF="${GGUF_PATH}"
 MODEL_NAME="${SEL_NAME}"
 LLAMA_BIN="${LLAMA_SERVER_BIN}"
@@ -1087,10 +1326,7 @@ echo "  API    : http://localhost:8080/v1"
 echo "  Web UI : http://localhost:8080"
 echo "  Jinja  : ${USE_JINJA}"
 echo ""
-echo "  Press Ctrl+C to stop. Run 'hermes' to chat."
-echo ""
 
-# Start llama-server in background and capture its PID directly
 "${LLAMA_BIN}" \
     -m "${GGUF}" \
     -ngl 99 \
@@ -1105,7 +1341,6 @@ echo ""
 LLAMA_PID=$!
 echo "$LLAMA_PID" > "$PIDFILE"
 
-# Wait for server to become responsive
 ready=false
 for i in {1..30}; do
     if curl -sf http://localhost:8080/v1/models &>/dev/null; then
@@ -1116,7 +1351,6 @@ for i in {1..30}; do
         ready=true
         break
     fi
-    # Check if process died
     if ! kill -0 "$LLAMA_PID" 2>/dev/null; then
         echo "  ERROR: llama-server process died unexpectedly. Check log."
         exit 1
@@ -1130,14 +1364,10 @@ if [[ "$ready" != "true" ]]; then
     exit 1
 fi
 
-# Keep script running to act as a supervisor; wait for server process
 wait "$LLAMA_PID"
 LAUNCH_TEMPLATE
 
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA
-if ! command -v envsubst &>/dev/null; then
-    die "envsubst not found. Please install gettext-base."
-fi
 envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA}' \
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 rm -f "${LAUNCH_SCRIPT}.template"
@@ -1145,12 +1375,11 @@ chmod +x "$LAUNCH_SCRIPT"
 ok "Launch script: ~/start-llm.sh"
 
 # =============================================================================
-#  12. systemd user service  [SKIPPED by switch-model] – ESCAPED ARGUMENTS
+#  12. systemd user service  [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     step "Creating systemd user service for llama-server..."
     mkdir -p "${HOME}/.config/systemd/user"
-    # Use a wrapper script for systemd to avoid argument escaping issues.
     cat >"${HOME}/.local/bin/llama-server-wrapper" <<'WRAPPER'
 #!/usr/bin/env bash
 exec bash ~/start-llm.sh
@@ -1185,7 +1414,7 @@ SERVICE
     fi
 fi
 
-# ── Start / restart llama-server (always) – FIXED PID HANDLING ─────────────────
+# ── Start llama-server ────────────────────────────────────────────────────────
 step "Starting llama-server..."
 PIDFILE="/tmp/llama-server.pid"
 if [[ -f "$PIDFILE" ]]; then
@@ -1197,14 +1426,10 @@ if [[ -f "$PIDFILE" ]]; then
     fi
     rm -f "$PIDFILE"
 fi
-# Also kill any stray llama-server processes matching the pattern
 pkill -f "llama-server.*-m" 2>/dev/null || true
 sleep 1
 
-# Start llama-server via the improved launch script, which writes correct PID.
 bash "$LAUNCH_SCRIPT" >/tmp/llama-server.log 2>&1 &
-LAUNCH_PID=$!
-# Wait a bit for the launch script to write the PID file
 sleep 2
 if [[ -f "$PIDFILE" ]]; then
     SERVER_PID=$(cat "$PIDFILE")
@@ -1226,427 +1451,32 @@ for i in {1..30}; do
     fi
     sleep 1
 done
-if [[ "$READY" == "false" ]]; then
-    warn "llama-server not responding after 30s — check: tail -f /tmp/llama-server.log"
-fi
+[[ "$READY" == "false" ]] && warn "llama-server not responding after 30s — check: tail -f /tmp/llama-server.log"
 
 # =============================================================================
-#  12b. Install recommended Hermes skills  [SKIPPED by switch-model]
+#  12b. Hermes skills (if installed)
 # =============================================================================
 if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
-    step "Installing recommended Hermes skills (agentskills.io)..."
-
+    step "Installing recommended Hermes skills..."
     SKILLS=("github-pr-workflow" "axolotl" "huggingface-hub")
-
     for skill in "${SKILLS[@]}"; do
-        echo -n "  Installing ${skill}... "
-        # Use timeout if available, else run without
         if command -v timeout &>/dev/null; then
-            if timeout 30s hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
-                ok "Installed skill: ${skill}"
-            else
-                warn "Skill '${skill}' skipped (timeout or blocked)"
-            fi
+            timeout 30s hermes skills install "official/${skill}" --yes --force 2>/dev/null && ok "Installed skill: ${skill}" || warn "Skill '${skill}' skipped"
         else
-            if hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
-                ok "Installed skill: ${skill}"
-            else
-                warn "Skill '${skill}' skipped (failed)"
-            fi
+            hermes skills install "official/${skill}" --yes --force 2>/dev/null && ok "Installed skill: ${skill}" || warn "Skill '${skill}' skipped"
         fi
     done
-
-    ok "Skills: ~/.hermes/skills/  |  hermes skills browse  |  hermes skills search <query>"
+    ok "Skills: ~/.hermes/skills/"
 fi
-
-# =============================================================================
-#  13. Optional agents  [SKIPPED by switch-model] – SECURE INSTALLATIONS
-# =============================================================================
-GOOSE_INSTALLED=false
-OPENCODE_INSTALLED=false
-AUTOAGENT_INSTALLED=false
-OPENCLAUDE_INSTALLED=false
-AUTOAGENT_DIR="${HOME}/autoagent"
-AUTOAGENT_VENV="${AUTOAGENT_DIR}/.venv"
-
-if [[ -z "$_SMO" ]]; then
-
-    # ── 13a. Goose ────────────────────────────────────────────────────────────────
-    echo ""
-    echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
-    echo -e "  Rust CLI · 30k+ stars · Linux Foundation · MCP · no cloud needed"
-    echo ""
-    if [[ -t 0 ]]; then
-        read -rp "  Install Goose? [y/N]: " install_goose
-    else
-        install_goose="n"
-    fi
-
-    if [[ "$install_goose" =~ ^[Yy]$ ]]; then
-        step "Installing Goose CLI..."
-        if command -v goose &>/dev/null; then
-            ok "Goose: $(goose --version 2>/dev/null || echo 'installed')"
-            GOOSE_INSTALLED=true
-        else
-            goose_script=$(mktemp /tmp/goose-install.XXXXXX.sh)
-            register_tmp "$goose_script"
-            # Download script, verify existence, then execute (mitigates some curl|sh risk)
-            if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
-                https://github.com/block/goose/releases/download/stable/download_cli.sh \
-                -o "$goose_script" 2>/dev/null; then
-                bash "$goose_script" && export PATH="${HOME}/.local/bin:${PATH}" ||
-                    warn "Goose install script failed."
-            else
-                warn "Failed to download Goose install script — skipping."
-            fi
-            if command -v goose &>/dev/null; then
-                ok "Goose: $(goose --version 2>/dev/null || echo 'installed')"
-                GOOSE_INSTALLED=true
-            else
-                warn "Goose not in PATH — may need: export PATH=\"\${HOME}/.local/bin:\${PATH}\""
-            fi
-        fi
-    else
-        ok "Skipping Goose."
-        command -v goose &>/dev/null && GOOSE_INSTALLED=true
-    fi
-
-    # Always configure Goose if installed (or if we just installed it)
-    if command -v goose &>/dev/null; then
-        step "Configuring Goose for local llama-server..."
-        mkdir -p "${HOME}/.config/goose"
-        cat >"${HOME}/.config/goose/config.yaml" <<GOOSECONF
-# Goose configuration – using local llama.cpp
-models:
-  - name: local
-    provider: openai
-    base_url: http://localhost:8080/v1
-    api_key: sk-local
-    default: true
-GOOSECONF
-        ok "Goose configured to use local model."
-    fi
-
-    # ── 13b. OpenCode ─────────────────────────────────────────────────────────────
-    echo ""
-    echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode) — AI Coding Agent${RST}"
-    echo -e "  Terminal TUI · 120k+ stars · 75+ providers · Go binary · no Node.js"
-    echo ""
-    if [[ -t 0 ]]; then
-        read -rp "  Install OpenCode? [y/N]: " install_opencode
-    else
-        install_opencode="n"
-    fi
-
-    if [[ "$install_opencode" =~ ^[Yy]$ ]]; then
-        step "Installing OpenCode..."
-        if command -v opencode &>/dev/null; then
-            ok "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
-            OPENCODE_INSTALLED=true
-        else
-            # Download installer, inspect, then run
-            opencode_installer=$(mktemp /tmp/opencode-install.XXXXXX.sh)
-            register_tmp "$opencode_installer"
-            if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
-                https://opencode.ai/install -o "$opencode_installer" 2>/dev/null; then
-                XDG_BIN_DIR="${HOME}/.local/bin" bash "$opencode_installer" 2>/dev/null &&
-                    export PATH="${HOME}/.local/bin:${PATH}"
-                if command -v opencode &>/dev/null; then
-                    ok "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
-                    OPENCODE_INSTALLED=true
-                else
-                    warn "OpenCode binary not in PATH after install."
-                fi
-            else
-                warn "OpenCode install script download failed — skipping."
-            fi
-        fi
-        if [[ "$OPENCODE_INSTALLED" == "true" ]]; then
-            MARKER_OC="# === OpenCode aliases ==="
-            if ! grep -qF "$MARKER_OC" "${HOME}/.bashrc" 2>/dev/null; then
-                cat >>"${HOME}/.bashrc" <<OC_ALIASES
-
-${MARKER_OC}
-alias oc='opencode'
-
-opencode-model() {
-    local new_model="\${1:?Usage: opencode-model <filename.gguf>}"
-    local new_name="\${new_model%.gguf}"
-    python3 - <<PYOC
-import json
-path = "${HOME}/.config/opencode/opencode.json"
-try:
-    with open(path) as f:
-        cfg = json.load(f)
-    cfg["provider"]["llamacpp"]["models"] = {"\${new_model}": {"name": "\${new_name}"}}
-    cfg["model"] = "llamacpp/\${new_model}"
-    cfg["small_model"] = "llamacpp/\${new_model}"
-    with open(path, "w") as f:
-        json.dump(cfg, f, indent=2)
-    print(f"OpenCode model updated to: llamacpp/\${new_model}")
-except Exception as e:
-    print(f"Error: {e}")
-PYOC
-}
-OC_ALIASES
-                ok "OpenCode aliases added to ~/.bashrc."
-            fi
-        fi
-    else
-        ok "Skipping OpenCode."
-        command -v opencode &>/dev/null && OPENCODE_INSTALLED=true
-    fi
-
-    # Always configure OpenCode if installed
-    if command -v opencode &>/dev/null; then
-        step "Configuring OpenCode with local model..."
-        OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-        mkdir -p "$OPENCODE_CONFIG_DIR"
-        cat >"${OPENCODE_CONFIG_DIR}/opencode.json" <<OPECONF
-{
-  "\$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "llamacpp": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "llama.cpp (local)",
-      "options": {
-        "baseURL": "http://localhost:8080/v1",
-        "apiKey": "sk-local"
-      },
-      "models": {
-        "${SEL_GGUF}": {
-          "name": "${SEL_NAME}",
-          "limit": {
-            "context": ${SAFE_CTX},
-            "output": 8192
-          }
-        }
-      }
-    }
-  },
-  "model": "llamacpp/${SEL_GGUF}",
-  "small_model": "llamacpp/${SEL_GGUF}",
-  "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git"
-  ]
-}
-OPECONF
-        ok "OpenCode configured."
-
-        # Install Superpowers plugin
-        SUPER_DIR="${HOME}/.config/opencode/superpowers"
-        PLUGIN_DIR="${HOME}/.config/opencode/plugin"
-        if git_has_updates "$SUPER_DIR" "main"; then
-            if [[ ! -d "$SUPER_DIR/.git" ]]; then
-                git clone https://github.com/obra/superpowers.git "$SUPER_DIR"
-            else
-                git -C "$SUPER_DIR" pull --quiet
-            fi
-        fi
-        mkdir -p "$PLUGIN_DIR"
-        ln -sf "${SUPER_DIR}/.opencode/plugin/superpowers.js" "${PLUGIN_DIR}/superpowers.js"
-        ok "Superpowers plugin updated."
-    fi
-
-    # ── 13c. AutoAgent ────────────────────────────────────────────────────────────
-    echo ""
-    echo -e "  ${BLD}Optional: AutoAgent (HKUDS) — Deep Research${RST}"
-    echo -e "  Zero-code multi-agent · #1 GAIA benchmark · no Docker for CLI mode"
-    echo -e "  ${YLW}Best with:${RST} model 5 (Qwen3.5-9B) or model 6 (Carnice-9b)"
-    echo ""
-    if [[ -t 0 ]]; then
-        read -rp "  Install AutoAgent? [y/N]: " install_autoagent
-    else
-        install_autoagent="n"
-    fi
-
-    if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
-        step "Installing python3-tk (optional for GUI)..."
-        if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk 2>/dev/null; then
-            warn "python3-tk installation skipped — GUI features will be disabled"
-        fi
-
-        if ! command -v uv &>/dev/null; then
-            step "Installing uv..."
-            uv_installer=$(mktemp /tmp/uv-install.XXXXXX.sh)
-            register_tmp "$uv_installer"
-            curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
-                https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
-            bash "$uv_installer" || die "uv installation failed"
-            # shellcheck disable=SC1091
-            source "${HOME}/.cargo/env" 2>/dev/null || true
-            export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
-            ok "uv: $(uv --version)"
-        else
-            ok "uv: $(uv --version)"
-        fi
-
-        if git_has_updates "$AUTOAGENT_DIR" "main"; then
-            if [[ ! -d "${AUTOAGENT_DIR}/.git" ]]; then
-                step "Cloning HKUDS/AutoAgent..."
-                git clone https://github.com/HKUDS/AutoAgent.git "${AUTOAGENT_DIR}"
-            else
-                ok "Updates available — pulling AutoAgent..."
-                git -C "$AUTOAGENT_DIR" fetch origin
-                git -C "$AUTOAGENT_DIR" reset --hard origin/main
-            fi
-        else
-            ok "AutoAgent already up‑to‑date."
-        fi
-
-        # Patch tkinter import
-        sed -i '1s/^/try:\n    import tkinter as tk\n    from tkinter import filedialog\n    TKINTER_AVAILABLE = True\nexcept ImportError:\n    TKINTER_AVAILABLE = False\n\n/' "${AUTOAGENT_DIR}/autoagent/cli_utils/file_select.py" 2>/dev/null || true
-
-        if [[ ! -d "$AUTOAGENT_VENV" ]]; then
-            step "Creating Python 3.11 venv for AutoAgent..."
-            uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
-            ok "Venv: ${AUTOAGENT_VENV}"
-        fi
-
-        step "Installing/updating AutoAgent dependencies..."
-        (
-            export VIRTUAL_ENV="${AUTOAGENT_VENV}"
-            export PATH="${AUTOAGENT_VENV}/bin:${PATH}"
-            cd "${AUTOAGENT_DIR}"
-            uv pip install -e "." 2>&1 | tail -5
-        ) && ok "AutoAgent installed." || die "AutoAgent install failed."
-
-        cat >"${HOME}/start-autoagent.sh" <<AUTOAGENT_LAUNCHER
-#!/usr/bin/env bash
-# start-autoagent.sh — generated by install.sh
-AUTOAGENT_VENV="${AUTOAGENT_VENV}"
-AUTOAGENT_DIR="${AUTOAGENT_DIR}"
-
-if ! curl -sf http://localhost:8080/v1/models &>/dev/null; then
-    echo -e "\n  ⚠ llama-server not running. Start with: start-llm"
-    if [[ -t 0 ]]; then
-        read -rp "  Auto-start llama-server? [Y/n]: " yn
-        if [[ ! "\$yn" =~ ^[Nn]$ ]]; then
-            nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
-            echo "  Waiting for llama-server..."
-            for i in {1..30}; do
-                curl -sf http://localhost:8080/v1/models &>/dev/null && break
-                sleep 1
-            done
-            if ! curl -sf http://localhost:8080/v1/models &>/dev/null; then
-                echo "  llama-server not ready. Check: tail -f /tmp/llama-server.log"
-                exit 1
-            fi
-        else
-            exit 0
-        fi
-    fi
-fi
-
-echo ""; echo "  Starting AutoAgent (deep-research mode)"
-echo "  Model : ${SEL_GGUF}"; echo "  API   : http://localhost:8080/v1"; echo ""
-
-source "\${AUTOAGENT_VENV}/bin/activate"
-cd "\${AUTOAGENT_DIR}"
-set -a; source "${HOME}/.autoagent/.env" 2>/dev/null || true; set +a
-auto deep-research
-AUTOAGENT_LAUNCHER
-        chmod +x "${HOME}/start-autoagent.sh"
-        ok "Created ~/start-autoagent.sh"
-        AUTOAGENT_INSTALLED=true
-
-        MARKER_AA="# === AutoAgent aliases ==="
-        if ! grep -qF "$MARKER_AA" "${HOME}/.bashrc" 2>/dev/null; then
-            cat >>"${HOME}/.bashrc" <<AUTOAGENT_ALIASES
-
-${MARKER_AA}
-export PATH="${AUTOAGENT_VENV}/bin:\${PATH}"
-alias autoagent='bash ~/start-autoagent.sh'
-
-autoagent-full() {
-    source "${AUTOAGENT_VENV}/bin/activate"
-    cd "${AUTOAGENT_DIR}"
-    set -a; source "${HOME}/.autoagent/.env" 2>/dev/null || true; set +a
-    auto main
-}
-
-autoagent-model() {
-    local new_model="\${1:?Usage: autoagent-model <filename.gguf>}"
-    sed -i "s|^COMPLETION_MODEL=.*|COMPLETION_MODEL=openai/\${new_model}|" \
-        ~/.autoagent/.env 2>/dev/null || \
-        echo "COMPLETION_MODEL=openai/\${new_model}" >> ~/.autoagent/.env
-    echo "AutoAgent model → openai/\${new_model}"
-}
-AUTOAGENT_ALIASES
-            ok "AutoAgent aliases added to ~/.bashrc."
-        fi
-    else
-        ok "Skipping AutoAgent."
-        [[ -d "${AUTOAGENT_DIR}/.git" ]] && AUTOAGENT_INSTALLED=true
-    fi
-
-    # ── 13d. OpenClaude ───────────────────────────────────────────────────────────
-    echo ""
-    echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
-    echo -e "  Claude-compatible CLI with local model support · npm package"
-    echo -e "  ${YLW}Info:${RST} https://www.npmjs.com/package/@gitlawb/openclaude"
-    echo ""
-    if [[ -t 0 ]]; then
-        read -rp "  Install OpenClaude? [y/N]: " install_openclaude
-    else
-        install_openclaude="n"
-    fi
-
-    if [[ "$install_openclaude" =~ ^[Yy]$ ]]; then
-        step "Installing OpenClaude..."
-
-        # Install Node.js 22.x if needed
-        if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
-            warn "Node.js >=20 required. Installing Node.js 22.x..."
-            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-            sudo apt-get install -y -qq nodejs
-        fi
-
-        sudo npm install -g @gitlawb/openclaude@latest
-
-        if command -v openclaude &>/dev/null; then
-            ok "OpenClaude: $(openclaude --version 2>/dev/null || echo 'installed')"
-            OPENCLAUDE_INSTALLED=true
-        else
-            warn "OpenClaude binary not found in PATH after install."
-        fi
-    else
-        ok "Skipping OpenClaude."
-        command -v openclaude &>/dev/null && OPENCLAUDE_INSTALLED=true
-    fi
-
-    # Configure OpenClaude if installed
-    if command -v openclaude &>/dev/null; then
-        step "Configuring OpenClaude for local llama-server..."
-        mkdir -p "${HOME}/.openclaude"
-        cat >"${HOME}/.openclaude/config.json" <<OPENCLAUDE
-{
-  "providers": {
-    "local": {
-      "baseUrl": "http://127.0.0.1:8080/v1",
-      "apiKey": "local"
-    }
-  },
-  "model": "local/${SEL_GGUF}"
-}
-OPENCLAUDE
-        ok "OpenClaude configured."
-    fi
-
-fi # End of optional agents section
 
 # =============================================================================
 #  14. ~/.bashrc helpers  [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     step "Adding helpers to ~/.bashrc..."
-
-    SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null ||
-        realpath "$0" 2>/dev/null || echo "")"
-
+    SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "$0" 2>/dev/null || echo "")"
     INSTALL_COPY="${HOME}/.local/bin/install-llm.sh"
-    if [[ "$SCRIPT_SELF" == "/dev/stdin" || -z "$SCRIPT_SELF" ||
-        "$SCRIPT_SELF" == "/proc/"* ]]; then
+    if [[ "$SCRIPT_SELF" == "/dev/stdin" || -z "$SCRIPT_SELF" || "$SCRIPT_SELF" == "/proc/"* ]]; then
         warn "Script run via pipe — copying to ${INSTALL_COPY} for switch-model."
         mkdir -p "${HOME}/.local/bin"
         cat >"$INSTALL_COPY" <<'STUB'
@@ -1656,25 +1486,20 @@ curl -fsSL https://raw.githubusercontent.com/mettbrot0815/llm-installer/refs/hea
 STUB
         chmod +x "$INSTALL_COPY"
         SCRIPT_SELF="$INSTALL_COPY"
-        warn "switch-model will re-download the installer. For a local copy:"
-        warn "  curl -fsSL <url> -o ~/install-llm.sh && chmod +x ~/install-llm.sh"
+        warn "switch-model will re-download the installer."
     elif [[ -f "$SCRIPT_SELF" ]]; then
         mkdir -p "${HOME}/.local/bin"
-        cp -f "$SCRIPT_SELF" "$INSTALL_COPY" 2>/dev/null &&
-            chmod +x "$INSTALL_COPY" && SCRIPT_SELF="$INSTALL_COPY" || true
+        cp -f "$SCRIPT_SELF" "$INSTALL_COPY" 2>/dev/null && chmod +x "$INSTALL_COPY" && SCRIPT_SELF="$INSTALL_COPY" || true
     fi
 
     MARKER="# === LLM setup (added by install.sh) ==="
-    if grep -qF "$MARKER" "${HOME}/.bashrc" 2>/dev/null; then
-        ok "Helpers already in ~/.bashrc — skipping."
-    else
+    if ! grep -qF "$MARKER" "${HOME}/.bashrc" 2>/dev/null; then
         cat >>"${HOME}/.bashrc" <<BASHRC_EXPANDED
 
 ${MARKER}
 [[ -n "\${__LLM_BASHRC_LOADED:-}" ]] && return 0
 export __LLM_BASHRC_LOADED=1
 
-# Strip Windows /mnt/* paths
 _c=""; IFS=':' read -ra _pts <<< "\$PATH"
 for _pt in "\${_pts[@]}"; do
     [[ "\$_pt" == /mnt/* ]] && continue
@@ -1691,33 +1516,22 @@ alias start-llm='bash ~/start-llm.sh'
 alias stop-llm='pkill -f "llama-server.*-m" 2>/dev/null || true; echo "llama-server stopped."'
 alias restart-llm='stop-llm; sleep 2; start-llm'
 alias llm-log='tail -f /tmp/llama-server.log'
-
-# switch-model: truly lightweight.
 alias switch-model='SWITCH_MODEL_ONLY=1 bash ${INSTALL_COPY}'
 BASHRC_EXPANDED
 
-        # Tokens are already saved immediately when entered; this is just a backup
-        if [[ -n "${HF_TOKEN:-}" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-            echo "export HF_TOKEN=\"${HF_TOKEN}\"" >>"${HOME}/.bashrc"
-        fi
-        if [[ -n "${GITHUB_TOKEN:-}" ]] && ! grep -qF "export GITHUB_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-            echo "export GITHUB_TOKEN=\"${GITHUB_TOKEN}\"" >>"${HOME}/.bashrc"
-        fi
+        [[ -n "${HF_TOKEN:-}" ]] && ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" && echo "export HF_TOKEN=\"${HF_TOKEN}\"" >>"${HOME}/.bashrc"
+        [[ -n "${GITHUB_TOKEN:-}" ]] && ! grep -qF "export GITHUB_TOKEN=" "${HOME}/.bashrc" && echo "export GITHUB_TOKEN=\"${GITHUB_TOKEN}\"" >>"${HOME}/.bashrc"
 
         cat >>"${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
 
 vram() {
-    nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu \
-        --format=csv,noheader,nounits 2>/dev/null | \
-        awk -F, '{printf "GPU: %s\nVRAM: %s / %s MiB\nUtil: %s%%\n",$1,$2,$3,$4}' || \
-        echo "nvidia-smi not available"
+    nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null | \
+        awk -F, '{printf "GPU: %s\nVRAM: %s / %s MiB\nUtil: %s%%\n",$1,$2,$3,$4}' || echo "nvidia-smi not available"
 }
 
 llm-models() {
     local active_model=""
-    [[ -f ~/start-llm.sh ]] && \
-        active_model=$(grep '^GGUF=' ~/start-llm.sh 2>/dev/null | head -1 | \
-        sed 's/GGUF="//;s/".*//' | xargs basename 2>/dev/null || true)
+    [[ -f ~/start-llm.sh ]] && active_model=$(grep '^GGUF=' ~/start-llm.sh 2>/dev/null | head -1 | sed 's/GGUF="//;s/".*//' | xargs basename 2>/dev/null || true)
     echo -e "\n  ${BLD}Models in ~/llm-models:${RST}"
     echo "  ────────────────────────────────────────────────"
     local found=0 f sz name tag
@@ -1735,15 +1549,11 @@ llm-models() {
 llm-status() {
     local llama_pid active_model=""
     llama_pid=$(pgrep -f "llama-server.*-m" 2>/dev/null || true)
-    [[ -f ~/start-llm.sh ]] && \
-        active_model=$(grep '^MODEL_NAME=' ~/start-llm.sh 2>/dev/null | head -1 | \
-        sed 's/MODEL_NAME="//;s/".*//' || true)
-
+    [[ -f ~/start-llm.sh ]] && active_model=$(grep '^MODEL_NAME=' ~/start-llm.sh 2>/dev/null | head -1 | sed 's/MODEL_NAME="//;s/".*//' || true)
     echo -e "${BLD}${CYN}╭────────────────────────────────────────────────────────────────╮${RST}"
     echo -e "${BLD}${CYN}│${RST}  ${BLD}LLM Stack Status${RST}"
     echo -e "${BLD}${CYN}│${RST}  ──────────────────────────────────────────────────────"
-    [[ -n "$active_model" ]] && \
-        echo -e "${BLD}${CYN}│${RST}  Model : ${CYN}${active_model}${RST}"
+    [[ -n "$active_model" ]] && echo -e "${BLD}${CYN}│${RST}  Model : ${CYN}${active_model}${RST}"
     if [[ -n "$llama_pid" ]]; then
         echo -e "${GRN}  ✓ llama-server → http://localhost:8080  (PID: $llama_pid)${RST}"
     else
@@ -1766,7 +1576,7 @@ show_llm_summary() {
     echo -e "${BLD}${CYN}│${RST}  ${CYN}start-llm${RST}     Start llama-server"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}stop-llm${RST}      Stop llama-server"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}restart-llm${RST}   Restart llama-server"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}switch-model${RST}  Pick different model (lightweight)"
+    echo -e "${BLD}${CYN}│${RST}  ${CYN}switch-model${RST}  Pick different model"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-status${RST}    Status + active model"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-log${RST}       Tail llama-server log"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}llm-models${RST}    List all .gguf files"
@@ -1777,12 +1587,10 @@ show_llm_summary() {
     echo ""
 }
 
-# Always show summary on interactive shell start
 if [[ $- == *i* ]]; then
     show_llm_summary
 fi
 
-# Auto-start llama-server on first interactive terminal per WSL session.
 _llm_autostart() {
     [[ $- != *i* ]] && return 0
     pgrep -f "llama-server.*-m" &>/dev/null && return 0
@@ -1790,7 +1598,6 @@ _llm_autostart() {
     local uptime_min
     uptime_min=$(awk '{print int($1/60)}' /proc/uptime 2>/dev/null || echo "0")
     local session_marker="/tmp/.llm_autostarted_${uptime_min}"
-    # Use mkdir to avoid race condition (atomic)
     if mkdir "${session_marker}.lock" 2>/dev/null; then
         echo -e "${YLW}[LLM] llama-server not running — auto-starting...${RST}"
         nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
@@ -1800,11 +1607,11 @@ _llm_autostart() {
 }
 _llm_autostart
 
-# Alias clear to show summary then clear screen
 alias clear='show_llm_summary; command clear'
 BASHRC_FUNCTIONS
-
         ok "Helpers written to ~/.bashrc."
+    else
+        ok "Helpers already in ~/.bashrc — skipping."
     fi
 fi
 
@@ -1856,104 +1663,15 @@ WSLCFG
 fi
 
 # =============================================================================
-#  16. Claude Configuration (Claude Code / Claude Desktop)
+#  16. Claude Configuration
 # =============================================================================
 if [[ -z "$_SMO" ]] && (command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]); then
     step "Configuring Claude to use local llama.cpp server..."
-
-    CLAUDE_CONFIG_DIR="${HOME}/.claude"
-    mkdir -p "$CLAUDE_CONFIG_DIR"
-
-    cat >"${CLAUDE_CONFIG_DIR}/config.json" <<CLAUDE
+    mkdir -p "${HOME}/.claude"
+    cat >"${HOME}/.claude/config.json" <<CLAUDE
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${HOME}/.claude/hooks/gsd-check-update.js\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${HOME}/.claude/hooks/gsd-session-state.sh"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${HOME}/.claude/hooks/gsd-context-monitor.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${HOME}/.claude/hooks/gsd-phase-boundary.sh",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${HOME}/.claude/hooks/gsd-prompt-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${HOME}/.claude/hooks/gsd-read-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${HOME}/.claude/hooks/gsd-workflow-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${HOME}/.claude/hooks/gsd-validate-commit.sh",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "node \"${HOME}/.claude/hooks/gsd-statusline.js\""
-  },
+  "hooks": {},
+  "statusLine": {},
   "agentModels": {
     "primary": "local/${SEL_GGUF}"
   },
@@ -1973,7 +1691,6 @@ if [[ -z "$_SMO" ]] && (command -v claude &>/dev/null || [[ -d "${HOME}/.claude"
   }
 }
 CLAUDE
-
     ok "Claude config written to ~/.claude/config.json"
     warn "Note: Restart Claude for changes to take effect."
 fi
@@ -2007,10 +1724,11 @@ if [[ -z "$_SMO" ]]; then
     echo -e " ${BLD}Installed:${RST}"
     echo -e "  llama-server  →  http://localhost:8080/v1"
     echo -e "  Hermes Agent  →  hermes"
-    [[ "$GOOSE_INSTALLED" == "true" ]] && echo -e "  Goose         →  goose"
-    [[ "$OPENCODE_INSTALLED" == "true" ]] && echo -e "  OpenCode      →  opencode  (alias: oc)"
-    [[ "$AUTOAGENT_INSTALLED" == "true" ]] && echo -e "  AutoAgent     →  autoagent"
-    [[ "$OPENCLAUDE_INSTALLED" == "true" ]] && echo -e "  OpenClaude    →  openclaude"
+    $INSTALL_GOOSE && echo -e "  Goose         →  goose"
+    $INSTALL_OPENCODE && echo -e "  OpenCode      →  opencode  (alias: oc)"
+    $INSTALL_AUTOAGENT && echo -e "  AutoAgent     →  autoagent"
+    $INSTALL_OPENCLAUDE && echo -e "  OpenClaude    →  openclaude"
+    $INSTALL_WEBUI && echo -e "  Hermes WebUI  →  start-webui  (http://localhost:3000)"
     echo ""
 fi
 
@@ -2020,49 +1738,19 @@ echo -e " ${BLD}Server:${RST}"
 echo -e "  ${CYN}start-llm${RST}       Start llama-server"
 echo -e "  ${CYN}stop-llm${RST}        Stop llama-server"
 echo -e "  ${CYN}restart-llm${RST}     Restart llama-server"
-echo -e "  ${CYN}switch-model${RST}    Pick different model (lightweight — ~5s, not 15min)"
+echo -e "  ${CYN}switch-model${RST}    Pick different model"
 echo -e "  ${CYN}llm-status${RST}      Status + active model"
 echo -e "  ${CYN}llm-log${RST}         Tail llama-server log"
 echo -e "  ${CYN}llm-models${RST}      List all .gguf files"
 echo -e "  ${CYN}vram${RST}            GPU/VRAM usage"
 echo ""
 echo -e " ${BLD}Agents:${RST}"
-echo -e "  ${CYN}hermes${RST}          Hermes (persistent memory · self-learning · tools)"
-echo -e "  ${CYN}hermes model${RST}    Switch Hermes provider/model"
-echo -e "  ${CYN}hermes doctor${RST}   Diagnose config issues"
-echo -e "  ${CYN}hermes skills${RST}   Browse/install skills (agentskills.io)"
-[[ "$GOOSE_INSTALLED" == "true" ]] &&
-    echo -e "  ${CYN}goose${RST}           Goose (coding / dev tasks)"
-[[ "$OPENCODE_INSTALLED" == "true" ]] &&
-    echo -e "  ${CYN}opencode${RST} / ${CYN}oc${RST}  OpenCode TUI coding agent"
-[[ "$AUTOAGENT_INSTALLED" == "true" ]] &&
-    echo -e "  ${CYN}autoagent${RST}       AutoAgent deep research (no Docker)"
-[[ "$OPENCLAUDE_INSTALLED" == "true" ]] &&
-    echo -e "  ${CYN}openclaude${RST}      OpenClaude CLI"
-echo ""
-echo -e " ${BLD}Hermes inside chat:${RST}"
-echo -e "  ${CYN}/provider${RST}    Verify routing (should show: custom/local)"
-echo -e "  ${CYN}/statusbar${RST}   Toggle model + context info bar"
-echo -e "  ${CYN}/compress${RST}    Compress session when context fills"
-echo -e "  ${CYN}/reset${RST}       Fresh session (saves memory first)"
-echo -e "  ${CYN}/skills${RST}      Browse installed skills"
-echo ""
-echo -e " ${BLD}Config files:${RST}"
-echo -e "  ~/.hermes/config.yaml         Hermes (model · memory · wizard)"
-echo -e "  ~/.hermes/.env                Hermes env vars"
-[[ "$GOOSE_INSTALLED" == "true" ]] &&
-    echo -e "  ~/.config/goose/config.yaml   Goose  (GOOSE_MODEL=${SEL_GGUF})"
-[[ "$OPENCODE_INSTALLED" == "true" ]] &&
-    echo -e "  ~/.config/opencode/opencode.json  OpenCode"
-[[ "$AUTOAGENT_INSTALLED" == "true" ]] &&
-    echo -e "  ~/.autoagent/.env             AutoAgent"
-[[ "$OPENCLAUDE_INSTALLED" == "true" ]] &&
-    echo -e "  ~/.openclaude/config.json     OpenClaude"
-echo -e "  ~/.claude/config.json         Claude (local provider)"
-echo ""
-echo -e " ${GRN}Honcho memory:${RST}  enabled — Hermes learns your patterns across sessions"
-echo -e " ${GRN}Skills:${RST}         hermes skills browse  |  hermes skills search <query>"
-echo -e " ${CYN}agentskills.io${RST}  open standard — compatible with Hermes, OpenCode, Claude Code"
+echo -e "  ${CYN}hermes${RST}          Hermes Agent"
+$INSTALL_GOOSE && echo -e "  ${CYN}goose${RST}           Goose"
+$INSTALL_OPENCODE && echo -e "  ${CYN}opencode${RST} / ${CYN}oc${RST}  OpenCode"
+$INSTALL_AUTOAGENT && echo -e "  ${CYN}autoagent${RST}       AutoAgent"
+$INSTALL_OPENCLAUDE && echo -e "  ${CYN}openclaude${RST}      OpenClaude"
+$INSTALL_WEBUI && echo -e "  ${CYN}start-webui${RST}     Hermes WebUI"
 echo ""
 echo -e " ${YLW}Note:${RST}       source ~/.bashrc or open a new terminal."
 echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal."
