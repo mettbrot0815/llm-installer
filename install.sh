@@ -1236,6 +1236,7 @@ OPENCLAUDE
         ok "OpenClaude configured."
     fi
 fi
+
 # =============================================================================
 #  13e. Hermes WebUI (Python-based) – Browser interface for Hermes
 # =============================================================================
@@ -1751,7 +1752,7 @@ if [[ -z "$_SMO" ]]; then
     $INSTALL_OPENCODE && echo -e "  OpenCode      →  opencode  (alias: oc)"
     $INSTALL_AUTOAGENT && echo -e "  AutoAgent     →  autoagent"
     $INSTALL_OPENCLAUDE && echo -e "  OpenClaude    →  openclaude"
-    $INSTALL_WEBUI && echo -e "  Hermes WebUI  →  start-webui  (http://localhost:3000)"
+    $INSTALL_WEBUI && echo -e "  Hermes WebUI  →  start-webui  (http://localhost:8787)"
     echo ""
 fi
 
