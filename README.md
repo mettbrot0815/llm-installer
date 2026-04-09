@@ -1,3 +1,5 @@
+markdown
+
 # LLM Installer — Ubuntu WSL2
 
 > A **production-grade**, single-script installer for a complete local AI inference + agent stack on Ubuntu under WSL2.
@@ -91,7 +93,7 @@ Large
 Complex tasks
 High-end GPU
 
-Pro tip: Start with Model 5 or 6.Usage After InstallationServer Control
+Pro tip: Start with Model 5 or 6.Usage After InstallationServer Controlbash
 
 start-llm          # Start llama-server
 stop-llm           # Stop server
@@ -106,7 +108,7 @@ goose → Rust-based agent (if installed)
 opencode / oc → Coding-focused TUI (if installed)
 autoagent → Multi-agent research tool (if installed)
 
-Web UI available at: http://localhost:8080Switching ModelsAfter initial setup, use the fast model switcher:
+Web UI available at: http://localhost:8080Switching ModelsAfter initial setup, use the fast model switcher:bash
 
 switch-model
 
