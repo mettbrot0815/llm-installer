@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
-#  Version: production-hardened (final) – all agents auto‑configured, AutoAgent tkinter patched
+#  Version: production-hardened (final) – Hermes config YAML fix
 # =============================================================================
 set -euo pipefail
 
@@ -839,7 +839,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-#  9b. Configure Hermes for local llama-server (idempotent with backup)
+#  9b. Configure Hermes for local llama-server (idempotent with backup, YAML‑clean)
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
 
@@ -868,27 +868,38 @@ else
     fi
 fi
 
+# Improved Python script that properly cleans the YAML file
 python3 - "${SEL_NAME}" "${SAFE_CTX}" "${CONFIG_FILE}" <<'PYCONF'
-import re
 import sys
+import os
+import re
 
 model_name = sys.argv[1]
-base_url   = "http://localhost:8080/v1"
 ctx_length = int(sys.argv[2])
 config_path = sys.argv[3]
 
-try:
+# Read existing config or start fresh
+if os.path.exists(config_path):
     with open(config_path, "r") as f:
         content = f.read()
-except FileNotFoundError:
+else:
     content = ""
 
-content = re.sub(r'^model:.*?(?=^\S|\Z)', '', content, flags=re.MULTILINE | re.DOTALL)
-content = re.sub(r'^terminal:.*?(?=^\S|\Z)', '', content, flags=re.MULTILINE | re.DOTALL)
-content = re.sub(r'^agent:.*?(?=^\S|\Z)', '', content, flags=re.MULTILINE | re.DOTALL)
-content = re.sub(r'^setup_complete:.*\n?', '', content, flags=re.MULTILINE)
-content = content.rstrip()
+# Remove any existing Hermes-managed blocks (model, terminal, agent, memory, setup_complete)
+patterns = [
+    r'(?m)^model:.*?(?=^[a-z_]+:|\Z)',
+    r'(?m)^terminal:.*?(?=^[a-z_]+:|\Z)',
+    r'(?m)^agent:.*?(?=^[a-z_]+:|\Z)',
+    r'(?m)^memory:.*?(?=^[a-z_]+:|\Z)',
+    r'(?m)^setup_complete:.*?\n?',
+]
+for pat in patterns:
+    content = re.sub(pat, '', content, flags=re.DOTALL)
 
+# Remove trailing whitespace and blank lines
+content = '\n'.join(line for line in content.splitlines() if line.strip() != '')
+
+# Safely quote model name for YAML
 _YAML_UNSAFE = re.compile(r"""[\s:,#\[\]{}|>&*!%\\? @`"'-]""")
 if _YAML_UNSAFE.search(model_name) or model_name.lower() in (
         'true','false','null','yes','no','on','off','~'):
@@ -896,12 +907,13 @@ if _YAML_UNSAFE.search(model_name) or model_name.lower() in (
 else:
     model_name_yaml = model_name
 
+# Build the new configuration block
 new_block = f"""
 setup_complete: true
 
 model:
   provider: custom
-  base_url: {base_url}
+  base_url: http://localhost:8080/v1
   default: {model_name_yaml}
   context_length: {ctx_length}
 
@@ -916,12 +928,13 @@ memory:
     enabled: true
 """
 
+# Combine existing content (if any) with new block
+final_content = content.rstrip() + "\n" + new_block.lstrip() + "\n"
+
 with open(config_path, "w") as f:
-    f.write((content + "\n" if content else "") + new_block + "\n")
+    f.write(final_content)
 
 print(f"config.yaml: model={model_name}  ctx={ctx_length}")
-print("setup_complete: true  → wizard suppressed on first run")
-print("memory.honcho.enabled → self-learning active")
 PYCONF
 
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
