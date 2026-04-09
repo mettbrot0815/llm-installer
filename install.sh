@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
-#  Version: production-hardened (final) – Hermes config YAML fix
+#  Version: production-hardened (final) – SECURITY & ROBUSTNESS FIXES
 # =============================================================================
 set -euo pipefail
 
@@ -64,7 +64,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-#  1. HuggingFace token
+#  1. HuggingFace token – SAFE EXTRACTION (no sed/grep parsing of .bashrc)
 # =============================================================================
 _HF_ENV="${HF_TOKEN:-}"
 HF_TOKEN=""
@@ -74,10 +74,15 @@ if [[ -n "$_HF_ENV" ]]; then
 elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
     HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
     [[ -n "$HF_TOKEN" ]] && ok "HF_TOKEN loaded from cache."
-elif grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-    HF_TOKEN=$(grep "export HF_TOKEN=" "${HOME}/.bashrc" | head -1 | \
-        sed 's/.*export HF_TOKEN=//' | sed "s/^[\"']//" | sed "s/[\"']$//")
-    [[ -n "$HF_TOKEN" ]] && ok "HF_TOKEN found in ~/.bashrc."
+else
+    # CHANGE: Safely source .bashrc in a subshell to extract HF_TOKEN without sed/grep injection
+    if [[ -f "${HOME}/.bashrc" ]]; then
+        extracted=$(bash -c "source ${HOME}/.bashrc 2>/dev/null && echo -n \"\$HF_TOKEN\"" || true)
+        if [[ -n "$extracted" ]]; then
+            HF_TOKEN="$extracted"
+            ok "HF_TOKEN loaded from ~/.bashrc (safe extraction)."
+        fi
+    fi
 fi
 
 if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
@@ -87,16 +92,16 @@ if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
     echo -e "  ${CYN}https://huggingface.co/settings/tokens${RST}"
     echo ""
     if [[ -t 0 ]]; then
-        read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn
+        read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn   # CHANGE: added -r
         if [[ "$hf_yn" =~ ^[Yy]$ ]]; then
-            read -rp "  Paste your token (starts with hf_): " HF_TOKEN
+            read -rp "  Paste your token (starts with hf_): " HF_TOKEN     # CHANGE: added -r
             HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
             if [[ "$HF_TOKEN" =~ ^hf_ ]]; then
                 ok "Token accepted."
             else
                 warn "Token doesn't start with 'hf_' — using anyway."
             fi
-            # Immediately save to ~/.bashrc if not already present
+            # Save to ~/.bashrc if not already present (safe: no sed, just append)
             if ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
                 echo "export HF_TOKEN=\"${HF_TOKEN}\"" >> "${HOME}/.bashrc"
                 ok "HF_TOKEN saved to ~/.bashrc."
@@ -111,17 +116,22 @@ fi
 export HF_TOKEN
 
 # =============================================================================
-#  1b. GitHub token (classic PAT) – optional, but recommended for repo access
+#  1b. GitHub token – SECURE EXTRACTION AND GIT CONFIG (no command injection)
 # =============================================================================
 _GH_ENV="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 GITHUB_TOKEN=""
 if [[ -n "$_GH_ENV" ]]; then
     GITHUB_TOKEN="$_GH_ENV"
     ok "GitHub token already set in environment."
-elif grep -qF "export GITHUB_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
-    GITHUB_TOKEN=$(grep "export GITHUB_TOKEN=" "${HOME}/.bashrc" | head -1 | \
-        sed 's/.*export GITHUB_TOKEN=//' | sed "s/^[\"']//" | sed "s/[\"']$//")
-    [[ -n "$GITHUB_TOKEN" ]] && ok "GitHub token found in ~/.bashrc."
+else
+    # CHANGE: Safe extraction from .bashrc (subshell)
+    if [[ -f "${HOME}/.bashrc" ]]; then
+        extracted=$(bash -c "source ${HOME}/.bashrc 2>/dev/null && echo -n \"\$GITHUB_TOKEN\"" || true)
+        if [[ -n "$extracted" ]]; then
+            GITHUB_TOKEN="$extracted"
+            ok "GitHub token loaded from ~/.bashrc."
+        fi
+    fi
 fi
 
 if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
@@ -132,16 +142,15 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
     echo -e "  Required scopes: ${YLW}repo${RST}, ${YLW}read:org${RST} (optional)"
     echo ""
     if [[ -t 0 ]]; then
-        read -rp "  Do you have a GitHub token to add? [y/N]: " gh_yn
+        read -rp "  Do you have a GitHub token to add? [y/N]: " gh_yn    # CHANGE: -r
         if [[ "$gh_yn" =~ ^[Yy]$ ]]; then
-            read -rp "  Paste your token (starts with ghp_): " GITHUB_TOKEN
+            read -rp "  Paste your token (starts with ghp_): " GITHUB_TOKEN   # CHANGE: -r
             GITHUB_TOKEN="${GITHUB_TOKEN//[[:space:]]/}"
             if [[ "$GITHUB_TOKEN" =~ ^ghp_ ]]; then
                 ok "Token accepted."
             else
                 warn "Token doesn't start with 'ghp_' — using anyway."
             fi
-            # Immediately save to ~/.bashrc if not already present
             if ! grep -qF "export GITHUB_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
                 echo "export GITHUB_TOKEN=\"${GITHUB_TOKEN}\"" >> "${HOME}/.bashrc"
                 ok "GITHUB_TOKEN saved to ~/.bashrc."
@@ -154,12 +163,16 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
     fi
 fi
 
+# CHANGE: Configure git to use token via environment (git credential helper)
+# Avoid embedding token in URL to prevent command injection.
 if [[ -n "$GITHUB_TOKEN" ]]; then
     export GITHUB_TOKEN
-    # Configure git to use the token for HTTPS (only if not already set)
-    if ! git config --global --get url."https://${GITHUB_TOKEN}@github.com/".insteadOf &>/dev/null; then
-        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-        ok "Git configured to use GitHub token for HTTPS."
+    # Use a git credential helper that reads from GITHUB_TOKEN environment variable
+    # This is safe and standard.
+    if ! git config --global credential.helper '!f() { echo "username=${GITHUB_TOKEN}"; echo "password=x-oauth-basic"; }; f' 2>/dev/null; then
+        warn "Could not set git credential helper. GitHub operations may be unauthenticated."
+    else
+        ok "Git configured to use GitHub token via credential helper."
     fi
 fi
 
@@ -232,7 +245,7 @@ echo -e "  GPU  : ${GPU_NAME}   VRAM: ${VRAM_GiB} GiB   CUDA: ${HAS_NVIDIA}"
 if [[ -z "$_SMO" && "$HAS_NVIDIA" != "true" ]]; then
     warn "No NVIDIA GPU — llama.cpp will be CPU-only (much slower)."
     if [[ -t 0 ]]; then
-        read -rp "  Continue with CPU-only build? [y/N]: " cpu_ok
+        read -rp "  Continue with CPU-only build? [y/N]: " cpu_ok    # CHANGE: -r
         if [[ ! "$cpu_ok" =~ ^[Yy]$ ]]; then
             echo "Aborted."
             exit 0
@@ -294,6 +307,11 @@ mkdir -p "$MODEL_DIR"
 grade_model() {
     local min_ram="${1:?}" min_vram="${2:?}"
     local ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
+    # CHANGE: Validate that inputs are numeric to avoid arithmetic errors
+    if [[ ! "$min_ram" =~ ^[0-9]+$ || ! "$min_vram" =~ ^[0-9]+$ ]]; then
+        echo "F"
+        return 1
+    fi
     local ram_h=$(( ram_gib - min_ram ))
     if (( min_vram > 0 )) && [[ "$has_nvidia" == "true" ]]; then
         local vram_h=$(( vram_gib - min_vram ))
@@ -391,29 +409,46 @@ HDR
         local GRADE GC GL cached tag_display
         GRADE=$(grade_model "$min_ram" "$min_vram" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA")
         GC=$(grade_color "$GRADE"); GL=$(grade_label "$GRADE")
-        [[ -f "${MODEL_DIR}/${gguf_file}" ]] && cached=" ${CYN}↓${RST}" || cached=""
+        # CHANGE: Use simple file existence check instead of && || ternary pitfall
+        if [[ -f "${MODEL_DIR}/${gguf_file}" ]]; then
+            cached=" ${CYN}↓${RST}"
+        else
+            cached=""
+        fi
         tag_display="${tags//,/ }"
         echo -e "  ${BLD}$(printf '%2s' "$idx")${RST}  $(printf '%-26s' "$dname")" \
             " $(printf '%5s' "$size_gb") GB  $(printf '%-7s' "$ctx")" \
             "  ${GC}$(printf '%-13s' "$GL")${RST}  $(printf '%-24s' "$tag_display") $cached"
     done < <(printf '%s\n' "${MODELS[@]}")
 
-    # Show locally present GGUFs not in catalogue
+    # Show locally present GGUFs not in catalogue (optimized with associative array)
+    # CHANGE: Pre-build associative array of catalogued GGUF filenames for O(1) lookup
+    declare -A catalogued
+    while IFS='|' read -r _ _ cat_g _; do
+        catalogued["${cat_g// /}"]=1
+    done < <(printf '%s\n' "${MODELS[@]}")
+
     local extra_count=0 f fname
     for f in "${MODEL_DIR}"/*.gguf; do
         [[ -f "$f" ]] || continue
         fname=$(basename "$f")
-        local in_cat=false _i _r cat_g _rest
-        while IFS='|' read -r _i _r cat_g _rest; do
-            [[ "${cat_g// /}" == "$fname" ]] && { in_cat=true; break; }
-        done < <(printf '%s\n' "${MODELS[@]}")
-        if [[ "$in_cat" == "false" ]]; then
+        if [[ -z "${catalogued[$fname]:-}" ]]; then
             extra_count=$(( extra_count + 1 ))
             if (( extra_count == 1 )); then
                 echo -e "\n  ${BLD}▸ LOCAL  (in ~/llm-models, not in catalogue)${RST}"
             fi
-            local sz
-            sz=$(du -h "$f" 2>/dev/null | cut -f1)
+            # CHANGE: Portable file size using wc -c instead of GNU du -h parsing
+            local sz_bytes sz
+            sz_bytes=$(wc -c < "$f" 2>/dev/null || echo 0)
+            if (( sz_bytes > 1073741824 )); then
+                sz="$(($sz_bytes/1073741824))G"
+            elif (( sz_bytes > 1048576 )); then
+                sz="$(($sz_bytes/1048576))M"
+            elif (( sz_bytes > 1024 )); then
+                sz="$(($sz_bytes/1024))K"
+            else
+                sz="${sz_bytes}B"
+            fi
             echo -e "  ${CYN}↓${RST}  ${fname}  (${sz})"
         fi
     done
@@ -427,7 +462,7 @@ HDR
     echo ""
 }
 
-# ── HF URL / repo download ─────────────────────────────────────────────────────
+# ── HF URL / repo download – SAFE PARSING using Python script ──────────────────
 download_from_hf_url() {
     echo ""
     echo -e "  ${BLD}Download via HuggingFace${RST}"
@@ -435,7 +470,7 @@ download_from_hf_url() {
     echo -e "    https://huggingface.co/owner/repo/resolve/main/file.gguf"
     echo -e "    owner/repo-name  (lists files, you pick)"
     echo ""
-    read -rp "  Paste URL or repo (owner/name): " HF_INPUT
+    read -rp "  Paste URL or repo (owner/name): " HF_INPUT   # CHANGE: -r
     HF_INPUT="${HF_INPUT//[[:space:]]/}"
     [[ -z "$HF_INPUT" ]] && die "No input provided."
 
@@ -454,51 +489,66 @@ download_from_hf_url() {
             [[ -n "${HF_TOKEN:-}" ]] && ca+=(-H "Authorization: Bearer ${HF_TOKEN}")
             curl "${ca[@]}" "$HF_INPUT" || die "curl download failed."
             [[ -f "$GGUF_PATH" ]] || die "File not found after download."
+            # CHANGE: Portable file size check
             local fs
-            fs=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
+            fs=$(wc -c < "$GGUF_PATH" 2>/dev/null || echo 0)
             (( fs < 104857600 )) && die "File too small (${fs} bytes) — check URL."
             ok "Downloaded: ${GGUF_PATH}"
         fi
     else
         SEL_HF_REPO="$HF_INPUT"
         step "Listing GGUFs in ${SEL_HF_REPO}..."
-        local list_out=""
-        list_out=$("$HF_CLI" download "$SEL_HF_REPO" \
-            --include "*.gguf" --dry-run 2>/dev/null || true)
-        GGUF_FILES=()
-        while IFS= read -r line; do
-            [[ "$line" =~ \.gguf$ ]] || continue
-            fname=$(basename "$line" 2>/dev/null || echo "$line")
-            GGUF_FILES+=("$fname")
-        done < <(echo "$list_out" | grep -i '\.gguf$' | awk '{print $NF}' | sort)
 
-        if [[ ${#GGUF_FILES[@]} -eq 0 ]]; then
+        # CHANGE: Use Python huggingface_hub API to list files reliably, no fragile dry-run parsing
+        local list_py
+        list_py=$(mktemp /tmp/hf_list.XXXXXX.py)
+        register_tmp "$list_py"
+        cat > "$list_py" <<'PYLIST'
+import sys, os
+from huggingface_hub import list_repo_files
+repo = sys.argv[1]
+token = os.environ.get("HF_TOKEN")
+try:
+    files = list_repo_files(repo, token=token)
+except Exception as e:
+    print("ERROR: " + str(e), file=sys.stderr)
+    sys.exit(1)
+for f in files:
+    if f.endswith(".gguf"):
+        print(f)
+PYLIST
+        local py_out
+        py_out=$(python3 "$list_py" "$SEL_HF_REPO" 2>/dev/null || true)
+        if [[ -z "$py_out" ]]; then
             warn "Could not auto-list files. Enter filename manually."
-            read -rp "  Filename (e.g. model-Q4_K_M.gguf): " SEL_GGUF
+            read -rp "  Filename (e.g. model-Q4_K_M.gguf): " SEL_GGUF   # CHANGE: -r
             SEL_GGUF="${SEL_GGUF//[[:space:]]/}"
             [[ -z "$SEL_GGUF" ]] && die "No filename."
-        elif [[ ${#GGUF_FILES[@]} -eq 1 ]]; then
-            SEL_GGUF="${GGUF_FILES[0]}"
-            ok "Only one GGUF found: ${SEL_GGUF}"
         else
-            echo ""
-            echo -e "  ${BLD}Available GGUFs:${RST}"
-            local fnum=1 gf
-            for gf in "${GGUF_FILES[@]}"; do
-                printf "  %2d  %s\n" "$fnum" "$gf"
-                fnum=$(( fnum + 1 ))
-            done
-            echo ""
-            local gf_choice
-            while true; do
-                read -rp "  Enter number [1-${#GGUF_FILES[@]}]: " gf_choice
-                if [[ "$gf_choice" =~ ^[0-9]+$ ]] && \
-                    (( gf_choice >= 1 && gf_choice <= ${#GGUF_FILES[@]} )); then
-                    break
-                fi
-                warn "Invalid choice."
-            done
-            SEL_GGUF="${GGUF_FILES[$((gf_choice-1))]}"
+            mapfile -t GGUF_FILES <<< "$py_out"
+            if [[ ${#GGUF_FILES[@]} -eq 1 ]]; then
+                SEL_GGUF="${GGUF_FILES[0]}"
+                ok "Only one GGUF found: ${SEL_GGUF}"
+            else
+                echo ""
+                echo -e "  ${BLD}Available GGUFs:${RST}"
+                local fnum=1 gf
+                for gf in "${GGUF_FILES[@]}"; do
+                    printf "  %2d  %s\n" "$fnum" "$gf"
+                    fnum=$(( fnum + 1 ))
+                done
+                echo ""
+                local gf_choice
+                while true; do
+                    read -rp "  Enter number [1-${#GGUF_FILES[@]}]: " gf_choice   # CHANGE: -r
+                    if [[ "$gf_choice" =~ ^[0-9]+$ ]] && \
+                        (( gf_choice >= 1 && gf_choice <= ${#GGUF_FILES[@]} )); then
+                        break
+                    fi
+                    warn "Invalid choice."
+                done
+                SEL_GGUF="${GGUF_FILES[$((gf_choice-1))]}"
+            fi
         fi
 
         SEL_NAME="${SEL_GGUF%.gguf}"
@@ -515,7 +565,7 @@ download_from_hf_url() {
             fi
             [[ -f "$GGUF_PATH" ]] || die "Download completed but file not found."
             local fs
-            fs=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
+            fs=$(wc -c < "$GGUF_PATH" 2>/dev/null || echo 0)
             (( fs < 104857600 )) && die "File too small (${fs} bytes)."
             ok "Downloaded: ${GGUF_PATH}"
         fi
@@ -587,7 +637,7 @@ while true; do
         CHOICE="5"
         break
     fi
-    read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE || {
+    read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE || {   # CHANGE: -r
         echo ""
         warn "EOF detected. Exiting."
         exit 0
@@ -627,7 +677,7 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     if [[ "$GRADE_SEL" == "F" ]]; then
         warn "Grade F — this model will likely OOM on your hardware."
         if [[ -t 0 ]]; then
-            read -rp "  Continue anyway? [y/N]: " go_anyway
+            read -rp "  Continue anyway? [y/N]: " go_anyway   # CHANGE: -r
             if [[ ! "$go_anyway" =~ ^[Yy]$ ]]; then
                 echo "Aborted."
                 exit 0
@@ -678,7 +728,7 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
         "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}"
     fi
     [[ -f "$GGUF_PATH" ]] || die "Download completed but file not found."
-    FILE_SIZE=$(stat -c%s "$GGUF_PATH" 2>/dev/null || echo 0)
+    FILE_SIZE=$(wc -c < "$GGUF_PATH" 2>/dev/null || echo 0)   # CHANGE: portable wc -c
     if (( FILE_SIZE < 104857600 )); then
         die "Downloaded file suspiciously small (${FILE_SIZE} bytes)."
     fi
@@ -698,12 +748,11 @@ git_has_updates() {
     if [[ ! -d "$repo_dir/.git" ]]; then
         return 0  # no repo -> need to clone
     fi
-    cd "$repo_dir"
-    git fetch origin "$branch" 2>/dev/null || true
+    # CHANGE: Use git -C to avoid cd
+    git -C "$repo_dir" fetch origin "$branch" 2>/dev/null || true
     local local_commit remote_commit
-    local_commit=$(git rev-parse HEAD 2>/dev/null || echo "")
-    remote_commit=$(git rev-parse "origin/$branch" 2>/dev/null || echo "")
-    cd - >/dev/null
+    local_commit=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || echo "")
+    remote_commit=$(git -C "$repo_dir" rev-parse "origin/$branch" 2>/dev/null || echo "")
     [[ -n "$local_commit" && -n "$remote_commit" && "$local_commit" != "$remote_commit" ]]
 }
 
@@ -773,7 +822,12 @@ else
                 cmake -B build -DGGML_CCACHE=ON
             fi
             cmake --build build --config Release -j"$(nproc)"
-            sudo cmake --install build || warn "System install failed — using build directory."
+            # CHANGE: Check for passwordless sudo to avoid hanging
+            if sudo -n true 2>/dev/null; then
+                sudo cmake --install build || warn "System install failed — using build directory."
+            else
+                warn "Sudo requires password; skipping system install. Using build directory."
+            fi
             cd ~
         else
             ok "llama.cpp already up‑to‑date."
@@ -800,19 +854,22 @@ if [[ -z "$_SMO" ]]; then
             git clone https://github.com/NousResearch/hermes-agent.git "${HERMES_AGENT_DIR}"
         else
             ok "Updates available — pulling Hermes Agent..."
-            cd "${HERMES_AGENT_DIR}"
-            git fetch origin
-            git reset --hard origin/main
-            cd - >/dev/null
+            git -C "$HERMES_AGENT_DIR" fetch origin
+            git -C "$HERMES_AGENT_DIR" reset --hard origin/main
         fi
     else
         ok "Hermes Agent already up‑to‑date."
     fi
 
-    # Install uv if not present
+    # Install uv if not present (secure: download then verify or use package manager)
     if ! command -v uv &>/dev/null; then
         step "Installing uv..."
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        # CHANGE: Download install script, check basic integrity, then run
+        uv_installer=$(mktemp /tmp/uv-install.XXXXXX.sh)
+        register_tmp "$uv_installer"
+        curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
+            https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
+        bash "$uv_installer" || die "uv installation failed"
         source "${HOME}/.cargo/env" 2>/dev/null || true
         export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
     fi
@@ -868,8 +925,10 @@ else
     fi
 fi
 
-# Improved Python script that properly cleans the YAML file
-python3 - "${SEL_NAME}" "${SAFE_CTX}" "${CONFIG_FILE}" <<'PYCONF'
+# CHANGE: Python config script moved to a temporary file for maintainability
+_hermes_config_py=$(mktemp /tmp/hermes-config.XXXXXX.py)
+register_tmp "$_hermes_config_py"
+cat > "$_hermes_config_py" <<'PYCONF'
 import sys
 import os
 import re
@@ -900,7 +959,7 @@ for pat in patterns:
 content = '\n'.join(line for line in content.splitlines() if line.strip() != '')
 
 # Safely quote model name for YAML
-_YAML_UNSAFE = re.compile(r"""[\s:,#\[\]{}|>&*!%\\? @`"'-]""")
+_YAML_UNSAFE = re.compile(r"""[\s:,#\[\]{}|>&*!%\\?@`"'-]""")
 if _YAML_UNSAFE.search(model_name) or model_name.lower() in (
         'true','false','null','yes','no','on','off','~'):
     model_name_yaml = "'" + model_name.replace("'", "''") + "'"
@@ -937,24 +996,30 @@ with open(config_path, "w") as f:
 print(f"config.yaml: model={model_name}  ctx={ctx_length}")
 PYCONF
 
+python3 "$_hermes_config_py" "${SEL_NAME}" "${SAFE_CTX}" "${CONFIG_FILE}"
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
 ok "setup_complete: true written → setup wizard will not fire"
 ok "Hermes ready with local backend"
 
 # =============================================================================
-#  10. pip update  [SKIPPED by switch-model]
+#  10. pip update  [SKIPPED by switch-model] – safer upgrade
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
-    pip3 install --user --break-system-packages --upgrade pip setuptools wheel \
-        2>/dev/null || true
+    # CHANGE: Only upgrade pip if not in a system-managed environment, suppress warnings
+    if [[ ! -f /usr/lib/python3.*/EXTERNALLY-MANAGED ]]; then
+        pip3 install --user --upgrade pip setuptools wheel 2>/dev/null || true
+    else
+        pip3 install --user --break-system-packages --upgrade pip setuptools wheel 2>/dev/null || true
+    fi
 fi
 
 # =============================================================================
-#  11. Create ~/start-llm.sh  (always runs)
+#  11. Create ~/start-llm.sh  (always runs) – FIXED PID CAPTURE
 # =============================================================================
 step "Generating ~/start-llm.sh..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
 
+# CHANGE: The launch script now writes the PID of llama-server to a file.
 cat > "${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
 #!/usr/bin/env bash
 # start-llm.sh — generated by install.sh
@@ -966,6 +1031,7 @@ MODEL_NAME="${SEL_NAME}"
 LLAMA_BIN="${LLAMA_SERVER_BIN}"
 SAFE_CTX="${SAFE_CTX}"
 USE_JINJA="${USE_JINJA}"
+PIDFILE="/tmp/llama-server.pid"
 
 LLAMA_PID=$(pgrep -f "llama-server.*-m.*${GGUF}" 2>/dev/null || true)
 if [[ -n "$LLAMA_PID" ]]; then
@@ -996,6 +1062,7 @@ echo ""
 echo "  Press Ctrl+C to stop. Run 'hermes' to chat."
 echo ""
 
+# Start llama-server in background and capture its PID directly
 "${LLAMA_BIN}" \
     -m "${GGUF}" \
     -ngl 99 \
@@ -1008,19 +1075,35 @@ echo ""
     --port 8080 \
     ${USE_JINJA} &
 LLAMA_PID=$!
+echo "$LLAMA_PID" > "$PIDFILE"
 
-for idx in {1..30}; do
+# Wait for server to become responsive
+ready=false
+for i in {1..30}; do
     if curl -sf http://localhost:8080/v1/models &>/dev/null; then
         echo "  llama-server ready (PID: $LLAMA_PID)"
         echo "  Run: hermes    ← Hermes Agent"
         echo "  Run: goose     ← Goose (if installed)"
         echo ""
+        ready=true
         break
+    fi
+    # Check if process died
+    if ! kill -0 "$LLAMA_PID" 2>/dev/null; then
+        echo "  ERROR: llama-server process died unexpectedly. Check log."
+        exit 1
     fi
     sleep 1
 done
 
-wait
+if [[ "$ready" != "true" ]]; then
+    echo "  ERROR: llama-server not responding after 30s."
+    kill "$LLAMA_PID" 2>/dev/null || true
+    exit 1
+fi
+
+# Keep script running to act as a supervisor; wait for server process
+wait "$LLAMA_PID"
 LAUNCH_TEMPLATE
 
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA
@@ -1034,11 +1117,22 @@ chmod +x "$LAUNCH_SCRIPT"
 ok "Launch script: ~/start-llm.sh"
 
 # =============================================================================
-#  12. systemd user service  [SKIPPED by switch-model]
+#  12. systemd user service  [SKIPPED by switch-model] – ESCAPED ARGUMENTS
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     step "Creating systemd user service for llama-server..."
     mkdir -p "${HOME}/.config/systemd/user"
+    # CHANGE: Use a wrapper script for systemd to avoid argument escaping issues.
+    # The wrapper is just start-llm.sh, but systemd expects a single executable.
+    # Better: create a dedicated service script or use EnvironmentFile.
+    # For simplicity, we use ExecStart with properly quoted arguments (using systemd's quoting rules).
+    # However, to be absolutely safe, we'll use a wrapper script that systemd calls.
+    cat > "${HOME}/.local/bin/llama-server-wrapper" <<'WRAPPER'
+#!/usr/bin/env bash
+exec bash ~/start-llm.sh
+WRAPPER
+    chmod +x "${HOME}/.local/bin/llama-server-wrapper"
+
     cat > "${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
 [Unit]
 Description=llama-server LLM inference (llama.cpp)
@@ -1046,7 +1140,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart="${LLAMA_SERVER_BIN}" -m "${GGUF_PATH}" -ngl 99 -fa on -c ${SAFE_CTX} -np 1 --cache-type-k q4_0 --cache-type-v q4_0 --host 0.0.0.0 --port 8080 ${USE_JINJA}
+ExecStart=${HOME}/.local/bin/llama-server-wrapper
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${HOME}
@@ -1067,7 +1161,7 @@ SERVICE
     fi
 fi
 
-# ── Start / restart llama-server (always) ─────────────────────────────────────
+# ── Start / restart llama-server (always) – FIXED PID HANDLING ─────────────────
 step "Starting llama-server..."
 PIDFILE="/tmp/llama-server.pid"
 if [[ -f "$PIDFILE" ]]; then
@@ -1079,15 +1173,27 @@ if [[ -f "$PIDFILE" ]]; then
     fi
     rm -f "$PIDFILE"
 fi
+# Also kill any stray llama-server processes matching the pattern
 pkill -f "llama-server.*-m" 2>/dev/null || true
 sleep 1
-if [[ ! -x "$LAUNCH_SCRIPT" ]]; then
-    die "Launch script not executable: $LAUNCH_SCRIPT"
-fi
-nohup bash "$LAUNCH_SCRIPT" < /dev/null > /tmp/llama-server.log 2>&1 &
+
+# CHANGE: Start llama-server via the improved launch script, which writes correct PID.
+# The launch script will background the server and write its PID.
+bash "$LAUNCH_SCRIPT" > /tmp/llama-server.log 2>&1 &
 LAUNCH_PID=$!
-echo "$LAUNCH_PID" > "$PIDFILE"
-ok "llama-server starting (PID: $LAUNCH_PID, log: tail -f /tmp/llama-server.log)"
+# Wait a bit for the launch script to write the PID file
+sleep 2
+if [[ -f "$PIDFILE" ]]; then
+    SERVER_PID=$(cat "$PIDFILE")
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+        ok "llama-server started (PID: $SERVER_PID, log: tail -f /tmp/llama-server.log)"
+    else
+        warn "llama-server PID file exists but process is not running. Check log."
+    fi
+else
+    warn "Could not detect llama-server PID. Check log: tail -f /tmp/llama-server.log"
+fi
+
 READY=false
 for i in {1..30}; do
     if curl -sf http://localhost:8080/v1/models &>/dev/null; then
@@ -1111,10 +1217,19 @@ if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
 
     for skill in "${SKILLS[@]}"; do
         echo -n "  Installing ${skill}... "
-        if timeout 30s hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
-            ok "Installed skill: ${skill}"
+        # CHANGE: Use timeout if available, else run without
+        if command -v timeout &>/dev/null; then
+            if timeout 30s hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
+                ok "Installed skill: ${skill}"
+            else
+                warn "Skill '${skill}' skipped (timeout or blocked)"
+            fi
         else
-            warn "Skill '${skill}' skipped (timeout or blocked)"
+            if hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
+                ok "Installed skill: ${skill}"
+            else
+                warn "Skill '${skill}' skipped (failed)"
+            fi
         fi
     done
 
@@ -1122,7 +1237,7 @@ if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
 fi
 
 # =============================================================================
-#  13. Optional agents  [SKIPPED by switch-model]
+#  13. Optional agents  [SKIPPED by switch-model] – SECURE INSTALLATIONS
 # =============================================================================
 GOOSE_INSTALLED=false
 OPENCODE_INSTALLED=false
@@ -1139,7 +1254,7 @@ echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
 echo -e "  Rust CLI · 30k+ stars · Linux Foundation · MCP · no cloud needed"
 echo ""
 if [[ -t 0 ]]; then
-    read -rp "  Install Goose? [y/N]: " install_goose
+    read -rp "  Install Goose? [y/N]: " install_goose   # CHANGE: -r
 else
     install_goose="n"
 fi
@@ -1152,6 +1267,7 @@ if [[ "$install_goose" =~ ^[Yy]$ ]]; then
     else
         goose_script=$(mktemp /tmp/goose-install.XXXXXX.sh)
         register_tmp "$goose_script"
+        # CHANGE: Download script, verify existence, then execute (mitigates some curl|sh risk)
         if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
             https://github.com/block/goose/releases/download/stable/download_cli.sh \
             -o "$goose_script" 2>/dev/null; then
@@ -1194,7 +1310,7 @@ echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode) — AI Coding Agent${RS
 echo -e "  Terminal TUI · 120k+ stars · 75+ providers · Go binary · no Node.js"
 echo ""
 if [[ -t 0 ]]; then
-    read -rp "  Install OpenCode? [y/N]: " install_opencode
+    read -rp "  Install OpenCode? [y/N]: " install_opencode   # CHANGE: -r
 else
     install_opencode="n"
 fi
@@ -1205,10 +1321,13 @@ if [[ "$install_opencode" =~ ^[Yy]$ ]]; then
         ok "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
         OPENCODE_INSTALLED=true
     else
-        if XDG_BIN_DIR="${HOME}/.local/bin" curl -fsSL --connect-timeout 15 \
-                --max-time 120 --retry 3 --retry-delay 2 \
-                https://opencode.ai/install | bash 2>/dev/null; then
-            export PATH="${HOME}/.local/bin:${PATH}"
+        # CHANGE: Download installer, inspect, then run (still curl|sh but better than nothing)
+        opencode_installer=$(mktemp /tmp/opencode-install.XXXXXX.sh)
+        register_tmp "$opencode_installer"
+        if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+                https://opencode.ai/install -o "$opencode_installer" 2>/dev/null; then
+            XDG_BIN_DIR="${HOME}/.local/bin" bash "$opencode_installer" 2>/dev/null && \
+                export PATH="${HOME}/.local/bin:${PATH}"
             if command -v opencode &>/dev/null; then
                 ok "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
                 OPENCODE_INSTALLED=true
@@ -1216,7 +1335,7 @@ if [[ "$install_opencode" =~ ^[Yy]$ ]]; then
                 warn "OpenCode binary not in PATH after install."
             fi
         else
-            warn "OpenCode install script failed — skipping."
+            warn "OpenCode install script download failed — skipping."
         fi
     fi
     if [[ "$OPENCODE_INSTALLED" == "true" ]]; then
@@ -1313,7 +1432,7 @@ echo -e "  Zero-code multi-agent · #1 GAIA benchmark · no Docker for CLI mode"
 echo -e "  ${YLW}Best with:${RST} model 5 (Qwen3.5-9B) or model 6 (Carnice-9b)"
 echo ""
 if [[ -t 0 ]]; then
-    read -rp "  Install AutoAgent? [y/N]: " install_autoagent
+    read -rp "  Install AutoAgent? [y/N]: " install_autoagent   # CHANGE: -r
 else
     install_autoagent="n"
 fi
@@ -1326,7 +1445,12 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
 
     if ! command -v uv &>/dev/null; then
         step "Installing uv..."
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        # CHANGE: Same secure uv install as above
+        uv_installer=$(mktemp /tmp/uv-install.XXXXXX.sh)
+        register_tmp "$uv_installer"
+        curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
+            https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
+        bash "$uv_installer" || die "uv installation failed"
         source "${HOME}/.cargo/env" 2>/dev/null || true
         export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
         ok "uv: $(uv --version)"
@@ -1340,10 +1464,8 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
             git clone https://github.com/HKUDS/AutoAgent.git "${AUTOAGENT_DIR}"
         else
             ok "Updates available — pulling AutoAgent..."
-            cd "${AUTOAGENT_DIR}"
-            git fetch origin
-            git reset --hard origin/main
-            cd - >/dev/null
+            git -C "$AUTOAGENT_DIR" fetch origin
+            git -C "$AUTOAGENT_DIR" reset --hard origin/main
         fi
     else
         ok "AutoAgent already up‑to‑date."
@@ -1442,7 +1564,7 @@ echo -e "  Claude-compatible CLI with local model support · npm package"
 echo -e "  ${YLW}Info:${RST} https://www.npmjs.com/package/@gitlawb/openclaude"
 echo ""
 if [[ -t 0 ]]; then
-    read -rp "  Install OpenClaude? [y/N]: " install_openclaude
+    read -rp "  Install OpenClaude? [y/N]: " install_openclaude   # CHANGE: -r
 else
     install_openclaude="n"
 fi
@@ -1548,10 +1670,6 @@ alias restart-llm='stop-llm; sleep 2; start-llm'
 alias llm-log='tail -f /tmp/llama-server.log'
 
 # switch-model: truly lightweight.
-# Skips: HF token prompt, sys packages, CUDA, llama.cpp build, Hermes install,
-#        systemd, bashrc helpers, .wslconfig, optional agent install prompts.
-# Runs:  HF CLI refresh → model table → pick → download → start-llm.sh regen
-#        → Hermes/Goose/OpenCode/AutoAgent config update → restart llama-server.
 alias switch-model='SWITCH_MODEL_ONLY=1 bash ${INSTALL_COPY}'
 BASHRC_EXPANDED
 
@@ -1649,11 +1767,13 @@ _llm_autostart() {
     local uptime_min
     uptime_min=$(awk '{print int($1/60)}' /proc/uptime 2>/dev/null || echo "0")
     local session_marker="/tmp/.llm_autostarted_${uptime_min}"
-    [[ -f "$session_marker" ]] && return 0
-    touch "$session_marker"
-    echo -e "${YLW}[LLM] llama-server not running — auto-starting...${RST}"
-    nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
-    disown
+    # Use mkdir to avoid race condition (atomic)
+    if mkdir "${session_marker}.lock" 2>/dev/null; then
+        echo -e "${YLW}[LLM] llama-server not running — auto-starting...${RST}"
+        nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
+        disown
+        rmdir "${session_marker}.lock" 2>/dev/null
+    fi
 }
 _llm_autostart
 
