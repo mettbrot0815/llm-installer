@@ -1253,9 +1253,13 @@ if $INSTALL_CODEX; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bubblewrap 2>/dev/null || \
         warn "bubblewrap installation failed – Codex will use vendored version."
     
-    # Install Codex using the official script
-    curl -fsSL https://raw.githubusercontent.com/openai/codex/main/install | bash
-    
+    # Install Codex via npm (official method)
+    if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
+        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+        sudo apt-get install -y -qq nodejs npm
+    fi
+    sudo npm install -g @openai/codex@latest
+
     if command -v codex &>/dev/null; then
         ok "Codex installed: $(codex --version 2>/dev/null || echo 'installed')"
         
@@ -1280,7 +1284,7 @@ CODEXCONF
         
         ok "Codex configured to use local model: ${SEL_NAME}"
     else
-        warn "Codex installation may have failed. Check output above."
+        warn "Codex installation failed. Check npm output above."
     fi
 fi
 # =============================================================================
