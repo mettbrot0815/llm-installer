@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude + WebUI + Codex
+#  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude + WebUI
 #  Version: production-hardened (final) – SECURITY & ROBUSTNESS FIXES
 #  Optional components selected via single multi‑select menu (whiptail).
 # =============================================================================
@@ -982,12 +982,11 @@ select_optional_components() {
     local choices
     choices=$(whiptail --title "Optional Components" --checklist \
         "Select additional components to install (use SPACE to toggle, ENTER to confirm):" \
-        22 80 7 \
+        20 80 5 \
         "goose" "Goose AI Agent (Rust CLI, 30k+ stars)" OFF \
         "opencode" "OpenCode (Terminal TUI coding agent)" OFF \
         "autoagent" "AutoAgent (Deep research multi-agent)" OFF \
         "openclaude" "OpenClaude (Claude-compatible CLI)" OFF \
-        "codex" "OpenAI Codex CLI (coding agent)" OFF \
         "webui" "Hermes WebUI (Browser interface for Hermes)" OFF \
         3>&1 1>&2 2>&3)
 
@@ -1007,7 +1006,6 @@ select_optional_components() {
     INSTALL_OPENCODE=false
     INSTALL_AUTOAGENT=false
     INSTALL_OPENCLAUDE=false
-    INSTALL_CODEX=false
     INSTALL_WEBUI=false
 
     for item in "${sel[@]}"; do
@@ -1016,7 +1014,6 @@ select_optional_components() {
             opencode) INSTALL_OPENCODE=true ;;
             autoagent) INSTALL_AUTOAGENT=true ;;
             openclaude) INSTALL_OPENCLAUDE=true ;;
-            codex) INSTALL_CODEX=true ;;
             webui) INSTALL_WEBUI=true ;;
         esac
     done
@@ -1027,7 +1024,6 @@ select_optional_components() {
     $INSTALL_OPENCODE && { echo "  ✓ OpenCode"; count=$((count+1)); }
     $INSTALL_AUTOAGENT && { echo "  ✓ AutoAgent"; count=$((count+1)); }
     $INSTALL_OPENCLAUDE && { echo "  ✓ OpenClaude"; count=$((count+1)); }
-    $INSTALL_CODEX && { echo "  ✓ Codex"; count=$((count+1)); }
     $INSTALL_WEBUI && { echo "  ✓ Hermes WebUI"; count=$((count+1)); }
 
     if [[ $count -eq 0 ]]; then
@@ -1044,7 +1040,6 @@ INSTALL_GOOSE=false
 INSTALL_OPENCODE=false
 INSTALL_AUTOAGENT=false
 INSTALL_OPENCLAUDE=false
-INSTALL_CODEX=false
 INSTALL_WEBUI=false
 
 if [[ -z "$_SMO" ]]; then
@@ -1060,8 +1055,6 @@ if [[ -z "$_SMO" ]]; then
         read -rp "  Install AutoAgent? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_AUTOAGENT=true
         echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
         read -rp "  Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
-        echo -e "  ${BLD}Optional: OpenAI Codex CLI${RST}"
-        read -rp "  Install Codex? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_CODEX=true
         echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
         read -rp "  Install Hermes WebUI? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_WEBUI=true
     fi
@@ -1243,52 +1236,9 @@ OPENCLAUDE
         ok "OpenClaude configured."
     fi
 fi
-# =============================================================================
-#  13e. OpenAI Codex CLI
-# =============================================================================
-if $INSTALL_CODEX; then
-    step "Installing OpenAI Codex CLI..."
-    
-    # Install bubblewrap (required by Codex)
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bubblewrap 2>/dev/null || \
-        warn "bubblewrap installation failed – Codex will use vendored version."
-    
-    # Install Codex via npm (official method)
-    if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
-        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-        sudo apt-get install -y -qq nodejs npm
-    fi
-    sudo npm install -g @openai/codex@latest
 
-    if command -v codex &>/dev/null; then
-        ok "Codex installed: $(codex --version 2>/dev/null || echo 'installed')"
-        
-        # Create config directory and write TOML configuration
-        mkdir -p "${HOME}/.codex"
-        cat >"${HOME}/.codex/config.toml" <<CODEXCONF
-model_provider = "openai-generic"
-
-[model_providers.openai-generic]
-name = "Local LLM"
-base_url = "http://localhost:8080/v1"
-env_key = "OPENAI_API_KEY"
-
-model = "${SEL_NAME}"
-CODEXCONF
-        
-        # Set environment variable for API key
-        export OPENAI_API_KEY="sk-local"
-        if ! grep -qF "export OPENAI_API_KEY=" "${HOME}/.bashrc" 2>/dev/null; then
-            echo 'export OPENAI_API_KEY="sk-local"' >>"${HOME}/.bashrc"
-        fi
-        
-        ok "Codex configured to use local model: ${SEL_NAME}"
-    else
-        warn "Codex installation failed. Check npm output above."
-    fi
-fi
 # =============================================================================
-#  13f. Hermes WebUI (Python-based) – Browser interface for Hermes
+#  13e. Hermes WebUI (Python-based) – Browser interface for Hermes
 # =============================================================================
 HERMES_WEBUI_DIR="${HOME}/hermes-webui"
 
@@ -1647,7 +1597,6 @@ show_llm_summary() {
     echo -e "${BLD}${CYN}│${RST}  ${CYN}opencode${RST}      OpenCode coding agent (if installed)"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}autoagent${RST}     AutoAgent deep research (if installed)"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}openclaude${RST}    OpenClaude CLI (if installed)"
-    echo -e "${BLD}${CYN}│${RST}  ${CYN}codex${RST}         OpenAI Codex CLI (if installed)"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}start-llm${RST}     Start llama-server"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}stop-llm${RST}      Stop llama-server"
     echo -e "${BLD}${CYN}│${RST}  ${CYN}restart-llm${RST}   Restart llama-server"
@@ -1803,7 +1752,6 @@ if [[ -z "$_SMO" ]]; then
     $INSTALL_OPENCODE && echo -e "  OpenCode      →  opencode  (alias: oc)"
     $INSTALL_AUTOAGENT && echo -e "  AutoAgent     →  autoagent"
     $INSTALL_OPENCLAUDE && echo -e "  OpenClaude    →  openclaude"
-    $INSTALL_CODEX && echo -e "  Codex         →  codex"
     $INSTALL_WEBUI && echo -e "  Hermes WebUI  →  start-webui  (http://localhost:8787)"
     echo ""
 fi
@@ -1826,7 +1774,6 @@ $INSTALL_GOOSE && echo -e "  ${CYN}goose${RST}           Goose"
 $INSTALL_OPENCODE && echo -e "  ${CYN}opencode${RST} / ${CYN}oc${RST}  OpenCode"
 $INSTALL_AUTOAGENT && echo -e "  ${CYN}autoagent${RST}       AutoAgent"
 $INSTALL_OPENCLAUDE && echo -e "  ${CYN}openclaude${RST}      OpenClaude"
-$INSTALL_CODEX && echo -e "  ${CYN}codex${RST}           Codex"
 $INSTALL_WEBUI && echo -e "  ${CYN}start-webui${RST}     Hermes WebUI"
 echo ""
 echo -e " ${YLW}Note:${RST}       source ~/.bashrc or open a new terminal."
