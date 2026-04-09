@@ -952,7 +952,83 @@ YAML
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
 ok "setup_complete: true written → setup wizard will not fire"
 ok "Hermes ready with local backend"
+# =============================================================================
+#  9c. Hermes WebUI (optional) – Web interface for Hermes Agent
+# =============================================================================
+HERMES_WEBUI_DIR="${HOME}/hermes-webui"
+HERMES_WEBUI_INSTALLED=false
 
+if [[ -z "$_SMO" ]]; then
+    echo ""
+    echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
+    echo -e "  Browser-based interface for Hermes Agent"
+    echo -e "  ${CYN}https://github.com/nesquena/hermes-webui${RST}"
+    echo ""
+    if [[ -t 0 ]]; then
+        read -rp "  Install Hermes WebUI? [y/N]: " install_webui
+    else
+        install_webui="n"
+    fi
+
+    if [[ "$install_webui" =~ ^[Yy]$ ]]; then
+        step "Installing Hermes WebUI..."
+
+        # Clone or update the repository
+        if git_has_updates "$HERMES_WEBUI_DIR" "main"; then
+            if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
+                git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
+            else
+                ok "Updates available — pulling Hermes WebUI..."
+                git -C "$HERMES_WEBUI_DIR" fetch origin
+                git -C "$HERMES_WEBUI_DIR" reset --hard origin/main
+            fi
+        else
+            ok "Hermes WebUI already up‑to‑date."
+        fi
+
+        # Install Node.js if needed (WebUI requires Node.js 18+)
+        if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 18 ]]; then
+            warn "Node.js >=18 required. Installing Node.js 22.x..."
+            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+            sudo apt-get install -y -qq nodejs
+        fi
+
+        cd "$HERMES_WEBUI_DIR"
+
+        # Install dependencies
+        step "Installing WebUI dependencies (npm)..."
+        npm install
+
+        # Create .env.local with configuration
+        cat >".env.local" <<WEBUIENV
+# Hermes WebUI configuration
+VITE_HERMES_API_URL=http://localhost:8080/v1
+VITE_HERMES_AGENT_API=http://localhost:8000
+WEBUIENV
+        ok "WebUI environment configured."
+
+        # Build the production version
+        step "Building WebUI (this may take a minute)..."
+        npm run build
+
+        # Create a start script
+        cat >"${HOME}/start-webui.sh" <<WEBUISTART
+#!/usr/bin/env bash
+cd "${HERMES_WEBUI_DIR}"
+echo "Starting Hermes WebUI on http://localhost:3000"
+npm run preview -- --host 0.0.0.0 --port 3000
+WEBUISTART
+        chmod +x "${HOME}/start-webui.sh"
+
+        cd ~
+        HERMES_WEBUI_INSTALLED=true
+        ok "Hermes WebUI installed."
+        ok "Start with: ~/start-webui.sh  →  http://localhost:3000"
+    else
+        ok "Skipping Hermes WebUI."
+        [[ -d "${HERMES_WEBUI_DIR}/.git" ]] && HERMES_WEBUI_INSTALLED=true
+    fi
+fi
 # =============================================================================
 #  10. pip update  [SKIPPED by switch-model] – safer upgrade
 # =============================================================================
