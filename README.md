@@ -1,246 +1,170 @@
-# LLM Installer — Ubuntu WSL2
+LLM Stack Installer for Ubuntu WSL2
+A production‑hardened, one‑command installer that sets up a complete local LLM environment on Ubuntu under WSL2.
+llama.cpp · Hermes Agent · Goose · OpenCode · AutoAgent · OpenClaude
 
-> A production-grade, single-script installer for a complete local AI inference and agent stack on Ubuntu WSL2.
+https://img.shields.io/badge/License-MIT-yellow.svg
+https://img.shields.io/badge/ShellCheck-passing-brightgreen
+https://img.shields.io/badge/platform-Ubuntu%2520WSL2-orange
 
-## Overview
+✨ Features
+Fully automated – Installs system dependencies, CUDA toolkit (if GPU present), builds llama.cpp, and configures all agents.
 
-This project provides a fully automated Bash installer that sets up **llama.cpp** as a local inference server alongside a suite of AI agent frameworks — all configured to work together out of the box.
+Hardware‑aware – Detects RAM, CPU cores, NVIDIA GPU/VRAM and recommends the best model for your system.
 
-### Stack Components
+Model catalogue – 14 curated GGUF models from tiny to 70B with context‑size and Jinja presets.
 
-| Component | Purpose | URL |
-|-----------|---------|-----|
-| **llama.cpp** | Local LLM inference server (GGML backend) | `http://localhost:8080` |
-| **Hermes Agent** | NousResearch's AI agent with self-learning memory (Honcho) | `hermes` CLI |
-| **Goose** | Block's Rust-based AI agent (optional) | `goose` CLI |
-| **OpenCode** | Anomalyco's Go-based coding agent TUI (optional) | `opencode` CLI |
-| **AutoAgent** | HKUDS's multi-agent deep research tool (optional) | `autoagent` CLI |
+Secure token handling – Extracts HuggingFace / GitHub tokens safely (no sed injection).
 
-## Features
+Idempotent & update‑aware – Safe to run repeatedly; updates only changed components.
 
-- **14 pre-curated GGUF models** with hardware compatibility grading (S/A/B/C/F)
-- **Two installation modes**: full install or lightweight model switching
-- **Automatic hardware detection** — RAM, GPU, VRAM, CUDA
-- **HuggingFace integration** — token management, CLI setup, authenticated downloads
-- **Hermes Agent** configured with persistent memory and self-learning (Honcho)
-- **agentskills.io** compatible — portable skill files loaded on demand
-- **systemd user service** for persistent auto-start across reboots
-- **Bash helper aliases and functions** — `start-llm`, `stop-llm`, `switch-model`, `llm-status`, `vram`, and more
-- **Idempotent** — safe to re-run; skips already-completed steps
-- **Non-interactive safe** — sensible defaults when stdin is not a TTY
+Lightweight model switching – Change models in seconds without rebuilding anything (switch-model).
 
-## Quick Start
+Systemd user service – Optional auto‑start of llama-server on login.
 
-### Prerequisites
+Comprehensive shell helpers – start-llm, stop-llm, llm-status, vram, and more added to ~/.bashrc.
 
-- Ubuntu on WSL2 (Windows 11 recommended)
-- NVIDIA GPU with CUDA support (optional, but recommended for performance)
-- At least 8 GB RAM (16 GB+ recommended for mid-tier models)
+🚀 Quick Install
+bash
+curl -fsSL https://raw.githubusercontent.com/mettbrot0815/llm-installer/refs/heads/main/install.sh | bash
+Note: Review the script before piping to bash. A local copy can be obtained with:
 
-### Installation
-
-```bash
-# Download and run the installer
-curl -fsSL https://raw.githubusercontent.com/mettbrot0815/llm-installer/refs/heads/main/install.sh -o install.sh
+bash
+curl -fsSL https://raw.githubusercontent.com/.../install.sh -o install.sh
 chmod +x install.sh
-bash install.sh
-```
+./install.sh
+📋 Prerequisites
+Ubuntu 22.04 or 24.04 running under WSL2 (Windows 10/11).
 
-The installer will guide you through:
+At least 8 GB RAM (16 GB recommended for models ≥ 9B).
 
-1. HuggingFace token setup (optional but recommended)
-2. System package installation
-3. Hardware detection
-4. Model selection from a graded catalogue
-5. llama.cpp build from source
-6. Hermes Agent installation and configuration
-7. Optional agent installs (Goose, OpenCode, AutoAgent)
-8. systemd service setup for auto-start
-9. Bash helper aliases and functions
+NVIDIA GPU (optional but strongly recommended) with drivers ≥ 545 and CUDA 12.6 support.
 
-### Switching Models
+Internet connection (downloads several GB of models and packages).
 
-After the initial install, switch to a different model in seconds:
+User with sudo privileges (passwordless sudo recommended for fully unattended install).
 
-```bash
+🧠 What Gets Installed
+Component	Description
+llama.cpp	Latest master built with CUDA (if GPU) or CPU‑only.
+Hermes Agent	Official NousResearch agent with persistent memory and tool use.
+Goose (optional)	Block’s Rust‑based AI agent (coding / dev tasks).
+OpenCode (optional)	Terminal TUI coding agent supporting 75+ providers.
+AutoAgent (optional)	HKUDS deep‑research multi‑agent (CLI mode, no Docker).
+OpenClaude (optional)	Claude‑compatible CLI with local model support.
+Model catalogue	14 pre‑configured GGUF models from 0.8B to 70B.
+🖥️ Usage
+Full Installation
+Run the script interactively:
+
+bash
+./install.sh
+You will be prompted for:
+
+HuggingFace and GitHub tokens (optional but recommended for higher rate limits).
+
+Model selection (interactive table with hardware‑based grades).
+
+Optional agents (Goose, OpenCode, AutoAgent, OpenClaude).
+
+After completion, open a new terminal or source ~/.bashrc to load the new aliases.
+
+Model Switching (Lightweight)
+To change the active model without rebuilding anything:
+
+bash
 switch-model
-```
+This re‑runs only the model selection, download, and configuration steps – typically completes in < 30 seconds (excluding download time).
 
-This lightweight mode skips all expensive setup and only:
-- Shows the model selection table
-- Downloads the new model (if needed)
-- Regenerates `start-llm.sh`
-- Updates all agent configurations
-- Restarts the llama-server
+⌨️ Post‑Install Commands
+Command	Description
+start-llm	Start llama-server (API on http://localhost:8080).
+stop-llm	Stop llama-server.
+restart-llm	Restart the server.
+switch-model	Change the active model (lightweight).
+llm-status	Show server status and active model.
+llm-log	Tail the server log (/tmp/llama-server.log).
+llm-models	List all downloaded .gguf files.
+vram	Display GPU/VRAM usage (requires nvidia-smi).
+hermes	Start Hermes Agent chat.
+goose	Start Goose (if installed).
+opencode / oc	Start OpenCode (if installed).
+autoagent	Launch AutoAgent deep‑research (if installed).
+openclaude	Launch OpenClaude (if installed).
+⚙️ Configuration Files
+Path	Purpose
+~/.hermes/config.yaml	Hermes model, memory, and wizard settings.
+~/.hermes/.env	Hermes environment (OPENAI_BASE_URL, etc.).
+~/.config/goose/config.yaml	Goose local provider configuration.
+~/.config/opencode/opencode.json	OpenCode model and provider settings.
+~/.autoagent/.env	AutoAgent environment (model selection).
+~/.openclaude/config.json	OpenClaude provider configuration.
+~/.claude/config.json	Claude Desktop / Code local provider (if Claude detected).
+~/.config/systemd/user/llama-server.service	User systemd service for auto‑start.
+~/.wslconfig (Windows side)	WSL2 memory/processor limits (generated if missing).
+🔧 Troubleshooting
+llama-server fails to start
+Check the log: tail -f /tmp/llama-server.log
 
-## Model Catalogue
+Ensure the model file exists: ls -lh ~/llm-models/
 
-The installer includes a curated catalogue of 14 GGUF models, automatically graded against your hardware:
+If port 8080 is already in use: sudo lsof -i :8080
 
-| Tier | Models | Size | Use Case |
-|------|--------|------|----------|
-| **TINY** | Qwen3.5 0.8B, 2B | <1 GB | Instant response, edge testing |
-| **SMALL** | Qwen3.5 4B, Phi-4 Mini | 1–2 GB | Fast CPU inference, everyday use |
-| **MID** | Qwen3.5 9B, Carnice-9b, Llama 3.1 8B, Gemma 3/4 12B | 4–9 GB | Best quality/speed balance |
-| **LARGE** | Qwen3 30B MoE, DeepSeek R1 32B, Llama 3.3 70B | 17–39 GB | High-end GPU required |
+CUDA / GPU not detected
+Verify NVIDIA driver installation: nvidia-smi
 
-**Recommended starting points:**
-- **Model 5** — Qwen3.5 9B: General purpose, ~50 tok/s on RTX 3060
-- **Model 6** — Carnice-9b: Fine-tuned specifically for Hermes Agent harness
+For WSL2, ensure you are using the latest kernel: wsl --update
 
-## Post-Install Usage
+Reinstall CUDA toolkit manually if needed.
 
-### Server Management
+switch-model not found
+The alias is added to ~/.bashrc. Run source ~/.bashrc or open a new terminal.
 
-```bash
-start-llm       # Start llama-server
-stop-llm        # Stop llama-server
-restart-llm     # Restart llama-server
-llm-log         # Tail llama-server log
-llm-models      # List all downloaded .gguf files
-llm-status      # Show current status and active model
-```
+Disk space insufficient
+The script checks free space before downloading. Free up space or choose a smaller model.
 
-### Agent Interaction
+sudo password prompt hangs
+Some steps (e.g., system‑wide cmake install) require sudo. If you don’t have passwordless sudo, the script will skip those steps with a warning. You can safely ignore.
 
-```bash
-hermes          # Chat with Hermes Agent
-hermes model    # Switch Hermes provider/model
-hermes doctor   # Diagnose config issues
-hermes skills   # Browse/install skills
+🔒 Security Notes
+Token extraction is performed by sourcing ~/.bashrc in a subshell – no sed/grep parsing that could be exploited.
 
-goose           # Goose agent (if installed)
-opencode / oc   # OpenCode coding agent (if installed)
-autoagent       # AutoAgent deep research (if installed)
-```
+GitHub token is configured via a git credential helper, not embedded in URLs.
 
-### System Monitoring
+Temporary files are created with mktemp and cleaned up automatically (even on Ctrl+C).
 
-```bash
-vram            # GPU/VRAM usage
-```
+All external downloads use HTTPS with certificate validation.
 
-### Web UI
+The script does not run with elevated privileges except for specific sudo commands (package installation, CUDA setup).
 
-The llama.cpp server includes a built-in web UI at **http://localhost:8080**.
+⚠️ Supply‑chain risk: The script installs software from GitHub and PyPI. While official sources are used, always review the script and consider running it in an isolated environment first.
 
-## Architecture
+📦 Requirements (installed automatically)
+build-essential, cmake, git, ccache
 
-### Execution Flow
+python3.11, pip, uv
 
-```
-1.  HuggingFace token management
-2.  System packages (apt, pip, CUDA)          [skipped in switch-model]
-3.  Hardware detection (RAM, GPU, VRAM)
-4.  CUDA toolkit check/install                [skipped in switch-model]
-5.  Model catalogue + interactive selector
-6.  HuggingFace CLI setup
-7.  Download selected model (if not on disk)
-8.  Build llama.cpp from source               [skipped in switch-model]
-9.  Install + configure Hermes Agent          [skipped in switch-model]
-10. pip update                                [skipped in switch-model]
-11. Generate ~/start-llm.sh launcher
-12. systemd user service                      [skipped in switch-model]
-12b. Install Hermes skills (agentskills.io)   [skipped in switch-model]
-13. Optional agents (Goose/OpenCode/AutoAgent)[skipped in switch-model]
-13d. Update all agent configs for new model
-14. ~/.bashrc helpers + aliases               [skipped in switch-model]
-15. .wslconfig RAM hint                       [skipped in switch-model]
-```
+curl, wget, zstd
 
-### Configuration Files
+CUDA Toolkit 12.6 (if NVIDIA GPU detected)
 
-| File | Purpose |
-|------|---------|
-| `~/.hermes/config.yaml` | Hermes model, memory, agent settings |
-| `~/.hermes/.env` | Hermes environment variables |
-| `~/.config/goose/config.yaml` | Goose configuration |
-| `~/.config/opencode/opencode.json` | OpenCode configuration |
-| `~/.autoagent/.env` | AutoAgent environment |
-| `~/start-llm.sh` | llama-server launcher script |
-| `~/.config/systemd/user/llama-server.service` | systemd auto-start service |
-| `%USERPROFILE%\.wslconfig` | WSL2 RAM/VRAM limits (Windows side) |
+Node.js 22.x (if OpenClaude selected)
 
-### Hermes Agent Configuration
+🤝 Contributing
+Contributions are welcome! Please open an issue or pull request on GitHub.
+Before submitting, ensure your changes pass shellcheck and follow the existing style (shfmt -i 4 -s).
 
-Hermes is pre-configured for local inference:
+📄 License
+This project is licensed under the MIT License – see the LICENSE file for details.
 
-```yaml
-setup_complete: true
-model:
-  provider: custom
-  base_url: http://localhost:8080/v1
-  default: <model-name>
-  context_length: <safe-context>
-terminal:
-  backend: local
-agent:
-  max_turns: 90
-memory:
-  honcho:
-    enabled: true
-```
+🙏 Acknowledgements
+llama.cpp by Georgi Gerganov
 
-## Project Structure
+Hermes Agent by NousResearch
 
-```
-├── install.sh                          # Main installer script
-├── README.md                           # This file
-└── .planning/codebase/
-    ├── ARCHITECTURE.md                 # Architecture analysis
-    ├── TECHNOLOGY.md                   # Tech stack documentation
-    ├── DEPENDENCIES.md                 # External and system dependencies
-    ├── ROADMAP.md                      # Completed milestones + next steps
-    └── QUALITY.md                      # Quality analysis and bug fixes
-```
+Goose by Block
 
-## Known Issues & Fixes
+OpenCode by Anomaly
 
-This version includes fixes for the following issues:
+AutoAgent by HKUDS
 
-| Severity | Issue | Status |
-|----------|-------|--------|
-| HIGH | Duplicate HF CLI + model selector block | ✅ Fixed |
-| HIGH | switch-model not truly lightweight | ✅ Fixed (`_SMO` sentinel) |
-| HIGH | Hermes install URL typo | ✅ Fixed |
-| HIGH | llm-status bashrc broken syntax | ✅ Fixed |
-| HIGH | Python YAML-unsafe regex | ✅ Fixed |
-| MED | Honcho memory disabled | ✅ Fixed |
-| MED | Missing curl retry flags | ✅ Fixed |
-| MED | No Hermes skills installed | ✅ Fixed |
-| LOW | HF token prompt on switch-model | ✅ Fixed |
-
-## Development
-
-### Idempotency
-
-The installer is designed to be safe to re-run:
-- Checks for existing installations before installing
-- Skips already-completed steps with informative messages
-- Preserves user modifications where possible
-
-### Error Handling
-
-- `set -euo pipefail` for strict error handling
-- Temp file cleanup via `trap`
-- Graceful fallbacks for optional components
-- Clear error messages with actionable guidance
-
-### CUDA Notes
-
-- GPU driver lives in Windows — **never install `cuda-drivers` inside WSL2**
-- The installer only installs the CUDA toolkit, not the drivers
-- Without CUDA, llama.cpp falls back to CPU-only mode (much slower)
-
-## License
-
-This project is provided as-is for personal and educational use. Individual components (llama.cpp, Hermes, Goose, OpenCode, AutoAgent) are subject to their respective licenses.
-
-## Acknowledgments
-
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) — GGML inference engine
-- [Hermes Agent](https://github.com/NousResearch/hermes-agent) — NousResearch AI agent
-- [Goose](https://github.com/block/goose) — Block's AI agent
-- [OpenCode](https://github.com/anomalyco/opencode) — Coding agent TUI
-- [AutoAgent](https://github.com/HKUDS/AutoAgent) — Deep research agent
-- [agentskills.io](https://agentskills.io) — Open standard for portable agent skills
+OpenClaude by gitlawb
