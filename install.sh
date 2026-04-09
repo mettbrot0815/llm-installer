@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude
-#  Version: production-hardened (final) – Node.js 22 + sudo npm fix
+#  Version: production-hardened (final) – all agents auto‑configured, AutoAgent tkinter patched
 # =============================================================================
 set -euo pipefail
 
@@ -1159,6 +1159,22 @@ else
     command -v goose &>/dev/null && GOOSE_INSTALLED=true
 fi
 
+# Always configure Goose if installed (or if we just installed it)
+if command -v goose &>/dev/null; then
+    step "Configuring Goose for local llama-server..."
+    mkdir -p "${HOME}/.config/goose"
+    cat > "${HOME}/.config/goose/config.yaml" <<GOOSECONF
+# Goose configuration – using local llama.cpp
+models:
+  - name: local
+    provider: openai
+    base_url: http://localhost:8080/v1
+    api_key: sk-local
+    default: true
+GOOSECONF
+    ok "Goose configured to use local model."
+fi
+
 # ── 13b. OpenCode ─────────────────────────────────────────────────────────────
 echo ""
 echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode) — AI Coding Agent${RST}"
@@ -1226,6 +1242,57 @@ else
     command -v opencode &>/dev/null && OPENCODE_INSTALLED=true
 fi
 
+# Always configure OpenCode if installed (or if we just installed it)
+if command -v opencode &>/dev/null; then
+    step "Configuring OpenCode with local model..."
+    OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+    mkdir -p "$OPENCODE_CONFIG_DIR"
+    cat > "${OPENCODE_CONFIG_DIR}/opencode.json" <<OPECONF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama.cpp (local)",
+      "options": {
+        "baseURL": "http://localhost:8080/v1",
+        "apiKey": "sk-local"
+      },
+      "models": {
+        "${SEL_GGUF}": {
+          "name": "${SEL_NAME}",
+          "limit": {
+            "context": ${SAFE_CTX},
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "model": "llamacpp/${SEL_GGUF}",
+  "small_model": "llamacpp/${SEL_GGUF}",
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git"
+  ]
+}
+OPECONF
+    ok "OpenCode configured."
+
+    # Install Superpowers plugin (with update check)
+    SUPER_DIR="${HOME}/.config/opencode/superpowers"
+    PLUGIN_DIR="${HOME}/.config/opencode/plugin"
+    if git_has_updates "$SUPER_DIR" "main"; then
+        if [[ ! -d "$SUPER_DIR/.git" ]]; then
+            git clone https://github.com/obra/superpowers.git "$SUPER_DIR"
+        else
+            git -C "$SUPER_DIR" pull --quiet
+        fi
+    fi
+    mkdir -p "$PLUGIN_DIR"
+    ln -sf "${SUPER_DIR}/.opencode/plugin/superpowers.js" "${PLUGIN_DIR}/superpowers.js"
+    ok "Superpowers plugin updated."
+fi
+
 # ── 13c. AutoAgent ────────────────────────────────────────────────────────────
 echo ""
 echo -e "  ${BLD}Optional: AutoAgent (HKUDS) — Deep Research${RST}"
@@ -1269,6 +1336,9 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
         ok "AutoAgent already up‑to‑date."
     fi
 
+    # Patch tkinter import
+    sed -i '1s/^/try:\n    import tkinter as tk\n    from tkinter import filedialog\n    TKINTER_AVAILABLE = True\nexcept ImportError:\n    TKINTER_AVAILABLE = False\n\n/' "${AUTOAGENT_DIR}/autoagent/cli_utils/file_select.py" 2>/dev/null || true
+
     if [[ ! -d "$AUTOAGENT_VENV" ]]; then
         step "Creating Python 3.11 venv for AutoAgent..."
         uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
@@ -1282,11 +1352,6 @@ if [[ "$install_autoagent" =~ ^[Yy]$ ]]; then
         cd "${AUTOAGENT_DIR}"
         uv pip install -e "." 2>&1 | tail -5
     ) && ok "AutoAgent installed." || die "AutoAgent install failed."
-
-    # Warn if tkinter is missing (non-fatal)
-    if ! "${AUTOAGENT_VENV}/bin/python" -c "import tkinter" 2>/dev/null; then
-        warn "tkinter not available in venv — AutoAgent GUI features disabled"
-    fi
 
     cat > "${HOME}/start-autoagent.sh" <<AUTOAGENT_LAUNCHER
 #!/usr/bin/env bash
@@ -1375,12 +1440,10 @@ if [[ "$install_openclaude" =~ ^[Yy]$ ]]; then
     # Install Node.js 22.x (LTS) if not already present or version < 20
     if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
         warn "Node.js >=20 required. Installing Node.js 22.x..."
-        # Add NodeSource repository
         curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
         sudo apt-get install -y -qq nodejs
     fi
 
-    # Install OpenClaude globally (use sudo to avoid permission errors)
     sudo npm install -g @gitlawb/openclaude@latest
 
     if command -v openclaude &>/dev/null; then
@@ -1392,6 +1455,24 @@ if [[ "$install_openclaude" =~ ^[Yy]$ ]]; then
 else
     ok "Skipping OpenClaude."
     command -v openclaude &>/dev/null && OPENCLAUDE_INSTALLED=true
+fi
+
+# Always configure OpenClaude if installed
+if command -v openclaude &>/dev/null; then
+    step "Configuring OpenClaude for local llama-server..."
+    mkdir -p "${HOME}/.openclaude"
+    cat > "${HOME}/.openclaude/config.json" <<OPENCLAUDE
+{
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "apiKey": "local"
+    }
+  },
+  "model": "local/${SEL_GGUF}"
+}
+OPENCLAUDE
+    ok "OpenClaude configured."
 fi
 
 fi  # End of optional agents section
@@ -1619,129 +1700,7 @@ WSLCFG
 fi
 
 # =============================================================================
-#  16. OpenCode Configuration & Superpowers Plugin
-# =============================================================================
-if [[ -z "$_SMO" ]] && command -v opencode &>/dev/null; then
-    step "Configuring OpenCode with local model and Superpowers plugin..."
-
-    OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-    mkdir -p "$OPENCODE_CONFIG_DIR"
-
-    # -------------------------------------------------------------------------
-    # 16a. Write opencode.json with providers and selected model
-    # -------------------------------------------------------------------------
-    cat > "${OPENCODE_CONFIG_DIR}/opencode.json" <<OPECONF
-{
-  "\$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "llamacpp": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "llama.cpp (local)",
-      "options": {
-        "baseURL": "http://localhost:8080/v1",
-        "apiKey": "sk-local"
-      },
-      "models": {
-        "${SEL_GGUF}": {
-          "name": "${SEL_NAME}",
-          "limit": {
-            "context": ${SAFE_CTX},
-            "output": 8192
-          }
-        }
-      }
-    },
-    "nvidia": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "NVIDIA NIM",
-      "options": {
-        "baseURL": "https://integrate.api.nvidia.com/v1",
-        "apiKey": "{env:NVIDIA_API_KEY}"
-      },
-      "models": {
-        "mistralai/devstral-2-123b-instruct-2512": { "name": "Devstral 2 123B" },
-        "qwen/qwen3-next-80b-a3b-instruct": { "name": "Qwen3 80B Instruct" },
-        "minimaxai/minimax-m2.5": { "name": "MiniMax M2.5" },
-        "moonshotai/kimi-k2.5": { "name": "Kimi K2.5" },
-        "z-ai/glm5": { "name": "GLM 5" },
-        "qwen/qwen3-next-80b-a3b-thinking": { "name": "Qwen3 80B Thinking" },
-        "meta/llama-4-maverick-17b-128e-instruct": { "name": "Llama 4 Maverick" },
-        "stepfun-ai/step-3.5-flash": { "name": "Step 3.5 Flash" },
-        "qwen/qwen3-coder-480b-a35b-instruct": { "name": "Qwen3 Coder 480B" }
-      }
-    },
-    "together": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Together AI",
-      "options": {
-        "baseURL": "https://api.together.xyz/v1",
-        "apiKey": "{env:TOGETHER_API_KEY}"
-      },
-      "models": {
-        "MiniMaxAI/MiniMax-M2.5": { "name": "MiniMax M2.5" }
-      }
-    },
-    "sambanova": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "SambaNova",
-      "options": {
-        "baseURL": "https://api.sambanova.ai/v1",
-        "apiKey": "{env:SAMBANOVA_API_KEY}"
-      },
-      "models": {
-        "MiniMax-M2.5": { "name": "MiniMax M2.5" }
-      }
-    },
-    "scaleway": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Scaleway",
-      "options": {
-        "baseURL": "https://api.scaleway.ai/v1",
-        "apiKey": "{env:SCALEWAY_API_KEY}"
-      },
-      "models": {
-        "devstral-2-123b-instruct-2512": { "name": "Devstral 2 123B" }
-      }
-    }
-  },
-  "model": "nvidia/stepfun-ai/step-3.5-flash",
-  "small_model": "llamacpp/${SEL_GGUF}",
-  "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git"
-  ]
-}
-OPECONF
-
-    ok "OpenCode config written to ~/.config/opencode/opencode.json"
-
-    # -------------------------------------------------------------------------
-    # 16b. Install Superpowers plugin (with update check)
-    # -------------------------------------------------------------------------
-    step "Installing Superpowers plugin for OpenCode..."
-
-    SUPER_DIR="${HOME}/.config/opencode/superpowers"
-    PLUGIN_DIR="${HOME}/.config/opencode/plugin"
-
-    if git_has_updates "$SUPER_DIR" "main"; then
-        if [[ ! -d "$SUPER_DIR/.git" ]]; then
-            git clone https://github.com/obra/superpowers.git "$SUPER_DIR"
-        else
-            ok "Updates available — pulling Superpowers..."
-            git -C "$SUPER_DIR" pull --quiet
-        fi
-    else
-        ok "Superpowers already up‑to‑date."
-    fi
-
-    mkdir -p "$PLUGIN_DIR"
-    ln -sf "${SUPER_DIR}/.opencode/plugin/superpowers.js" "${PLUGIN_DIR}/superpowers.js"
-
-    ok "Superpowers plugin installed (symlink created)"
-    warn "Note: OpenCode must be restarted for plugin to take effect."
-fi
-
-# =============================================================================
-#  17. Claude Configuration (Claude Code / Claude Desktop)
+#  16. Claude Configuration (Claude Code / Claude Desktop)
 # =============================================================================
 if [[ -z "$_SMO" ]] && (command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]); then
     step "Configuring Claude to use local llama.cpp server..."
@@ -1942,6 +1901,8 @@ echo -e "  ~/.hermes/.env                Hermes env vars"
     echo -e "  ~/.config/opencode/opencode.json  OpenCode"
 [[ "$AUTOAGENT_INSTALLED" == "true" ]] && \
     echo -e "  ~/.autoagent/.env             AutoAgent"
+[[ "$OPENCLAUDE_INSTALLED" == "true" ]] && \
+    echo -e "  ~/.openclaude/config.json     OpenClaude"
 echo -e "  ~/.claude/config.json         Claude (local provider)"
 echo ""
 echo -e " ${GRN}Honcho memory:${RST}  enabled — Hermes learns your patterns across sessions"
