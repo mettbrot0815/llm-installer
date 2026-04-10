@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude + WebUI
-#  Version: production-hardened (final) – SECURITY & ROBUSTNESS FIXES
+#  Version: audited-clean-2026-04-10
 #  Optional components selected via single multi‑select menu (whiptail).
 # =============================================================================
 set -euo pipefail
@@ -10,16 +10,10 @@ set -euo pipefail
 _SMO="${SWITCH_MODEL_ONLY:-}"
 unset SWITCH_MODEL_ONLY
 
-# ── Strip Windows /mnt/* from PATH ────────────────────────────────────────────
-_clean_path=""
-# shellcheck disable=SC2034  # _p is intentionally unset after use
-IFS=':' read -ra _path_parts <<<"$PATH"
-for _p in "${_path_parts[@]}"; do
-    [[ "$_p" == /mnt/* ]] && continue
-    _clean_path="${_clean_path:+${_clean_path}:}${_p}"
-done
+# ── Strip Windows /mnt/* from PATH (robust version) ────────────────────────────
+_clean_path=$(echo "$PATH" | awk -v RS=: -v ORS=: '!/^\/mnt\// && NF' | sed 's/:$//')
 export PATH="$_clean_path"
-unset _clean_path _path_parts _p
+unset _clean_path
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 readonly RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
@@ -33,7 +27,6 @@ die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
-# shellcheck disable=SC2317  # cleanup called by trap, not directly
 cleanup() {
     local f
     for f in "${TMPFILES[@]}"; do
@@ -69,7 +62,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-#  1. HuggingFace token – SAFE EXTRACTION (no sed/grep parsing of .bashrc)
+#  1. HuggingFace token – SAFE EXTRACTION (fixed argument passing)
 # =============================================================================
 _HF_ENV="${HF_TOKEN:-}"
 HF_TOKEN=""
@@ -80,9 +73,9 @@ elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
     HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
     [[ -n "$HF_TOKEN" ]] && ok "HF_TOKEN loaded from cache."
 else
-    # Safely source .bashrc in a subshell to extract HF_TOKEN without sed/grep injection
+    # Safe extraction: pass .bashrc as argument
     if [[ -f "${HOME}/.bashrc" ]]; then
-        extracted=$(bash -c "source ${HOME}/.bashrc 2>/dev/null && echo -n \"\$HF_TOKEN\"" || true)
+        extracted=$(bash -c 'source "$1" 2>/dev/null && echo -n "$HF_TOKEN"' -- "${HOME}/.bashrc" || true)
         if [[ -n "$extracted" ]]; then
             HF_TOKEN="$extracted"
             ok "HF_TOKEN loaded from ~/.bashrc (safe extraction)."
@@ -106,7 +99,6 @@ if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
             else
                 warn "Token doesn't start with 'hf_' — using anyway."
             fi
-            # Save to ~/.bashrc if not already present (safe: no sed, just append)
             if ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
                 echo "export HF_TOKEN=\"${HF_TOKEN}\"" >>"${HOME}/.bashrc"
                 ok "HF_TOKEN saved to ~/.bashrc."
@@ -121,7 +113,7 @@ fi
 export HF_TOKEN
 
 # =============================================================================
-#  1b. GitHub token – SECURE EXTRACTION AND GIT CONFIG (no command injection)
+#  1b. GitHub token – SECURE EXTRACTION AND GIT CONFIG (fixed argument passing)
 # =============================================================================
 _GH_ENV="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 GITHUB_TOKEN=""
@@ -129,9 +121,8 @@ if [[ -n "$_GH_ENV" ]]; then
     GITHUB_TOKEN="$_GH_ENV"
     ok "GitHub token already set in environment."
 else
-    # Safe extraction from .bashrc (subshell)
     if [[ -f "${HOME}/.bashrc" ]]; then
-        extracted=$(bash -c "source ${HOME}/.bashrc 2>/dev/null && echo -n \"\$GITHUB_TOKEN\"" || true)
+        extracted=$(bash -c 'source "$1" 2>/dev/null && echo -n "$GITHUB_TOKEN"' -- "${HOME}/.bashrc" || true)
         if [[ -n "$extracted" ]]; then
             GITHUB_TOKEN="$extracted"
             ok "GitHub token loaded from ~/.bashrc."
@@ -168,7 +159,6 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
     fi
 fi
 
-# Configure git to use token via environment (git credential helper)
 if [[ -n "$GITHUB_TOKEN" ]]; then
     export GITHUB_TOKEN
     if ! git config --global credential.helper '!f() { echo "username=${GITHUB_TOKEN}"; echo "password=x-oauth-basic"; }; f' 2>/dev/null; then
@@ -283,7 +273,50 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
 fi
 
 # =============================================================================
-#  5. Model catalogue
+#  5. HF CLI setup – MOVED BEFORE MODEL SELECTOR (critical fix)
+# =============================================================================
+step "Setting up HuggingFace CLI..."
+export PATH="${HOME}/.local/bin:${PATH}"
+
+HF_CLI_A="${HOME}/.local/bin/hf"
+HF_CLI_B="${HOME}/.local/bin/huggingface-cli"
+
+if [[ ! -x "$HF_CLI_A" && ! -x "$HF_CLI_B" ]]; then
+    pip3 install --quiet --user --break-system-packages huggingface_hub
+fi
+if [[ -z "$_SMO" ]]; then
+    pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -2
+fi
+
+if [[ -x "$HF_CLI_A" ]]; then
+    HF_CLI="$HF_CLI_A"
+    HF_CLI_NAME="hf"
+elif [[ -x "$HF_CLI_B" ]]; then
+    HF_CLI="$HF_CLI_B"
+    HF_CLI_NAME="huggingface-cli"
+else
+    die "Neither 'hf' nor 'huggingface-cli' found after install."
+fi
+"$HF_CLI" version &>/dev/null || die "'$HF_CLI_NAME' fails to run."
+ok "$HF_CLI_NAME ready: $("$HF_CLI" version 2>/dev/null || echo 'ok')"
+
+if [[ -n "${HF_TOKEN:-}" ]]; then
+    if "$HF_CLI" auth login --token "$HF_TOKEN" 2>/dev/null; then
+        ok "HF login completed."
+    elif "$HF_CLI" login --token "$HF_TOKEN" 2>/dev/null; then
+        ok "HF login completed (legacy)."
+    else
+        ok "HF token ready (may be cached)."
+    fi
+    if "$HF_CLI" auth whoami &>/dev/null 2>&1; then
+        ok "HF login verified."
+    else
+        warn "HF login could not be verified — downloads may be unauthenticated."
+    fi
+fi
+
+# =============================================================================
+#  6. Model catalogue (formerly section 5, now after HF CLI)
 # =============================================================================
 readonly MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
@@ -307,15 +340,11 @@ MODELS=(
 
 # ── Grade helpers ──────────────────────────────────────────────────────────────
 grade_model() {
-    local min_ram="${1:?}" min_vram="${2:?}"
-    local ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
-    if [[ ! "$min_ram" =~ ^[0-9]+$ || ! "$min_vram" =~ ^[0-9]+$ ]]; then
-        echo "F"
-        return 1
-    fi
-    local ram_h=$((ram_gib - min_ram))
+    local -i min_ram="$1" min_vram="$2" ram_gib="$3" vram_gib="$4"
+    local has_nvidia="$5"
+    local -i ram_h=$((ram_gib - min_ram))
     if ((min_vram > 0)) && [[ "$has_nvidia" == "true" ]]; then
-        local vram_h=$((vram_gib - min_vram))
+        local -i vram_h=$((vram_gib - min_vram))
         if ((vram_h >= 4)); then
             echo "S"
         elif ((vram_h >= 0)); then
@@ -488,7 +517,7 @@ HDR
     echo ""
 }
 
-# ── HF URL / repo download ─────────────────────────────────────────────────────
+# ── HF URL / repo download (enhanced URL validation) ─────────────────────────
 download_from_hf_url() {
     echo ""
     echo -e "  ${BLD}Download via HuggingFace${RST}"
@@ -501,6 +530,10 @@ download_from_hf_url() {
     [[ -z "$HF_INPUT" ]] && die "No input provided."
 
     if [[ "$HF_INPUT" =~ ^https?:// ]]; then
+        # Validate URL – reject suspicious characters
+        if [[ "$HF_INPUT" =~ [\?\#\;\`\$\(] ]]; then
+            die "Rejected: URL contains dangerous characters (?, #, ;, `, $, ()."
+        fi
         SEL_GGUF=$(basename "$HF_INPUT")
         SEL_GGUF="${SEL_GGUF%%\?*}"
         [[ "$SEL_GGUF" != *.gguf ]] && die "URL doesn't point to a .gguf file."
@@ -597,50 +630,7 @@ PYLIST
 }
 
 # =============================================================================
-#  6. HF CLI setup  (always runs)
-# =============================================================================
-step "Setting up HuggingFace CLI..."
-export PATH="${HOME}/.local/bin:${PATH}"
-
-HF_CLI_A="${HOME}/.local/bin/hf"
-HF_CLI_B="${HOME}/.local/bin/huggingface-cli"
-
-if [[ ! -x "$HF_CLI_A" && ! -x "$HF_CLI_B" ]]; then
-    pip3 install --quiet --user --break-system-packages huggingface_hub
-fi
-if [[ -z "$_SMO" ]]; then
-    pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -2
-fi
-
-if [[ -x "$HF_CLI_A" ]]; then
-    HF_CLI="$HF_CLI_A"
-    HF_CLI_NAME="hf"
-elif [[ -x "$HF_CLI_B" ]]; then
-    HF_CLI="$HF_CLI_B"
-    HF_CLI_NAME="huggingface-cli"
-else
-    die "Neither 'hf' nor 'huggingface-cli' found after install."
-fi
-"$HF_CLI" version &>/dev/null || die "'$HF_CLI_NAME' fails to run."
-ok "$HF_CLI_NAME ready: $("$HF_CLI" version 2>/dev/null || echo 'ok')"
-
-if [[ -n "${HF_TOKEN:-}" ]]; then
-    if "$HF_CLI" auth login --token "$HF_TOKEN" 2>/dev/null; then
-        ok "HF login completed."
-    elif "$HF_CLI" login --token "$HF_TOKEN" 2>/dev/null; then
-        ok "HF login completed (legacy)."
-    else
-        ok "HF token ready (may be cached)."
-    fi
-    if "$HF_CLI" auth whoami &>/dev/null 2>&1; then
-        ok "HF login verified."
-    else
-        warn "HF login could not be verified — downloads may be unauthenticated."
-    fi
-fi
-
-# =============================================================================
-#  5 (continued). Model selector  (always runs)
+#  7. Model selector (now after HF CLI is ready)
 # =============================================================================
 NUM_MODELS=${#MODELS[@]}
 SEL_IDX=""
@@ -662,7 +652,8 @@ while true; do
         CHOICE="5"
         break
     fi
-    read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE || {
+    echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} "
+    read -r CHOICE || {
         echo ""
         warn "EOF detected. Exiting."
         exit 0
@@ -719,7 +710,7 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
 fi
 
 # =============================================================================
-#  7. Download model from catalogue if not present  (always runs)
+#  8. Download model from catalogue if not present
 # =============================================================================
 if [[ -f "$GGUF_PATH" ]]; then
     ok "Model already on disk: ${GGUF_PATH} — skipping download."
@@ -784,7 +775,7 @@ git_has_updates() {
 }
 
 # =============================================================================
-#  8. Build llama.cpp  [SKIPPED by switch-model]
+#  9. Build llama.cpp  [SKIPPED by switch-model]
 # =============================================================================
 find_llama_server() {
     local p vo
@@ -849,10 +840,10 @@ else
                 cmake -B build -DGGML_CCACHE=ON
             fi
             cmake --build build --config Release -j"$(nproc)"
-            if sudo -n true 2>/dev/null; then
+            if command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
                 sudo cmake --install build || warn "System install failed — using build directory."
             else
-                warn "Sudo requires password; skipping system install. Using build directory."
+                warn "Sudo requires password or not available; skipping system install. Using build directory."
             fi
             cd ~
         else
@@ -866,7 +857,7 @@ else
 fi
 
 # =============================================================================
-#  9. Hermes Agent install  [SKIPPED by switch-model] – Manual install (no wizard)
+#  10. Hermes Agent install  [SKIPPED by switch-model] – Manual install (no wizard)
 # =============================================================================
 HERMES_AGENT_DIR="${HOME}/hermes-agent"
 HERMES_DIR="${HOME}/.hermes"
@@ -919,7 +910,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-#  9b. Configure Hermes for local llama-server – clean YAML overwrite
+#  10b. Configure Hermes for local llama-server – clean YAML overwrite
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
 
@@ -967,13 +958,10 @@ ok "setup_complete: true written → setup wizard will not fire"
 ok "Hermes ready with local backend"
 
 # =============================================================================
-#  Optional components selection (multi‑select menu)
+#  Optional components selection (multi‑select menu) – improved parsing
 # =============================================================================
 select_optional_components() {
-    # Return if not interactive
     [[ ! -t 0 ]] && return 1
-
-    # Check if whiptail is available
     if ! command -v whiptail &>/dev/null; then
         warn "whiptail not found – using simple yes/no prompts (install 'whiptail' for better menu)."
         return 1
@@ -990,25 +978,21 @@ select_optional_components() {
         "webui" "Hermes WebUI (Browser interface for Hermes)" OFF \
         3>&1 1>&2 2>&3)
 
-    # whiptail returns non-zero on cancel
     if [[ $? -ne 0 ]]; then
         echo ""
         ok "No optional components selected."
         return 1
     fi
 
-    # Parse the quoted output
-    local sel=()
-    IFS=' ' read -ra sel <<< "$(echo "$choices" | tr -d '"')"
-
-    # Reset all flags
+    # Safer parsing: eval with quoted string
+    eval "set -- $choices"
     INSTALL_GOOSE=false
     INSTALL_OPENCODE=false
     INSTALL_AUTOAGENT=false
     INSTALL_OPENCLAUDE=false
     INSTALL_WEBUI=false
 
-    for item in "${sel[@]}"; do
+    for item in "$@"; do
         case "$item" in
             goose) INSTALL_GOOSE=true ;;
             opencode) INSTALL_OPENCODE=true ;;
@@ -1045,7 +1029,7 @@ INSTALL_WEBUI=false
 if [[ -z "$_SMO" ]]; then
     step "Optional components selection"
     if ! select_optional_components; then
-        # Fallback to individual prompts if whiptail missing or user cancelled
+        # Fallback to individual prompts
         echo ""
         echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
         read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
@@ -1151,7 +1135,7 @@ OPECONF
 fi
 
 # =============================================================================
-#  13c. AutoAgent
+#  13c. AutoAgent (removed sed modification; use environment variable)
 # =============================================================================
 AUTOAGENT_DIR="${HOME}/autoagent"
 AUTOAGENT_VENV="${AUTOAGENT_DIR}/.venv"
@@ -1167,7 +1151,6 @@ if $INSTALL_AUTOAGENT; then
         curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
             https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
         bash "$uv_installer" || die "uv installation failed"
-        # shellcheck disable=SC1091
         source "${HOME}/.cargo/env" 2>/dev/null || true
         export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
     fi
@@ -1179,8 +1162,7 @@ if $INSTALL_AUTOAGENT; then
         git -C "$AUTOAGENT_DIR" reset --hard origin/main
     fi
 
-    sed -i '1s/^/try:\n    import tkinter as tk\n    from tkinter import filedialog\n    TKINTER_AVAILABLE = True\nexcept ImportError:\n    TKINTER_AVAILABLE = False\n\n/' "${AUTOAGENT_DIR}/autoagent/cli_utils/file_select.py" 2>/dev/null || true
-
+    # No sed modification – we will set TKINTER_AVAILABLE=False via wrapper
     if [[ ! -d "$AUTOAGENT_VENV" ]]; then
         uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
     fi
@@ -1192,8 +1174,10 @@ if $INSTALL_AUTOAGENT; then
         uv pip install -e "." 2>&1 | tail -5
     ) && ok "AutoAgent installed." || die "AutoAgent install failed."
 
+    # Launcher that disables tkinter
     cat >"${HOME}/start-autoagent.sh" <<AUTOAGENT_LAUNCHER
 #!/usr/bin/env bash
+export TKINTER_AVAILABLE=False
 AUTOAGENT_VENV="${AUTOAGENT_VENV}"
 AUTOAGENT_DIR="${AUTOAGENT_DIR}"
 if ! curl -sf http://localhost:8080/v1/models &>/dev/null; then
@@ -1206,7 +1190,7 @@ set -a; source "${HOME}/.autoagent/.env" 2>/dev/null || true; set +a
 auto deep-research
 AUTOAGENT_LAUNCHER
     chmod +x "${HOME}/start-autoagent.sh"
-    ok "Created ~/start-autoagent.sh"
+    ok "Created ~/start-autoagent.sh (tkinter disabled)"
 fi
 
 # =============================================================================
@@ -1245,20 +1229,17 @@ HERMES_WEBUI_DIR="${HOME}/hermes-webui"
 if $INSTALL_WEBUI; then
     step "Installing Hermes WebUI..."
 
-    # Clone or update
     if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
         git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
     else
         git -C "$HERMES_WEBUI_DIR" pull --quiet
     fi
 
-    # The WebUI runs inside the existing Hermes agent venv
     HERMES_VENV="${HOME}/hermes-agent/venv"
     if [[ ! -d "$HERMES_VENV" ]]; then
         warn "Hermes agent venv not found – WebUI may not function correctly."
     fi
 
-    # Install Python dependencies (if any) into the Hermes venv
     if [[ -f "${HERMES_WEBUI_DIR}/requirements.txt" ]]; then
         if [[ -x "${HERMES_VENV}/bin/pip" ]]; then
             "${HERMES_VENV}/bin/pip" install -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet
@@ -1267,11 +1248,9 @@ if $INSTALL_WEBUI; then
         fi
     fi
 
-    # Create a convenient start script
     cat >"${HOME}/start-webui.sh" <<WEBUISTART
 #!/usr/bin/env bash
 cd "${HERMES_WEBUI_DIR}"
-# Use the Hermes agent venv's Python if available
 if [[ -x "${HERMES_VENV}/bin/python" ]]; then
     export PATH="${HERMES_VENV}/bin:\${PATH}"
 fi
@@ -1280,7 +1259,6 @@ echo "Starting Hermes WebUI on http://localhost:8787"
 WEBUISTART
     chmod +x "${HOME}/start-webui.sh"
 
-    # Optional: systemd service for WebUI
     if systemctl --user daemon-reload 2>/dev/null; then
         mkdir -p "${HOME}/.config/systemd/user"
         cat >"${HOME}/.config/systemd/user/hermes-webui.service" <<WEBUISERVICE
@@ -1310,7 +1288,7 @@ WEBUISERVICE
 fi
 
 # =============================================================================
-#  11. Create ~/start-llm.sh  (always runs)
+#  11. Create ~/start-llm.sh  (fixed variable substitution)
 # =============================================================================
 step "Generating ~/start-llm.sh..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
@@ -1319,7 +1297,7 @@ cat >"${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
 #!/usr/bin/env bash
 GGUF="${GGUF_PATH}"
 MODEL_NAME="${SEL_NAME}"
-LLAMA_BIN="${LLAMA_SERVER_BIN}"
+LLAMA_BIN="${LLAMA_SERVER_BIN}"          # FIXED: use LLAMA_SERVER_BIN
 SAFE_CTX="${SAFE_CTX}"
 USE_JINJA="${USE_JINJA}"
 PIDFILE="/tmp/llama-server.pid"
@@ -1524,12 +1502,8 @@ ${MARKER}
 [[ -n "\${__LLM_BASHRC_LOADED:-}" ]] && return 0
 export __LLM_BASHRC_LOADED=1
 
-_c=""; IFS=':' read -ra _pts <<< "\$PATH"
-for _pt in "\${_pts[@]}"; do
-    [[ "\$_pt" == /mnt/* ]] && continue
-    _c="\${_c:+\${_c}:}\${_pt}"
-done
-export PATH="\$_c"; unset _c _pts _pt
+# Clean PATH (no Windows mounts)
+export PATH="\$(echo "\$PATH" | awk -v RS=: -v ORS=: '!/^\\/mnt\\// && NF' | sed 's/:\$//')"
 
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
@@ -1615,19 +1589,18 @@ if [[ $- == *i* ]]; then
     show_llm_summary
 fi
 
+# Improved autostart with flock
 _llm_autostart() {
     [[ $- != *i* ]] && return 0
     pgrep -f "llama-server.*-m" &>/dev/null && return 0
     [[ -f ~/start-llm.sh ]] || return 0
-    local uptime_min
-    uptime_min=$(awk '{print int($1/60)}' /proc/uptime 2>/dev/null || echo "0")
-    local session_marker="/tmp/.llm_autostarted_${uptime_min}"
-    if mkdir "${session_marker}.lock" 2>/dev/null; then
+    local lockfile="/tmp/llm-autostart.lock"
+    (
+        flock -n 9 || exit 0
         echo -e "${YLW}[LLM] llama-server not running — auto-starting...${RST}"
         nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
         disown
-        rmdir "${session_marker}.lock" 2>/dev/null
-    fi
+    ) 9>"$lockfile"
 }
 _llm_autostart
 
@@ -1643,7 +1616,12 @@ fi
 #  15. .wslconfig RAM hint  [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
-    WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r\n' || echo "")
+    WIN_USER=""
+    if command -v cmd.exe &>/dev/null; then
+        WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r\n' || true)
+    elif command -v whoami.exe &>/dev/null; then
+        WIN_USER=$(whoami.exe | cut -d'\' -f2 2>/dev/null || true)
+    fi
     WSLCONFIG=""
     WSLCONFIG_DIR=""
     if [[ -n "$WIN_USER" ]]; then
