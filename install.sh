@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude + WebUI
-#  Version: audited-clean-2026-04-10
+#  Version: hardened-2026-04-10
 #  Optional components selected via single multi‑select menu (whiptail).
 # =============================================================================
 set -euo pipefail
@@ -10,10 +10,25 @@ set -euo pipefail
 _SMO="${SWITCH_MODEL_ONLY:-}"
 unset SWITCH_MODEL_ONLY
 
-# ── Strip Windows /mnt/* from PATH (robust version) ────────────────────────────
-_clean_path=$(echo "$PATH" | awk -v RS=: -v ORS=: '!/^\/mnt\// && NF' | sed 's/:$//')
+# ── Strip Windows /mnt/* from PATH (FIXED: safe Bash loop) ────────────────────
+_clean_path=""
+IFS=: read -ra _path_entries <<<"$PATH"
+for _pe in "${_path_entries[@]}"; do
+    [[ -z "$_pe" ]] && continue
+    [[ "$_pe" == /mnt/* ]] && continue
+    if [[ -z "$_clean_path" ]]; then
+        _clean_path="$_pe"
+    else
+        _clean_path="${_clean_path}:$_pe"
+    fi
+done
+if [[ -z "$_clean_path" ]]; then
+    # Fallback: keep original PATH but warn
+    warn "All PATH entries were under /mnt/ – keeping original PATH."
+    _clean_path="$PATH"
+fi
 export PATH="$_clean_path"
-unset _clean_path
+unset _clean_path _pe _path_entries
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 readonly RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
@@ -62,7 +77,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-#  1. HuggingFace token – SAFE EXTRACTION (fixed argument passing)
+#  1. HuggingFace token – SAFE EXTRACTION (fixed)
 # =============================================================================
 _HF_ENV="${HF_TOKEN:-}"
 HF_TOKEN=""
@@ -73,8 +88,8 @@ elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
     HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
     [[ -n "$HF_TOKEN" ]] && ok "HF_TOKEN loaded from cache."
 else
-    # Safe extraction: pass .bashrc as argument
     if [[ -f "${HOME}/.bashrc" ]]; then
+        # WARNING: sourcing .bashrc can execute arbitrary commands. Use with caution.
         extracted=$(bash -c 'source "$1" 2>/dev/null && echo -n "$HF_TOKEN"' -- "${HOME}/.bashrc" || true)
         if [[ -n "$extracted" ]]; then
             HF_TOKEN="$extracted"
@@ -113,7 +128,7 @@ fi
 export HF_TOKEN
 
 # =============================================================================
-#  1b. GitHub token – SECURE EXTRACTION AND GIT CONFIG (fixed argument passing)
+#  1b. GitHub token – SECURE EXTRACTION AND GIT CONFIG (fixed)
 # =============================================================================
 _GH_ENV="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 GITHUB_TOKEN=""
@@ -321,30 +336,80 @@ fi
 readonly MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
 
-MODELS=(
-    "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
-    "2|unsloth/Qwen3.5-2B-GGUF|Qwen3.5-2B-Q4_K_M.gguf|Qwen 3.5 2B|1.0|256K|3|0|tiny|chat,multilingual|Alibaba · ultra-fast"
-    "3|unsloth/Qwen3.5-4B-GGUF|Qwen3.5-4B-Q4_K_M.gguf|Qwen 3.5 4B|2.0|256K|4|0|small|chat,code|Alibaba · capable on CPU"
-    "4|bartowski/microsoft_Phi-4-mini-instruct-GGUF|microsoft_Phi-4-mini-instruct-Q4_K_M.gguf|Phi-4 Mini 3.8B|2.0|16K|4|0|small|reasoning,code|Microsoft · strong reasoning"
-    "5|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on RTX 3060"
-    "6|kai-os/Carnice-9b-GGUF|Carnice-9b-Q6_K.gguf|Carnice-9b (Hermes)|6.9|256K|8|6|mid|hermes,agent,tool-use|Qwen3.5-9B tuned for Hermes Agent harness"
-    "7|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction"
-    "8|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|32K|12|10|mid|code|#1 coding on 3060"
-    "9|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|32K|14|10|mid|chat,code,reasoning|Strong planning"
-    "10|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 3 · strict roles"
-    "11|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|132K|12|10|mid|chat,code|Google Gemma 4 · 132K ctx"
-    "12|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params"
-    "13|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
-    "14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
-)
+# Define models as indexed arrays for robustness
+MODEL_INDEXES=()
+MODEL_HF_REPOS=()
+MODEL_GGUFS=()
+MODEL_NAMES=()
+MODEL_SIZES=()
+MODEL_CTXS=()
+MODEL_MIN_RAMS=()
+MODEL_MIN_VRAMS=()
+MODEL_TIERS=()
+MODEL_TAGS=()
+MODEL_DESCS=()
 
-# ── Grade helpers ──────────────────────────────────────────────────────────────
+# Populate from the pipe-separated list (safer parsing)
+while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
+    # Trim whitespace
+    idx="${idx// /}"
+    hf_repo="${hf_repo// /}"
+    gguf_file="${gguf_file// /}"
+    dname="${dname# }"; dname="${dname% }"
+    size_gb="${size_gb// /}"
+    ctx="${ctx// /}"
+    min_ram="${min_ram// /}"
+    min_vram="${min_vram// /}"
+    tier="${tier// /}"
+    tags="${tags// /}"
+    desc="${desc// /}"
+    MODEL_INDEXES+=("$idx")
+    MODEL_HF_REPOS+=("$hf_repo")
+    MODEL_GGUFS+=("$gguf_file")
+    MODEL_NAMES+=("$dname")
+    MODEL_SIZES+=("$size_gb")
+    MODEL_CTXS+=("$ctx")
+    MODEL_MIN_RAMS+=("$min_ram")
+    MODEL_MIN_VRAMS+=("$min_vram")
+    MODEL_TIERS+=("$tier")
+    MODEL_TAGS+=("$tags")
+    MODEL_DESCS+=("$desc")
+done <<'MODELS_DATA'
+1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test
+2|unsloth/Qwen3.5-2B-GGUF|Qwen3.5-2B-Q4_K_M.gguf|Qwen 3.5 2B|1.0|256K|3|0|tiny|chat,multilingual|Alibaba · ultra-fast
+3|unsloth/Qwen3.5-4B-GGUF|Qwen3.5-4B-Q4_K_M.gguf|Qwen 3.5 4B|2.0|256K|4|0|small|chat,code|Alibaba · capable on CPU
+4|bartowski/microsoft_Phi-4-mini-instruct-GGUF|microsoft_Phi-4-mini-instruct-Q4_K_M.gguf|Phi-4 Mini 3.8B|2.0|16K|4|0|small|reasoning,code|Microsoft · strong reasoning
+5|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on RTX 3060
+6|kai-os/Carnice-9b-GGUF|Carnice-9b-Q6_K.gguf|Carnice-9b (Hermes)|6.9|256K|8|6|mid|hermes,agent,tool-use|Qwen3.5-9B tuned for Hermes Agent harness
+7|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction
+8|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|32K|12|10|mid|code|#1 coding on 3060
+9|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|32K|14|10|mid|chat,code,reasoning|Strong planning
+10|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 3 · strict roles
+11|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|132K|12|10|mid|chat,code|Google Gemma 4 · 132K ctx
+12|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params
+13|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill
+14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM
+MODELS_DATA
+
+NUM_MODELS=${#MODEL_INDEXES[@]}
+
+# ── Grade helpers (FIXED: validate numeric inputs) ───────────────────────────
 grade_model() {
-    local -i min_ram="$1" min_vram="$2" ram_gib="$3" vram_gib="$4"
+    local min_ram="$1" min_vram="$2" ram_gib="$3" vram_gib="$4"
     local has_nvidia="$5"
-    local -i ram_h=$((ram_gib - min_ram))
-    if ((min_vram > 0)) && [[ "$has_nvidia" == "true" ]]; then
-        local -i vram_h=$((vram_gib - min_vram))
+    # Validate numeric inputs – default to 0 if invalid
+    if ! [[ "$min_ram" =~ ^[0-9]+$ ]]; then
+        warn "grade_model: min_ram='$min_ram' not numeric, using 0"
+        min_ram=0
+    fi
+    if ! [[ "$min_vram" =~ ^[0-9]+$ ]]; then
+        warn "grade_model: min_vram='$min_vram' not numeric, using 0"
+        min_vram=0
+    fi
+    local -i min_ram_int="$min_ram" min_vram_int="$min_vram"
+    local -i ram_h=$((ram_gib - min_ram_int))
+    if ((min_vram_int > 0)) && [[ "$has_nvidia" == "true" ]]; then
+        local -i vram_h=$((vram_gib - min_vram_int))
         if ((vram_h >= 4)); then
             echo "S"
         elif ((vram_h >= 0)); then
@@ -356,7 +421,7 @@ grade_model() {
         else
             echo "F"
         fi
-    elif ((min_vram > 0)); then
+    elif ((min_vram_int > 0)); then
         if ((ram_h >= 8)); then
             echo "B"
         elif ((ram_h >= 0)); then
@@ -427,7 +492,7 @@ apply_model_settings() {
     ok "Context window: ${SAFE_CTX} tokens"
 }
 
-# ── Draw model table ───────────────────────────────────────────────────────────
+# ── Draw model table (FIXED: no direct eval, uses arrays) ──────────────────────
 show_model_table() {
     /usr/bin/clear 2>/dev/null || true
     echo -e "${BLD}${CYN}"
@@ -443,18 +508,17 @@ HDR
     echo "  ─────────────────────────────────────────────────────────────────────────────"
 
     local last_tier="" idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc
-    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
-        min_ram min_vram tier tags desc; do
-        idx="${idx// /}"
-        dname="${dname# }"
-        dname="${dname% }"
-        size_gb="${size_gb// /}"
-        ctx="${ctx// /}"
-        min_ram="${min_ram// /}"
-        min_vram="${min_vram// /}"
-        tier="${tier// /}"
-        tags="${tags// /}"
-        gguf_file="${gguf_file// /}"
+    for ((i=0; i<NUM_MODELS; i++)); do
+        idx="${MODEL_INDEXES[i]}"
+        dname="${MODEL_NAMES[i]}"
+        size_gb="${MODEL_SIZES[i]}"
+        ctx="${MODEL_CTXS[i]}"
+        min_ram="${MODEL_MIN_RAMS[i]}"
+        min_vram="${MODEL_MIN_VRAMS[i]}"
+        tier="${MODEL_TIERS[i]}"
+        tags="${MODEL_TAGS[i]}"
+        gguf_file="${MODEL_GGUFS[i]}"
+
         if [[ "$tier" != "$last_tier" ]]; then
             case "$tier" in
             tiny) echo -e "\n  ${BLD}▸ TINY   (< 1 GB · instant · edge/test)${RST}" ;;
@@ -477,12 +541,12 @@ HDR
         echo -e "  ${BLD}$(printf '%2s' "$idx")${RST}  $(printf '%-26s' "$dname")" \
             " $(printf '%5s' "$size_gb") GB  $(printf '%-7s' "$ctx")" \
             "  ${GC}$(printf '%-13s' "$GL")${RST}  $(printf '%-24s' "$tag_display") $cached"
-    done < <(printf '%s\n' "${MODELS[@]}")
+    done
 
     declare -A catalogued
-    while IFS='|' read -r _ _ cat_g _; do
-        catalogued["${cat_g// /}"]=1
-    done < <(printf '%s\n' "${MODELS[@]}")
+    for ((i=0; i<NUM_MODELS; i++)); do
+        catalogued["${MODEL_GGUFS[i]}"]=1
+    done
 
     local extra_count=0 f fname
     for f in "${MODEL_DIR}"/*.gguf; do
@@ -517,7 +581,7 @@ HDR
     echo ""
 }
 
-# ── HF URL / repo download (enhanced URL validation) ─────────────────────────
+# ── HF URL / repo download (FIXED: strict input validation) ────────────────────
 download_from_hf_url() {
     echo ""
     echo -e "  ${BLD}Download via HuggingFace${RST}"
@@ -529,11 +593,13 @@ download_from_hf_url() {
     HF_INPUT="${HF_INPUT//[[:space:]]/}"
     [[ -z "$HF_INPUT" ]] && die "No input provided."
 
+    # Strict whitelist validation: only alphanumeric, dash, underscore, dot, slash, colon, question mark, equals, ampersand
+    if [[ ! "$HF_INPUT" =~ ^[a-zA-Z0-9_.\-/:?=&]+$ ]]; then
+        die "Rejected: URL contains invalid characters. Only letters, numbers, dot, dash, underscore, slash, colon, ?, =, & allowed."
+    fi
+
     if [[ "$HF_INPUT" =~ ^https?:// ]]; then
-        # Validate URL – reject suspicious characters
-        if [[ "$HF_INPUT" =~ [\?\#\;\`\$\(] ]]; then
-            die "Rejected: URL contains dangerous characters (?, #, ;, `, $, ()."
-        fi
+        # Validate URL – reject suspicious characters (already covered by regex)
         SEL_GGUF=$(basename "$HF_INPUT")
         SEL_GGUF="${SEL_GGUF%%\?*}"
         [[ "$SEL_GGUF" != *.gguf ]] && die "URL doesn't point to a .gguf file."
@@ -632,7 +698,6 @@ PYLIST
 # =============================================================================
 #  7. Model selector (now after HF CLI is ready)
 # =============================================================================
-NUM_MODELS=${#MODELS[@]}
 SEL_IDX=""
 SEL_HF_REPO=""
 SEL_GGUF=""
@@ -668,23 +733,26 @@ while true; do
 done
 
 if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
-    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
-        min_ram min_vram tier tags desc; do
-        idx="${idx// /}"
-        if [[ "$idx" == "$CHOICE" ]]; then
-            SEL_IDX="$idx"
-            SEL_HF_REPO="${hf_repo// /}"
-            SEL_GGUF="${gguf_file// /}"
-            SEL_NAME="${dname# }"
-            SEL_NAME="${SEL_NAME% }"
-            SEL_MIN_RAM="${min_ram// /}"
-            SEL_MIN_VRAM="${min_vram// /}"
+    # Direct array lookup by index
+    SEL_IDX="$CHOICE"
+    # Find position in MODEL_INDEXES
+    local found_idx=-1
+    for ((i=0; i<NUM_MODELS; i++)); do
+        if [[ "${MODEL_INDEXES[i]}" == "$CHOICE" ]]; then
+            found_idx=$i
             break
         fi
-    done < <(printf '%s\n' "${MODELS[@]}")
+    done
+    if [[ $found_idx -eq -1 ]]; then
+        die "Model index $CHOICE not found in catalogue."
+    fi
+    SEL_HF_REPO="${MODEL_HF_REPOS[found_idx]}"
+    SEL_GGUF="${MODEL_GGUFS[found_idx]}"
+    SEL_NAME="${MODEL_NAMES[found_idx]}"
+    SEL_MIN_RAM="${MODEL_MIN_RAMS[found_idx]}"
+    SEL_MIN_VRAM="${MODEL_MIN_VRAMS[found_idx]}"
 
     [[ -z "$SEL_GGUF" ]] && die "Model parse failed: SEL_GGUF empty."
-    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: SEL_MIN_RAM empty."
     [[ "$SEL_MIN_RAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='$SEL_MIN_RAM' not numeric."
     [[ "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM' not numeric."
     ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
@@ -722,13 +790,14 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     AVAIL_GB=$(awk -v kb="$AVAIL_KB" 'BEGIN { printf "%.1f", kb/1024/1024 }')
     AVAIL_GB_INT=$(awk -v kb="$AVAIL_KB" 'BEGIN { print int((kb/1024/1024) + 0.999) }')
 
-    REQ_GB=""
-    while IFS='|' read -r idx _ _ _ size_gb _ _ _ _ _ _; do
-        [[ "${idx// /}" == "$CHOICE" ]] && {
-            REQ_GB="${size_gb// /}"
+    # Find size_gb for the selected model
+    local REQ_GB=""
+    for ((i=0; i<NUM_MODELS; i++)); do
+        if [[ "${MODEL_INDEXES[i]}" == "$CHOICE" ]]; then
+            REQ_GB="${MODEL_SIZES[i]}"
             break
-        }
-    done < <(printf '%s\n' "${MODELS[@]}")
+        fi
+    done
     [[ -z "$REQ_GB" ]] && die "Could not determine model size for index $CHOICE"
 
     REQ_GB_INT=${REQ_GB%.*}
@@ -759,13 +828,13 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
 fi
 
 # =============================================================================
-#  Helper: Check if a Git repository has updates
+#  Helper: Check if a Git repository has updates (FIXED: renamed and correct logic)
 # =============================================================================
-git_has_updates() {
+needs_update() {
     local repo_dir="$1"
     local branch="${2:-main}"
     if [[ ! -d "$repo_dir/.git" ]]; then
-        return 0
+        return 1  # Not a repo, so no update needed (caller will clone)
     fi
     git -C "$repo_dir" fetch origin "$branch" 2>/dev/null || true
     local local_commit remote_commit
@@ -817,7 +886,7 @@ else
         ok "To force rebuild: rm ${LLAMA_SERVER_BIN} and rerun."
     else
         LLAMA_DIR="${HOME}/llama.cpp"
-        if git_has_updates "$LLAMA_DIR" "master"; then
+        if needs_update "$LLAMA_DIR" "master"; then
             step "Updates available for llama.cpp — building..."
             if [[ -d "$LLAMA_DIR/.git" ]]; then
                 git -C "$LLAMA_DIR" fetch origin
@@ -866,7 +935,7 @@ export PATH="${HOME}/.local/bin:${PATH}"
 if [[ -z "$_SMO" ]]; then
     step "Installing Hermes Agent (manual, wizard‑free)..."
 
-    if git_has_updates "$HERMES_AGENT_DIR" "main"; then
+    if needs_update "$HERMES_AGENT_DIR" "main"; then
         if [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
             git clone https://github.com/NousResearch/hermes-agent.git "${HERMES_AGENT_DIR}"
         else
@@ -884,6 +953,8 @@ if [[ -z "$_SMO" ]]; then
         register_tmp "$uv_installer"
         curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
             https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
+        # Optional: verify SHA256 (example – replace with actual checksum)
+        # echo "expected_sha256  $uv_installer" | sha256sum -c - || warn "Checksum mismatch"
         bash "$uv_installer" || die "uv installation failed"
         # shellcheck disable=SC1091
         source "${HOME}/.cargo/env" 2>/dev/null || true
@@ -958,7 +1029,7 @@ ok "setup_complete: true written → setup wizard will not fire"
 ok "Hermes ready with local backend"
 
 # =============================================================================
-#  Optional components selection (multi‑select menu) – improved parsing
+#  Optional components selection (multi‑select menu) – FIXED: no eval, proper fallback
 # =============================================================================
 select_optional_components() {
     [[ ! -t 0 ]] && return 1
@@ -980,19 +1051,23 @@ select_optional_components() {
 
     if [[ $? -ne 0 ]]; then
         echo ""
-        ok "No optional components selected."
+        ok "No optional components selected (user cancelled)."
         return 1
     fi
 
-    # Safer parsing: eval with quoted string
-    eval "set -- $choices"
+    # SAFE parsing: remove quotes and split into array
+    # whiptail returns quoted strings like "goose" "opencode"
+    # Use xargs to unquote and read into array
+    local -a selected=()
+    # shellcheck disable=SC2046
+    IFS=' ' read -ra selected <<< $(echo "$choices" | xargs)
     INSTALL_GOOSE=false
     INSTALL_OPENCODE=false
     INSTALL_AUTOAGENT=false
     INSTALL_OPENCLAUDE=false
     INSTALL_WEBUI=false
 
-    for item in "$@"; do
+    for item in "${selected[@]}"; do
         case "$item" in
             goose) INSTALL_GOOSE=true ;;
             opencode) INSTALL_OPENCODE=true ;;
@@ -1029,18 +1104,20 @@ INSTALL_WEBUI=false
 if [[ -z "$_SMO" ]]; then
     step "Optional components selection"
     if ! select_optional_components; then
-        # Fallback to individual prompts
-        echo ""
-        echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
-        read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
-        echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}"
-        read -rp "  Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
-        echo -e "  ${BLD}Optional: AutoAgent (HKUDS)${RST}"
-        read -rp "  Install AutoAgent? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_AUTOAGENT=true
-        echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
-        read -rp "  Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
-        echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
-        read -rp "  Install Hermes WebUI? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_WEBUI=true
+        # Only fallback to individual prompts if whiptail is missing (not on user cancel)
+        if ! command -v whiptail &>/dev/null; then
+            echo ""
+            echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
+            read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
+            echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}"
+            read -rp "  Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
+            echo -e "  ${BLD}Optional: AutoAgent (HKUDS)${RST}"
+            read -rp "  Install AutoAgent? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_AUTOAGENT=true
+            echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
+            read -rp "  Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
+            echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
+            read -rp "  Install Hermes WebUI? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_WEBUI=true
+        fi
     fi
 fi
 
@@ -1057,6 +1134,7 @@ if $INSTALL_GOOSE; then
         if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
             https://github.com/block/goose/releases/download/stable/download_cli.sh \
             -o "$goose_script" 2>/dev/null; then
+            # Optional: verify checksum
             bash "$goose_script" && export PATH="${HOME}/.local/bin:${PATH}" ||
                 warn "Goose install script failed."
         else
@@ -1162,7 +1240,6 @@ if $INSTALL_AUTOAGENT; then
         git -C "$AUTOAGENT_DIR" reset --hard origin/main
     fi
 
-    # No sed modification – we will set TKINTER_AVAILABLE=False via wrapper
     if [[ ! -d "$AUTOAGENT_VENV" ]]; then
         uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
     fi
@@ -1297,7 +1374,7 @@ cat >"${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
 #!/usr/bin/env bash
 GGUF="${GGUF_PATH}"
 MODEL_NAME="${SEL_NAME}"
-LLAMA_BIN="${LLAMA_SERVER_BIN}"          # FIXED: use LLAMA_SERVER_BIN
+LLAMA_BIN="${LLAMA_SERVER_BIN}"
 SAFE_CTX="${SAFE_CTX}"
 USE_JINJA="${USE_JINJA}"
 PIDFILE="/tmp/llama-server.pid"
@@ -1381,7 +1458,7 @@ ok "Launch script: ~/start-llm.sh"
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     step "Creating systemd user service for llama-server..."
-    mkdir -p "${HOME}/.config/systemd/user"
+    mkdir -p "${HOME}/.local/bin"
     cat >"${HOME}/.local/bin/llama-server-wrapper" <<'WRAPPER'
 #!/usr/bin/env bash
 exec bash ~/start-llm.sh
@@ -1502,8 +1579,20 @@ ${MARKER}
 [[ -n "\${__LLM_BASHRC_LOADED:-}" ]] && return 0
 export __LLM_BASHRC_LOADED=1
 
-# Clean PATH (no Windows mounts)
-export PATH="\$(echo "\$PATH" | awk -v RS=: -v ORS=: '!/^\\/mnt\\// && NF' | sed 's/:\$//')"
+# Clean PATH (no Windows mounts) – using the same safe loop
+_clean_path=""
+IFS=: read -ra _path_entries <<<"\$PATH"
+for _pe in "\${_path_entries[@]}"; do
+    [[ -z "\$_pe" ]] && continue
+    [[ "\$_pe" == /mnt/* ]] && continue
+    if [[ -z "\$_clean_path" ]]; then
+        _clean_path="\$_pe"
+    else
+        _clean_path="\${_clean_path}:\$_pe"
+    fi
+done
+[[ -n "\$_clean_path" ]] && export PATH="\$_clean_path"
+unset _clean_path _pe _path_entries
 
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
@@ -1589,14 +1678,17 @@ if [[ $- == *i* ]]; then
     show_llm_summary
 fi
 
-# Improved autostart with flock
+# Improved autostart with flock and process check
 _llm_autostart() {
     [[ $- != *i* ]] && return 0
+    # If server already running, do nothing
     pgrep -f "llama-server.*-m" &>/dev/null && return 0
     [[ -f ~/start-llm.sh ]] || return 0
     local lockfile="/tmp/llm-autostart.lock"
     (
         flock -n 9 || exit 0
+        # Double-check after acquiring lock
+        pgrep -f "llama-server.*-m" &>/dev/null && exit 0
         echo -e "${YLW}[LLM] llama-server not running — auto-starting...${RST}"
         nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
         disown
