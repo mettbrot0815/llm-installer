@@ -6,14 +6,6 @@
 # =============================================================================
 set -euo pipefail
 
-# ── Named constants (FIXED: extracted magic numbers) ──────────────────────────
-readonly BYTES_PER_GIB=1073741824
-readonly BYTES_PER_MIB=1048576
-readonly BYTES_PER_KIB=1024
-readonly MIN_GGUF_SIZE_BYTES=104857600   # 100 MiB sanity check
-readonly AUTOSTART_RETRY_SEC=30
-readonly CPU_ONLY_RAM_FACTOR=8           # GiB extra for CPU-only grade B
-
 # ── SWITCH_MODEL_ONLY sentinel ─────────────────────────────────────────────────
 _SMO="${SWITCH_MODEL_ONLY:-}"
 unset SWITCH_MODEL_ONLY
@@ -88,9 +80,7 @@ elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
     HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
     [[ -n "$HF_TOKEN" ]] && ok "HF_TOKEN loaded from cache."
 else
-    # FIXED: Warn about security risk and require environment variable instead.
     warn "HF_TOKEN not found in environment or cache."
-    warn "Sourcing .bashrc to extract token is DISABLED for security reasons."
     warn "Please set HF_TOKEN in your environment and re-run, or enter it below."
 fi
 
@@ -110,7 +100,6 @@ if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
             else
                 warn "Token doesn't start with 'hf_' — using anyway."
             fi
-            # Save to ~/.bashrc if not already present (safe: no sed, just append)
             if ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
                 echo "export HF_TOKEN=\"${HF_TOKEN}\"" >>"${HOME}/.bashrc"
                 ok "HF_TOKEN saved to ~/.bashrc."
@@ -133,7 +122,6 @@ if [[ -n "$_GH_ENV" ]]; then
     GITHUB_TOKEN="$_GH_ENV"
     ok "GitHub token already set in environment."
 else
-    # FIXED: No sourcing of .bashrc – require environment variable.
     warn "GitHub token not found in environment."
     warn "Please set GITHUB_TOKEN or GH_TOKEN and re-run, or enter it below."
 fi
@@ -167,7 +155,6 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
     fi
 fi
 
-# Configure git to use token via environment (git credential helper)
 if [[ -n "$GITHUB_TOKEN" ]]; then
     export GITHUB_TOKEN
     if ! git config --global credential.helper '!f() { echo "username=${GITHUB_TOKEN}"; echo "password=x-oauth-basic"; }; f' 2>/dev/null; then
@@ -308,7 +295,6 @@ MODELS=(
 grade_model() {
     local min_ram="$1" min_vram="$2"
     local ram_gib="$3" vram_gib="$4" has_nvidia="$5"
-    # Validate numeric inputs – return "F" on error
     if [[ ! "$min_ram" =~ ^[0-9]+$ || ! "$min_vram" =~ ^[0-9]+$ ]]; then
         echo "F"
         return 1
@@ -413,9 +399,9 @@ HDR
     echo -e "  ${BLD} #   Model                    Size    Ctx     Grade              Tags${RST}"
     echo "  ─────────────────────────────────────────────────────────────────────────────"
 
-    local last_tier="" idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc
+    local last_tier="" idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags _desc
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
-        min_ram min_vram tier tags desc; do
+        min_ram min_vram tier tags _desc; do
         idx="${idx// /}"
         dname="${dname# }"
         dname="${dname% }"
@@ -462,16 +448,16 @@ HDR
         if [[ -z "${catalogued[$fname]:-}" ]]; then
             extra_count=$((extra_count + 1))
             if ((extra_count == 1)); then
-                echo -e "\n  ${BLD}▸ LOCAL  (in ~/llm-models, not in catalogue)${RST}"
+                echo -e "\n  ${BLD}▸ LOCAL  (in $HOME/llm-models, not in catalogue)${RST}"
             fi
             local sz_bytes sz
             sz_bytes=$(wc -c <"$f" 2>/dev/null || echo 0)
-            if ((sz_bytes > BYTES_PER_GIB)); then
-                sz="$((sz_bytes / BYTES_PER_GIB))G"
-            elif ((sz_bytes > BYTES_PER_MIB)); then
-                sz="$((sz_bytes / BYTES_PER_MIB))M"
-            elif ((sz_bytes > BYTES_PER_KIB)); then
-                sz="$((sz_bytes / BYTES_PER_KIB))K"
+            if ((sz_bytes > 1073741824)); then
+                sz="$((sz_bytes / 1073741824))G"
+            elif ((sz_bytes > 1048576)); then
+                sz="$((sz_bytes / 1048576))M"
+            elif ((sz_bytes > 1024)); then
+                sz="$((sz_bytes / 1024))K"
             else
                 sz="${sz_bytes}B"
             fi
@@ -517,7 +503,7 @@ download_from_hf_url() {
             [[ -f "$GGUF_PATH" ]] || die "File not found after download."
             local fs
             fs=$(wc -c <"$GGUF_PATH" 2>/dev/null || echo 0)
-            ((fs < MIN_GGUF_SIZE_BYTES)) && die "File too small (${fs} bytes) — check URL."
+            ((fs < 104857600)) && die "File too small (${fs} bytes) — check URL."
             ok "Downloaded: ${GGUF_PATH}"
         fi
     else
@@ -589,7 +575,7 @@ PYLIST
             [[ -f "$GGUF_PATH" ]] || die "Download completed but file not found."
             local fs
             fs=$(wc -c <"$GGUF_PATH" 2>/dev/null || echo 0)
-            ((fs < MIN_GGUF_SIZE_BYTES)) && die "File too small (${fs} bytes)."
+            ((fs < 104857600)) && die "File too small (${fs} bytes)."
             ok "Downloaded: ${GGUF_PATH}"
         fi
     fi
@@ -643,7 +629,6 @@ fi
 #  5 (continued). Model selector  (always runs)
 # =============================================================================
 NUM_MODELS=${#MODELS[@]}
-SEL_IDX=""
 SEL_HF_REPO=""
 SEL_GGUF=""
 SEL_NAME=""
@@ -678,10 +663,9 @@ done
 
 if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
-        min_ram min_vram tier tags desc; do
+        min_ram min_vram tier tags _desc; do
         idx="${idx// /}"
         if [[ "$idx" == "$CHOICE" ]]; then
-            SEL_IDX="$idx"
             SEL_HF_REPO="${hf_repo// /}"
             SEL_GGUF="${gguf_file// /}"
             SEL_NAME="${dname# }"
@@ -757,7 +741,7 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     fi
     [[ -f "$GGUF_PATH" ]] || die "Download completed but file not found."
     FILE_SIZE=$(wc -c <"$GGUF_PATH" 2>/dev/null || echo 0)
-    if ((FILE_SIZE < MIN_GGUF_SIZE_BYTES)); then
+    if ((FILE_SIZE < 104857600)); then
         die "Downloaded file suspiciously small (${FILE_SIZE} bytes)."
     fi
     if command -v numfmt &>/dev/null; then
@@ -773,7 +757,6 @@ fi
 needs_update() {
     local repo_dir="$1"
     local branch="${2:-main}"
-    # Not a git repository → no update needed (caller should clone)
     if [[ ! -d "$repo_dir/.git" ]]; then
         return 1
     fi
@@ -924,7 +907,6 @@ fi
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
 
-# FIXED: set strict umask before writing sensitive files
 umask 077
 mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
@@ -965,7 +947,6 @@ memory:
     enabled: true
 YAML
 
-# Reset umask to default
 umask 022
 
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
@@ -976,17 +957,15 @@ ok "Hermes ready with local backend"
 #  Optional components selection (multi‑select menu) – FIXED: safer parsing
 # =============================================================================
 select_optional_components() {
-    # Return if not interactive
     [[ ! -t 0 ]] && return 1
 
-    # Check if whiptail is available
     if ! command -v whiptail &>/dev/null; then
         warn "whiptail not found – using simple yes/no prompts (install 'whiptail' for better menu)."
         return 1
     fi
 
     local choices
-    choices=$(whiptail --title "Optional Components" --checklist \
+    if ! choices=$(whiptail --title "Optional Components" --checklist \
         "Select additional components to install (use SPACE to toggle, ENTER to confirm):" \
         20 80 5 \
         "goose" "Goose AI Agent (Rust CLI, 30k+ stars)" OFF \
@@ -994,16 +973,12 @@ select_optional_components() {
         "autoagent" "AutoAgent (Deep research multi-agent)" OFF \
         "openclaude" "OpenClaude (Claude-compatible CLI)" OFF \
         "webui" "Hermes WebUI (Browser interface for Hermes)" OFF \
-        3>&1 1>&2 2>&3)
-
-    # whiptail returns non-zero on cancel
-    if [[ $? -ne 0 ]]; then
+        3>&1 1>&2 2>&3); then
         echo ""
         ok "No optional components selected."
         return 1
     fi
 
-    # FIXED: Use a temporary file for safe parsing (no eval)
     local tmpfile
     tmpfile=$(mktemp)
     register_tmp "$tmpfile"
@@ -1014,7 +989,6 @@ select_optional_components() {
         selected+=("$line")
     done < "$tmpfile"
 
-    # Reset all flags
     INSTALL_GOOSE=false
     INSTALL_OPENCODE=false
     INSTALL_AUTOAGENT=false
@@ -1033,11 +1007,11 @@ select_optional_components() {
 
     echo ""
     local count=0
-    $INSTALL_GOOSE && { echo "  ✓ Goose"; count=$((count+1)); }
-    $INSTALL_OPENCODE && { echo "  ✓ OpenCode"; count=$((count+1)); }
-    $INSTALL_AUTOAGENT && { echo "  ✓ AutoAgent"; count=$((count+1)); }
-    $INSTALL_OPENCLAUDE && { echo "  ✓ OpenClaude"; count=$((count+1)); }
-    $INSTALL_WEBUI && { echo "  ✓ Hermes WebUI"; count=$((count+1)); }
+    if $INSTALL_GOOSE; then echo "  ✓ Goose"; count=$((count+1)); fi
+    if $INSTALL_OPENCODE; then echo "  ✓ OpenCode"; count=$((count+1)); fi
+    if $INSTALL_AUTOAGENT; then echo "  ✓ AutoAgent"; count=$((count+1)); fi
+    if $INSTALL_OPENCLAUDE; then echo "  ✓ OpenClaude"; count=$((count+1)); fi
+    if $INSTALL_WEBUI; then echo "  ✓ Hermes WebUI"; count=$((count+1)); fi
 
     if [[ $count -eq 0 ]]; then
         ok "No optional components selected."
@@ -1048,7 +1022,6 @@ select_optional_components() {
     fi
 }
 
-# Initialize flags
 INSTALL_GOOSE=false
 INSTALL_OPENCODE=false
 INSTALL_AUTOAGENT=false
@@ -1058,7 +1031,6 @@ INSTALL_WEBUI=false
 if [[ -z "$_SMO" ]]; then
     step "Optional components selection"
     if ! select_optional_components; then
-        # Fallback to individual prompts if whiptail missing or user cancelled
         echo ""
         echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
         read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
@@ -1086,8 +1058,11 @@ if $INSTALL_GOOSE; then
         if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
             https://github.com/block/goose/releases/download/stable/download_cli.sh \
             -o "$goose_script" 2>/dev/null; then
-            bash "$goose_script" && export PATH="${HOME}/.local/bin:${PATH}" ||
+            if bash "$goose_script"; then
+                export PATH="${HOME}/.local/bin:${PATH}"
+            else
                 warn "Goose install script failed."
+            fi
         else
             warn "Failed to download Goose install script — skipping."
         fi
@@ -1122,8 +1097,11 @@ if $INSTALL_OPENCODE; then
         register_tmp "$opencode_installer"
         if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
             https://opencode.ai/install -o "$opencode_installer" 2>/dev/null; then
-            XDG_BIN_DIR="${HOME}/.local/bin" bash "$opencode_installer" 2>/dev/null &&
+            if XDG_BIN_DIR="${HOME}/.local/bin" bash "$opencode_installer" 2>/dev/null; then
                 export PATH="${HOME}/.local/bin:${PATH}"
+            else
+                warn "OpenCode install script failed."
+            fi
         else
             warn "OpenCode install script download failed — skipping."
         fi
@@ -1194,7 +1172,6 @@ if $INSTALL_AUTOAGENT; then
         git -C "$AUTOAGENT_DIR" reset --hard origin/main
     fi
 
-    # FIXED: Use environment variable instead of sed injection
     cat >"${HOME}/start-autoagent.sh" <<AUTOAGENT_LAUNCHER
 #!/usr/bin/env bash
 export TKINTER_AVAILABLE=False
@@ -1229,10 +1206,8 @@ fi
 # =============================================================================
 if $INSTALL_OPENCLAUDE; then
     step "Installing OpenClaude..."
-    # FIXED: Use official NodeSource APT repository with GPG verification
     if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
         step "Setting up NodeSource repository for Node.js 22..."
-        # Download and verify GPG key
         local nodesource_key="/tmp/nodesource.gpg.key"
         curl -fsSL https://deb.nodesource.com/gpgkey/nodesource.gpg.key -o "$nodesource_key"
         sudo gpg --dearmor -o /usr/share/keyrings/nodesource.gpg "$nodesource_key"
@@ -1271,20 +1246,17 @@ HERMES_WEBUI_DIR="${HOME}/hermes-webui"
 if $INSTALL_WEBUI; then
     step "Installing Hermes WebUI..."
 
-    # Clone or update
     if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
         git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
     else
         git -C "$HERMES_WEBUI_DIR" pull --quiet
     fi
 
-    # The WebUI runs inside the existing Hermes agent venv
     HERMES_VENV="${HOME}/hermes-agent/venv"
     if [[ ! -d "$HERMES_VENV" ]]; then
         warn "Hermes agent venv not found – WebUI may not function correctly."
     fi
 
-    # Install Python dependencies (if any) into the Hermes venv
     if [[ -f "${HERMES_WEBUI_DIR}/requirements.txt" ]]; then
         if [[ -x "${HERMES_VENV}/bin/pip" ]]; then
             "${HERMES_VENV}/bin/pip" install -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet
@@ -1293,11 +1265,9 @@ if $INSTALL_WEBUI; then
         fi
     fi
 
-    # Create a convenient start script
     cat >"${HOME}/start-webui.sh" <<WEBUISTART
 #!/usr/bin/env bash
 cd "${HERMES_WEBUI_DIR}"
-# Use the Hermes agent venv's Python if available
 if [[ -x "${HERMES_VENV}/bin/python" ]]; then
     export PATH="${HERMES_VENV}/bin:\${PATH}"
 fi
@@ -1306,7 +1276,6 @@ echo "Starting Hermes WebUI on http://localhost:8787"
 WEBUISTART
     chmod +x "${HOME}/start-webui.sh"
 
-    # Optional: systemd service for WebUI
     if systemctl --user daemon-reload 2>/dev/null; then
         mkdir -p "${HOME}/.config/systemd/user"
         cat >"${HOME}/.config/systemd/user/hermes-webui.service" <<WEBUISERVICE
@@ -1392,7 +1361,7 @@ LLAMA_PID=$!
 echo "$LLAMA_PID" > "$PIDFILE"
 
 ready=false
-for i in {1..30}; do
+for _ in {1..30}; do
     if curl -sf http://localhost:8080/v1/models &>/dev/null; then
         echo "  llama-server ready (PID: $LLAMA_PID)"
         echo "  Run: hermes    ← Hermes Agent"
@@ -1417,8 +1386,8 @@ fi
 wait "$LLAMA_PID"
 LAUNCH_TEMPLATE
 
-# FIXED: Use double quotes for envsubst variable list (correct syntax)
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA
+# FIXED: Use double quotes for envsubst variable list (correct syntax)
 envsubst "${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA}" \
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 rm -f "${LAUNCH_SCRIPT}.template"
@@ -1467,10 +1436,8 @@ fi
 
 # ── Start llama-server ────────────────────────────────────────────────────────
 step "Starting llama-server..."
-# FIXED: Use mktemp for PID file (secure random name)
 PIDFILE=$(mktemp /tmp/llama-server.XXXXXX.pid)
 register_tmp "$PIDFILE"
-# Clean up old stale PID files if they exist (but not using fixed name anymore)
 pkill -f "llama-server.*-m" 2>/dev/null || true
 sleep 1
 
@@ -1488,7 +1455,7 @@ else
 fi
 
 READY=false
-for i in {1..30}; do
+for _ in {1..30}; do
     if curl -sf http://localhost:8080/v1/models &>/dev/null; then
         ok "llama-server ready at http://localhost:8080"
         READY=true
@@ -1506,9 +1473,17 @@ if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
     SKILLS=("github-pr-workflow" "axolotl" "huggingface-hub")
     for skill in "${SKILLS[@]}"; do
         if command -v timeout &>/dev/null; then
-            timeout 30s hermes skills install "official/${skill}" --yes --force 2>/dev/null && ok "Installed skill: ${skill}" || warn "Skill '${skill}' skipped"
+            if timeout 30s hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
+                ok "Installed skill: ${skill}"
+            else
+                warn "Skill '${skill}' skipped"
+            fi
         else
-            hermes skills install "official/${skill}" --yes --force 2>/dev/null && ok "Installed skill: ${skill}" || warn "Skill '${skill}' skipped"
+            if hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
+                ok "Installed skill: ${skill}"
+            else
+                warn "Skill '${skill}' skipped"
+            fi
         fi
     done
     ok "Skills: ~/.hermes/skills/"
@@ -1577,10 +1552,10 @@ vram() {
 llm-models() {
     local active_model=""
     [[ -f ~/start-llm.sh ]] && active_model=$(grep '^GGUF=' ~/start-llm.sh 2>/dev/null | head -1 | sed 's/GGUF="//;s/".*//' | xargs basename 2>/dev/null || true)
-    echo -e "\n  ${BLD}Models in ~/llm-models:${RST}"
+    echo -e "\n  ${BLD}Models in $HOME/llm-models:${RST}"
     echo "  ────────────────────────────────────────────────"
     local found=0 f sz name tag
-    for f in ~/llm-models/*.gguf; do
+    for f in "$HOME"/llm-models/*.gguf; do
         [[ -f "$f" ]] || continue
         found=$(( found + 1 ))
         sz=$(du -h "$f" | cut -f1); name=$(basename "$f"); tag=""
