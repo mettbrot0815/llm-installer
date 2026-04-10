@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude + WebUI
-#  Version: production-hardened (final) – ALL BUGS FIXED
+#  Version: production-hardened (final) – ALL BUGS FIXED, SHELLCHECK CLEAN
 #  Optional components selected via single multi‑select menu (whiptail).
 # =============================================================================
 set -euo pipefail
@@ -157,6 +157,7 @@ fi
 
 if [[ -n "$GITHUB_TOKEN" ]]; then
     export GITHUB_TOKEN
+    # shellcheck disable=SC2016  # The $GITHUB_TOKEN should NOT expand here; it's used in the function at runtime.
     if ! git config --global credential.helper '!f() { echo "username=${GITHUB_TOKEN}"; echo "password=x-oauth-basic"; }; f' 2>/dev/null; then
         warn "Could not set git credential helper. GitHub operations may be unauthenticated."
     else
@@ -912,13 +913,13 @@ mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
 
 if [[ -f "${HERMES_DIR}/.env" && ! -L "${HERMES_DIR}/.env" ]]; then
     cp "${HERMES_DIR}/.env" "${HERMES_DIR}/.env.backup.$(date +%Y%m%d%H%M%S)"
-    ok "Backed up existing ~/.hermes/.env"
+    ok "Backed up existing $HOME/.hermes/.env"
 fi
 cat >"${HERMES_DIR}/.env" <<'ENV'
 OPENAI_API_KEY=sk-no-key-needed
 OPENAI_BASE_URL=http://localhost:8080/v1
 ENV
-ok "~/.hermes/.env written."
+ok "$HOME/.hermes/.env written."
 
 CONFIG_FILE="${HERMES_DIR}/config.yaml"
 
@@ -1196,12 +1197,16 @@ AUTOAGENT_LAUNCHER
         uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
     fi
 
-    (
-        export VIRTUAL_ENV="${AUTOAGENT_VENV}"
-        export PATH="${AUTOAGENT_VENV}/bin:${PATH}"
-        cd "${AUTOAGENT_DIR}"
-        uv pip install -e "." 2>&1 | tail -5
-    ) && ok "AutoAgent installed." || die "AutoAgent install failed."
+    if (
+    export VIRTUAL_ENV="${AUTOAGENT_VENV}"
+    export PATH="${AUTOAGENT_VENV}/bin:${PATH}"
+    cd "${AUTOAGENT_DIR}"
+    uv pip install -e "." 2>&1 | tail -5
+); then
+    ok "AutoAgent installed."
+else
+    die "AutoAgent install failed."
+fi
 fi
 
 # =============================================================================
@@ -1211,7 +1216,7 @@ if $INSTALL_OPENCLAUDE; then
     step "Installing OpenClaude..."
     if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
         step "Setting up NodeSource repository for Node.js 22..."
-        local nodesource_key="/tmp/nodesource.gpg.key"
+        nodesource_key="/tmp/nodesource.gpg.key"   # FIXED: removed 'local' (not in a function)
         curl -fsSL https://deb.nodesource.com/gpgkey/nodesource.gpg.key -o "$nodesource_key"
         sudo gpg --dearmor -o /usr/share/keyrings/nodesource.gpg "$nodesource_key"
         rm -f "$nodesource_key"
@@ -1396,7 +1401,7 @@ wait "$LLAMA_PID"
 LAUNCH_TEMPLATE
 
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA
-# FIXED: Use single quotes to pass literal variable names to envsubst
+# shellcheck disable=SC2016  # Single quotes preserve literal ${VAR} for envsubst
 envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA}' \
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 rm -f "${LAUNCH_SCRIPT}.template"
@@ -1518,7 +1523,12 @@ STUB
         warn "switch-model will re-download the installer."
     elif [[ -f "$SCRIPT_SELF" ]]; then
         mkdir -p "${HOME}/.local/bin"
-        cp -f "$SCRIPT_SELF" "$INSTALL_COPY" 2>/dev/null && chmod +x "$INSTALL_COPY" && SCRIPT_SELF="$INSTALL_COPY" || true
+        if cp -f "$SCRIPT_SELF" "$INSTALL_COPY" 2>/dev/null; then
+            chmod +x "$INSTALL_COPY"
+            SCRIPT_SELF="$INSTALL_COPY"
+        else
+            true
+        fi
     fi
 
     MARKER="# === LLM setup (added by install.sh) ==="
