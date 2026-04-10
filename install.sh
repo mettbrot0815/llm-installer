@@ -1055,12 +1055,21 @@ select_optional_components() {
         return 1
     fi
 
-    # SAFE parsing: remove quotes and split into array
-    # whiptail returns quoted strings like "goose" "opencode"
-    # Use xargs to unquote and read into array
+    # SAFE parsing: use a temporary file to avoid complex substitutions
+    local tmpfile
+    tmpfile=$(mktemp)
+    register_tmp "$tmpfile"
+    # Write the quoted words one per line (whiptail outputs them space-separated, quoted)
+    # We can use eval to unquote safely because the input is trusted (whiptail internal)
+    # but to be extra safe, we use printf "%s\n" $choices after unquoting with xargs
+    # However, a more robust method: use xargs to print each token on a new line
+    echo "$choices" | xargs -n1 printf "%s\n" > "$tmpfile"
+
     local -a selected=()
-    # shellcheck disable=SC2046
-    IFS=' ' read -ra selected <<< $(echo "$choices" | xargs)
+    while IFS= read -r line; do
+        selected+=("$line")
+    done < "$tmpfile"
+
     INSTALL_GOOSE=false
     INSTALL_OPENCODE=false
     INSTALL_AUTOAGENT=false
@@ -1093,33 +1102,6 @@ select_optional_components() {
         return 0
     fi
 }
-
-# Initialize flags
-INSTALL_GOOSE=false
-INSTALL_OPENCODE=false
-INSTALL_AUTOAGENT=false
-INSTALL_OPENCLAUDE=false
-INSTALL_WEBUI=false
-
-if [[ -z "$_SMO" ]]; then
-    step "Optional components selection"
-    if ! select_optional_components; then
-        # Only fallback to individual prompts if whiptail is missing (not on user cancel)
-        if ! command -v whiptail &>/dev/null; then
-            echo ""
-            echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
-            read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
-            echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}"
-            read -rp "  Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
-            echo -e "  ${BLD}Optional: AutoAgent (HKUDS)${RST}"
-            read -rp "  Install AutoAgent? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_AUTOAGENT=true
-            echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
-            read -rp "  Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
-            echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
-            read -rp "  Install Hermes WebUI? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_WEBUI=true
-        fi
-    fi
-fi
 
 # =============================================================================
 #  13a. Goose
