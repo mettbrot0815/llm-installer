@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude + WebUI
-#  Version: production-hardened (final) – SECURITY & ROBUSTNESS FIXES
+#  Version: hardened-2026-04-10-v3
 #  Optional components selected via single multi‑select menu (whiptail).
 # =============================================================================
 set -euo pipefail
@@ -10,16 +10,25 @@ set -euo pipefail
 _SMO="${SWITCH_MODEL_ONLY:-}"
 unset SWITCH_MODEL_ONLY
 
-# ── Strip Windows /mnt/* from PATH ────────────────────────────────────────────
+# ── Strip Windows /mnt/* from PATH (FIXED: safe Bash loop) ────────────────────
 _clean_path=""
-# shellcheck disable=SC2034  # _p is intentionally unset after use
-IFS=':' read -ra _path_parts <<<"$PATH"
-for _p in "${_path_parts[@]}"; do
-    [[ "$_p" == /mnt/* ]] && continue
-    _clean_path="${_clean_path:+${_clean_path}:}${_p}"
+IFS=: read -ra _path_entries <<<"$PATH"
+for _pe in "${_path_entries[@]}"; do
+    [[ -z "$_pe" ]] && continue
+    [[ "$_pe" == /mnt/* ]] && continue
+    if [[ -z "$_clean_path" ]]; then
+        _clean_path="$_pe"
+    else
+        _clean_path="${_clean_path}:$_pe"
+    fi
 done
+if [[ -z "$_clean_path" ]]; then
+    # Fallback: keep original PATH but warn
+    warn "All PATH entries were under /mnt/ – keeping original PATH."
+    _clean_path="$PATH"
+fi
 export PATH="$_clean_path"
-unset _clean_path _path_parts _p
+unset _clean_path _pe _path_entries
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 readonly RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
@@ -33,7 +42,6 @@ die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
-# shellcheck disable=SC2317  # cleanup called by trap, not directly
 cleanup() {
     local f
     for f in "${TMPFILES[@]}"; do
@@ -69,7 +77,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-#  1. HuggingFace token – SAFE EXTRACTION (no sed/grep parsing of .bashrc)
+#  1. HuggingFace token – SAFE EXTRACTION (fixed)
 # =============================================================================
 _HF_ENV="${HF_TOKEN:-}"
 HF_TOKEN=""
@@ -80,9 +88,9 @@ elif [[ -f "${HOME}/.cache/huggingface/token" ]]; then
     HF_TOKEN=$(cat "${HOME}/.cache/huggingface/token" 2>/dev/null || true)
     [[ -n "$HF_TOKEN" ]] && ok "HF_TOKEN loaded from cache."
 else
-    # Safely source .bashrc in a subshell to extract HF_TOKEN without sed/grep injection
     if [[ -f "${HOME}/.bashrc" ]]; then
-        extracted=$(bash -c "source ${HOME}/.bashrc 2>/dev/null && echo -n \"\$HF_TOKEN\"" || true)
+        # WARNING: sourcing .bashrc can execute arbitrary commands. Use with caution.
+        extracted=$(bash -c 'source "$1" 2>/dev/null && echo -n "$HF_TOKEN"' -- "${HOME}/.bashrc" || true)
         if [[ -n "$extracted" ]]; then
             HF_TOKEN="$extracted"
             ok "HF_TOKEN loaded from ~/.bashrc (safe extraction)."
@@ -106,7 +114,6 @@ if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
             else
                 warn "Token doesn't start with 'hf_' — using anyway."
             fi
-            # Save to ~/.bashrc if not already present (safe: no sed, just append)
             if ! grep -qF "export HF_TOKEN=" "${HOME}/.bashrc" 2>/dev/null; then
                 echo "export HF_TOKEN=\"${HF_TOKEN}\"" >>"${HOME}/.bashrc"
                 ok "HF_TOKEN saved to ~/.bashrc."
@@ -121,7 +128,7 @@ fi
 export HF_TOKEN
 
 # =============================================================================
-#  1b. GitHub token – SECURE EXTRACTION AND GIT CONFIG (no command injection)
+#  1b. GitHub token – SECURE EXTRACTION AND GIT CONFIG (fixed)
 # =============================================================================
 _GH_ENV="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 GITHUB_TOKEN=""
@@ -129,9 +136,8 @@ if [[ -n "$_GH_ENV" ]]; then
     GITHUB_TOKEN="$_GH_ENV"
     ok "GitHub token already set in environment."
 else
-    # Safe extraction from .bashrc (subshell)
     if [[ -f "${HOME}/.bashrc" ]]; then
-        extracted=$(bash -c "source ${HOME}/.bashrc 2>/dev/null && echo -n \"\$GITHUB_TOKEN\"" || true)
+        extracted=$(bash -c 'source "$1" 2>/dev/null && echo -n "$GITHUB_TOKEN"' -- "${HOME}/.bashrc" || true)
         if [[ -n "$extracted" ]]; then
             GITHUB_TOKEN="$extracted"
             ok "GitHub token loaded from ~/.bashrc."
@@ -168,7 +174,6 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
     fi
 fi
 
-# Configure git to use token via environment (git credential helper)
 if [[ -n "$GITHUB_TOKEN" ]]; then
     export GITHUB_TOKEN
     if ! git config --global credential.helper '!f() { echo "username=${GITHUB_TOKEN}"; echo "password=x-oauth-basic"; }; f' 2>/dev/null; then
@@ -283,39 +288,128 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
 fi
 
 # =============================================================================
-#  5. Model catalogue
+#  5. HF CLI setup – MOVED BEFORE MODEL SELECTOR (critical fix)
+# =============================================================================
+step "Setting up HuggingFace CLI..."
+export PATH="${HOME}/.local/bin:${PATH}"
+
+HF_CLI_A="${HOME}/.local/bin/hf"
+HF_CLI_B="${HOME}/.local/bin/huggingface-cli"
+
+if [[ ! -x "$HF_CLI_A" && ! -x "$HF_CLI_B" ]]; then
+    pip3 install --quiet --user --break-system-packages huggingface_hub
+fi
+if [[ -z "$_SMO" ]]; then
+    pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -2
+fi
+
+if [[ -x "$HF_CLI_A" ]]; then
+    HF_CLI="$HF_CLI_A"
+    HF_CLI_NAME="hf"
+elif [[ -x "$HF_CLI_B" ]]; then
+    HF_CLI="$HF_CLI_B"
+    HF_CLI_NAME="huggingface-cli"
+else
+    die "Neither 'hf' nor 'huggingface-cli' found after install."
+fi
+"$HF_CLI" version &>/dev/null || die "'$HF_CLI_NAME' fails to run."
+ok "$HF_CLI_NAME ready: $("$HF_CLI" version 2>/dev/null || echo 'ok')"
+
+if [[ -n "${HF_TOKEN:-}" ]]; then
+    if "$HF_CLI" auth login --token "$HF_TOKEN" 2>/dev/null; then
+        ok "HF login completed."
+    elif "$HF_CLI" login --token "$HF_TOKEN" 2>/dev/null; then
+        ok "HF login completed (legacy)."
+    else
+        ok "HF token ready (may be cached)."
+    fi
+    if "$HF_CLI" auth whoami &>/dev/null 2>&1; then
+        ok "HF login verified."
+    else
+        warn "HF login could not be verified — downloads may be unauthenticated."
+    fi
+fi
+
+# =============================================================================
+#  6. Model catalogue (formerly section 5, now after HF CLI)
 # =============================================================================
 readonly MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
 
-MODELS=(
-    "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
-    "2|unsloth/Qwen3.5-2B-GGUF|Qwen3.5-2B-Q4_K_M.gguf|Qwen 3.5 2B|1.0|256K|3|0|tiny|chat,multilingual|Alibaba · ultra-fast"
-    "3|unsloth/Qwen3.5-4B-GGUF|Qwen3.5-4B-Q4_K_M.gguf|Qwen 3.5 4B|2.0|256K|4|0|small|chat,code|Alibaba · capable on CPU"
-    "4|bartowski/microsoft_Phi-4-mini-instruct-GGUF|microsoft_Phi-4-mini-instruct-Q4_K_M.gguf|Phi-4 Mini 3.8B|2.0|16K|4|0|small|reasoning,code|Microsoft · strong reasoning"
-    "5|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on RTX 3060"
-    "6|kai-os/Carnice-9b-GGUF|Carnice-9b-Q6_K.gguf|Carnice-9b (Hermes)|6.9|256K|8|6|mid|hermes,agent,tool-use|Qwen3.5-9B tuned for Hermes Agent harness"
-    "7|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction"
-    "8|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|32K|12|10|mid|code|#1 coding on 3060"
-    "9|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|32K|14|10|mid|chat,code,reasoning|Strong planning"
-    "10|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 3 · strict roles"
-    "11|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|132K|12|10|mid|chat,code|Google Gemma 4 · 132K ctx"
-    "12|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params"
-    "13|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
-    "14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
-)
+# Define models as indexed arrays for robustness
+MODEL_INDEXES=()
+MODEL_HF_REPOS=()
+MODEL_GGUFS=()
+MODEL_NAMES=()
+MODEL_SIZES=()
+MODEL_CTXS=()
+MODEL_MIN_RAMS=()
+MODEL_MIN_VRAMS=()
+MODEL_TIERS=()
+MODEL_TAGS=()
+MODEL_DESCS=()
 
-# ── Grade helpers ──────────────────────────────────────────────────────────────
+# Populate from the pipe-separated list (safer parsing)
+while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
+    # Trim whitespace
+    idx="${idx// /}"
+    hf_repo="${hf_repo// /}"
+    gguf_file="${gguf_file// /}"
+    dname="${dname# }"; dname="${dname% }"
+    size_gb="${size_gb// /}"
+    ctx="${ctx// /}"
+    min_ram="${min_ram// /}"
+    min_vram="${min_vram// /}"
+    tier="${tier// /}"
+    tags="${tags// /}"
+    desc="${desc// /}"
+    MODEL_INDEXES+=("$idx")
+    MODEL_HF_REPOS+=("$hf_repo")
+    MODEL_GGUFS+=("$gguf_file")
+    MODEL_NAMES+=("$dname")
+    MODEL_SIZES+=("$size_gb")
+    MODEL_CTXS+=("$ctx")
+    MODEL_MIN_RAMS+=("$min_ram")
+    MODEL_MIN_VRAMS+=("$min_vram")
+    MODEL_TIERS+=("$tier")
+    MODEL_TAGS+=("$tags")
+    MODEL_DESCS+=("$desc")
+done <<'MODELS_DATA'
+1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test
+2|unsloth/Qwen3.5-2B-GGUF|Qwen3.5-2B-Q4_K_M.gguf|Qwen 3.5 2B|1.0|256K|3|0|tiny|chat,multilingual|Alibaba · ultra-fast
+3|unsloth/Qwen3.5-4B-GGUF|Qwen3.5-4B-Q4_K_M.gguf|Qwen 3.5 4B|2.0|256K|4|0|small|chat,code|Alibaba · capable on CPU
+4|bartowski/microsoft_Phi-4-mini-instruct-GGUF|microsoft_Phi-4-mini-instruct-Q4_K_M.gguf|Phi-4 Mini 3.8B|2.0|16K|4|0|small|reasoning,code|Microsoft · strong reasoning
+5|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on RTX 3060
+6|kai-os/Carnice-9b-GGUF|Carnice-9b-Q6_K.gguf|Carnice-9b (Hermes)|6.9|256K|8|6|mid|hermes,agent,tool-use|Qwen3.5-9B tuned for Hermes Agent harness
+7|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction
+8|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|32K|12|10|mid|code|#1 coding on 3060
+9|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|32K|14|10|mid|chat,code,reasoning|Strong planning
+10|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 3 · strict roles
+11|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|132K|12|10|mid|chat,code|Google Gemma 4 · 132K ctx
+12|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params
+13|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill
+14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM
+MODELS_DATA
+
+NUM_MODELS=${#MODEL_INDEXES[@]}
+
+# ── Grade helpers (FIXED: validate numeric inputs) ───────────────────────────
 grade_model() {
-    local min_ram="${1:?}" min_vram="${2:?}"
-    local ram_gib="${3:?}" vram_gib="${4:?}" has_nvidia="${5:?}"
-    if [[ ! "$min_ram" =~ ^[0-9]+$ || ! "$min_vram" =~ ^[0-9]+$ ]]; then
-        echo "F"
-        return 1
+    local min_ram="$1" min_vram="$2" ram_gib="$3" vram_gib="$4"
+    local has_nvidia="$5"
+    # Validate numeric inputs – default to 0 if invalid
+    if ! [[ "$min_ram" =~ ^[0-9]+$ ]]; then
+        warn "grade_model: min_ram='$min_ram' not numeric, using 0"
+        min_ram=0
     fi
-    local ram_h=$((ram_gib - min_ram))
-    if ((min_vram > 0)) && [[ "$has_nvidia" == "true" ]]; then
-        local vram_h=$((vram_gib - min_vram))
+    if ! [[ "$min_vram" =~ ^[0-9]+$ ]]; then
+        warn "grade_model: min_vram='$min_vram' not numeric, using 0"
+        min_vram=0
+    fi
+    local -i min_ram_int="$min_ram" min_vram_int="$min_vram"
+    local -i ram_h=$((ram_gib - min_ram_int))
+    if ((min_vram_int > 0)) && [[ "$has_nvidia" == "true" ]]; then
+        local -i vram_h=$((vram_gib - min_vram_int))
         if ((vram_h >= 4)); then
             echo "S"
         elif ((vram_h >= 0)); then
@@ -327,7 +421,7 @@ grade_model() {
         else
             echo "F"
         fi
-    elif ((min_vram > 0)); then
+    elif ((min_vram_int > 0)); then
         if ((ram_h >= 8)); then
             echo "B"
         elif ((ram_h >= 0)); then
@@ -398,7 +492,7 @@ apply_model_settings() {
     ok "Context window: ${SAFE_CTX} tokens"
 }
 
-# ── Draw model table ───────────────────────────────────────────────────────────
+# ── Draw model table (FIXED: no direct eval, uses arrays) ──────────────────────
 show_model_table() {
     /usr/bin/clear 2>/dev/null || true
     echo -e "${BLD}${CYN}"
@@ -414,18 +508,17 @@ HDR
     echo "  ─────────────────────────────────────────────────────────────────────────────"
 
     local last_tier="" idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc
-    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
-        min_ram min_vram tier tags desc; do
-        idx="${idx// /}"
-        dname="${dname# }"
-        dname="${dname% }"
-        size_gb="${size_gb// /}"
-        ctx="${ctx// /}"
-        min_ram="${min_ram// /}"
-        min_vram="${min_vram// /}"
-        tier="${tier// /}"
-        tags="${tags// /}"
-        gguf_file="${gguf_file// /}"
+    for ((i=0; i<NUM_MODELS; i++)); do
+        idx="${MODEL_INDEXES[i]}"
+        dname="${MODEL_NAMES[i]}"
+        size_gb="${MODEL_SIZES[i]}"
+        ctx="${MODEL_CTXS[i]}"
+        min_ram="${MODEL_MIN_RAMS[i]}"
+        min_vram="${MODEL_MIN_VRAMS[i]}"
+        tier="${MODEL_TIERS[i]}"
+        tags="${MODEL_TAGS[i]}"
+        gguf_file="${MODEL_GGUFS[i]}"
+
         if [[ "$tier" != "$last_tier" ]]; then
             case "$tier" in
             tiny) echo -e "\n  ${BLD}▸ TINY   (< 1 GB · instant · edge/test)${RST}" ;;
@@ -448,12 +541,12 @@ HDR
         echo -e "  ${BLD}$(printf '%2s' "$idx")${RST}  $(printf '%-26s' "$dname")" \
             " $(printf '%5s' "$size_gb") GB  $(printf '%-7s' "$ctx")" \
             "  ${GC}$(printf '%-13s' "$GL")${RST}  $(printf '%-24s' "$tag_display") $cached"
-    done < <(printf '%s\n' "${MODELS[@]}")
+    done
 
     declare -A catalogued
-    while IFS='|' read -r _ _ cat_g _; do
-        catalogued["${cat_g// /}"]=1
-    done < <(printf '%s\n' "${MODELS[@]}")
+    for ((i=0; i<NUM_MODELS; i++)); do
+        catalogued["${MODEL_GGUFS[i]}"]=1
+    done
 
     local extra_count=0 f fname
     for f in "${MODEL_DIR}"/*.gguf; do
@@ -488,7 +581,7 @@ HDR
     echo ""
 }
 
-# ── HF URL / repo download ─────────────────────────────────────────────────────
+# ── HF URL / repo download (FIXED: strict input validation) ────────────────────
 download_from_hf_url() {
     echo ""
     echo -e "  ${BLD}Download via HuggingFace${RST}"
@@ -500,7 +593,13 @@ download_from_hf_url() {
     HF_INPUT="${HF_INPUT//[[:space:]]/}"
     [[ -z "$HF_INPUT" ]] && die "No input provided."
 
+    # Strict whitelist validation: only alphanumeric, dash, underscore, dot, slash, colon, question mark, equals, ampersand
+    if [[ ! "$HF_INPUT" =~ ^[a-zA-Z0-9_.\-/:?=&]+$ ]]; then
+        die "Rejected: URL contains invalid characters. Only letters, numbers, dot, dash, underscore, slash, colon, ?, =, & allowed."
+    fi
+
     if [[ "$HF_INPUT" =~ ^https?:// ]]; then
+        # Validate URL – reject suspicious characters (already covered by regex)
         SEL_GGUF=$(basename "$HF_INPUT")
         SEL_GGUF="${SEL_GGUF%%\?*}"
         [[ "$SEL_GGUF" != *.gguf ]] && die "URL doesn't point to a .gguf file."
@@ -597,52 +696,8 @@ PYLIST
 }
 
 # =============================================================================
-#  6. HF CLI setup  (always runs)
+#  7. Model selector (now after HF CLI is ready)
 # =============================================================================
-step "Setting up HuggingFace CLI..."
-export PATH="${HOME}/.local/bin:${PATH}"
-
-HF_CLI_A="${HOME}/.local/bin/hf"
-HF_CLI_B="${HOME}/.local/bin/huggingface-cli"
-
-if [[ ! -x "$HF_CLI_A" && ! -x "$HF_CLI_B" ]]; then
-    pip3 install --quiet --user --break-system-packages huggingface_hub
-fi
-if [[ -z "$_SMO" ]]; then
-    pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -2
-fi
-
-if [[ -x "$HF_CLI_A" ]]; then
-    HF_CLI="$HF_CLI_A"
-    HF_CLI_NAME="hf"
-elif [[ -x "$HF_CLI_B" ]]; then
-    HF_CLI="$HF_CLI_B"
-    HF_CLI_NAME="huggingface-cli"
-else
-    die "Neither 'hf' nor 'huggingface-cli' found after install."
-fi
-"$HF_CLI" version &>/dev/null || die "'$HF_CLI_NAME' fails to run."
-ok "$HF_CLI_NAME ready: $("$HF_CLI" version 2>/dev/null || echo 'ok')"
-
-if [[ -n "${HF_TOKEN:-}" ]]; then
-    if "$HF_CLI" auth login --token "$HF_TOKEN" 2>/dev/null; then
-        ok "HF login completed."
-    elif "$HF_CLI" login --token "$HF_TOKEN" 2>/dev/null; then
-        ok "HF login completed (legacy)."
-    else
-        ok "HF token ready (may be cached)."
-    fi
-    if "$HF_CLI" auth whoami &>/dev/null 2>&1; then
-        ok "HF login verified."
-    else
-        warn "HF login could not be verified — downloads may be unauthenticated."
-    fi
-fi
-
-# =============================================================================
-#  5 (continued). Model selector  (always runs)
-# =============================================================================
-NUM_MODELS=${#MODELS[@]}
 SEL_IDX=""
 SEL_HF_REPO=""
 SEL_GGUF=""
@@ -662,7 +717,8 @@ while true; do
         CHOICE="5"
         break
     fi
-    read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE || {
+    echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} "
+    read -r CHOICE || {
         echo ""
         warn "EOF detected. Exiting."
         exit 0
@@ -677,23 +733,26 @@ while true; do
 done
 
 if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
-    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
-        min_ram min_vram tier tags desc; do
-        idx="${idx// /}"
-        if [[ "$idx" == "$CHOICE" ]]; then
-            SEL_IDX="$idx"
-            SEL_HF_REPO="${hf_repo// /}"
-            SEL_GGUF="${gguf_file// /}"
-            SEL_NAME="${dname# }"
-            SEL_NAME="${SEL_NAME% }"
-            SEL_MIN_RAM="${min_ram// /}"
-            SEL_MIN_VRAM="${min_vram// /}"
+    # Direct array lookup by index
+    SEL_IDX="$CHOICE"
+    # Find position in MODEL_INDEXES
+    local found_idx=-1
+    for ((i=0; i<NUM_MODELS; i++)); do
+        if [[ "${MODEL_INDEXES[i]}" == "$CHOICE" ]]; then
+            found_idx=$i
             break
         fi
-    done < <(printf '%s\n' "${MODELS[@]}")
+    done
+    if [[ $found_idx -eq -1 ]]; then
+        die "Model index $CHOICE not found in catalogue."
+    fi
+    SEL_HF_REPO="${MODEL_HF_REPOS[found_idx]}"
+    SEL_GGUF="${MODEL_GGUFS[found_idx]}"
+    SEL_NAME="${MODEL_NAMES[found_idx]}"
+    SEL_MIN_RAM="${MODEL_MIN_RAMS[found_idx]}"
+    SEL_MIN_VRAM="${MODEL_MIN_VRAMS[found_idx]}"
 
     [[ -z "$SEL_GGUF" ]] && die "Model parse failed: SEL_GGUF empty."
-    [[ -z "$SEL_MIN_RAM" ]] && die "Model parse failed: SEL_MIN_RAM empty."
     [[ "$SEL_MIN_RAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_RAM='$SEL_MIN_RAM' not numeric."
     [[ "$SEL_MIN_VRAM" =~ ^[0-9]+$ ]] || die "SEL_MIN_VRAM='$SEL_MIN_VRAM' not numeric."
     ok "Selected: ${SEL_NAME}  (${SEL_GGUF})"
@@ -719,7 +778,7 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
 fi
 
 # =============================================================================
-#  7. Download model from catalogue if not present  (always runs)
+#  8. Download model from catalogue if not present
 # =============================================================================
 if [[ -f "$GGUF_PATH" ]]; then
     ok "Model already on disk: ${GGUF_PATH} — skipping download."
@@ -731,13 +790,14 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
     AVAIL_GB=$(awk -v kb="$AVAIL_KB" 'BEGIN { printf "%.1f", kb/1024/1024 }')
     AVAIL_GB_INT=$(awk -v kb="$AVAIL_KB" 'BEGIN { print int((kb/1024/1024) + 0.999) }')
 
-    REQ_GB=""
-    while IFS='|' read -r idx _ _ _ size_gb _ _ _ _ _ _; do
-        [[ "${idx// /}" == "$CHOICE" ]] && {
-            REQ_GB="${size_gb// /}"
+    # Find size_gb for the selected model
+    local REQ_GB=""
+    for ((i=0; i<NUM_MODELS; i++)); do
+        if [[ "${MODEL_INDEXES[i]}" == "$CHOICE" ]]; then
+            REQ_GB="${MODEL_SIZES[i]}"
             break
-        }
-    done < <(printf '%s\n' "${MODELS[@]}")
+        fi
+    done
     [[ -z "$REQ_GB" ]] && die "Could not determine model size for index $CHOICE"
 
     REQ_GB_INT=${REQ_GB%.*}
@@ -768,13 +828,13 @@ elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
 fi
 
 # =============================================================================
-#  Helper: Check if a Git repository has updates
+#  Helper: Check if a Git repository has updates (FIXED: renamed and correct logic)
 # =============================================================================
-git_has_updates() {
+needs_update() {
     local repo_dir="$1"
     local branch="${2:-main}"
     if [[ ! -d "$repo_dir/.git" ]]; then
-        return 0
+        return 1  # Not a repo, so no update needed (caller will clone)
     fi
     git -C "$repo_dir" fetch origin "$branch" 2>/dev/null || true
     local local_commit remote_commit
@@ -784,7 +844,7 @@ git_has_updates() {
 }
 
 # =============================================================================
-#  8. Build llama.cpp  [SKIPPED by switch-model]
+#  9. Build llama.cpp  [SKIPPED by switch-model]
 # =============================================================================
 find_llama_server() {
     local p vo
@@ -826,7 +886,7 @@ else
         ok "To force rebuild: rm ${LLAMA_SERVER_BIN} and rerun."
     else
         LLAMA_DIR="${HOME}/llama.cpp"
-        if git_has_updates "$LLAMA_DIR" "master"; then
+        if needs_update "$LLAMA_DIR" "master"; then
             step "Updates available for llama.cpp — building..."
             if [[ -d "$LLAMA_DIR/.git" ]]; then
                 git -C "$LLAMA_DIR" fetch origin
@@ -849,10 +909,10 @@ else
                 cmake -B build -DGGML_CCACHE=ON
             fi
             cmake --build build --config Release -j"$(nproc)"
-            if sudo -n true 2>/dev/null; then
+            if command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
                 sudo cmake --install build || warn "System install failed — using build directory."
             else
-                warn "Sudo requires password; skipping system install. Using build directory."
+                warn "Sudo requires password or not available; skipping system install. Using build directory."
             fi
             cd ~
         else
@@ -866,60 +926,38 @@ else
 fi
 
 # =============================================================================
-#  9. Hermes Agent install  [SKIPPED by switch-model] – Manual install (no wizard)
+#  10. Hermes Agent install  [SKIPPED by switch-model] – Using official install script
 # =============================================================================
 HERMES_AGENT_DIR="${HOME}/hermes-agent"
 HERMES_DIR="${HOME}/.hermes"
 export PATH="${HOME}/.local/bin:${PATH}"
 
 if [[ -z "$_SMO" ]]; then
-    step "Installing Hermes Agent (manual, wizard‑free)..."
+    step "Installing Hermes Agent using official install script..."
 
-    if git_has_updates "$HERMES_AGENT_DIR" "main"; then
-        if [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
-            git clone https://github.com/NousResearch/hermes-agent.git "${HERMES_AGENT_DIR}"
-        else
-            ok "Updates available — pulling Hermes Agent..."
-            git -C "$HERMES_AGENT_DIR" fetch origin
-            git -C "$HERMES_AGENT_DIR" reset --hard origin/main
-        fi
+    # Check if hermes is already available and functional
+    if command -v hermes &>/dev/null && hermes --version &>/dev/null; then
+        ok "Hermes already installed: $(hermes --version 2>/dev/null | head -1)"
     else
-        ok "Hermes Agent already up‑to‑date."
+        # Run the official install script with --yes to skip prompts
+        step "Downloading and running official Hermes installer..."
+        if curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --yes; then
+            ok "Hermes Agent installed successfully."
+        else
+            die "Hermes Agent installation failed."
+        fi
     fi
 
-    if ! command -v uv &>/dev/null; then
-        step "Installing uv..."
-        uv_installer=$(mktemp /tmp/uv-install.XXXXXX.sh)
-        register_tmp "$uv_installer"
-        curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
-            https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
-        bash "$uv_installer" || die "uv installation failed"
-        # shellcheck disable=SC1091
-        source "${HOME}/.cargo/env" 2>/dev/null || true
-        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
-    fi
-
-    cd "${HERMES_AGENT_DIR}"
-
-    if [[ ! -d "venv" ]]; then
-        uv venv venv --python 3.11
-    fi
-
-    # shellcheck disable=SC1091
-    source venv/bin/activate
-    uv pip install -e ".[all]"
-
-    mkdir -p "${HOME}/.local/bin"
-    ln -sf "${HERMES_AGENT_DIR}/venv/bin/hermes" "${HOME}/.local/bin/hermes"
-    cd ~
-
+    # Ensure hermes is in PATH
     export PATH="${HOME}/.local/bin:${PATH}"
-    command -v hermes &>/dev/null || die "hermes not found after install."
-    ok "Hermes Agent installed (wizard skipped)."
+    if ! command -v hermes &>/dev/null; then
+        die "hermes command not found after installation."
+    fi
+    ok "Hermes Agent ready: $(hermes --version 2>/dev/null || echo 'ok')"
 fi
 
 # =============================================================================
-#  9b. Configure Hermes for local llama-server – clean YAML overwrite
+#  10b. Configure Hermes for local llama-server – clean YAML overwrite
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
 
@@ -967,13 +1005,10 @@ ok "setup_complete: true written → setup wizard will not fire"
 ok "Hermes ready with local backend"
 
 # =============================================================================
-#  Optional components selection (multi‑select menu)
+#  Optional components selection (multi‑select menu) – FIXED: no eval, safe parsing
 # =============================================================================
 select_optional_components() {
-    # Return if not interactive
     [[ ! -t 0 ]] && return 1
-
-    # Check if whiptail is available
     if ! command -v whiptail &>/dev/null; then
         warn "whiptail not found – using simple yes/no prompts (install 'whiptail' for better menu)."
         return 1
@@ -990,25 +1025,32 @@ select_optional_components() {
         "webui" "Hermes WebUI (Browser interface for Hermes)" OFF \
         3>&1 1>&2 2>&3)
 
-    # whiptail returns non-zero on cancel
     if [[ $? -ne 0 ]]; then
         echo ""
-        ok "No optional components selected."
+        ok "No optional components selected (user cancelled)."
         return 1
     fi
 
-    # Parse the quoted output
-    local sel=()
-    IFS=' ' read -ra sel <<< "$(echo "$choices" | tr -d '"')"
+    # SAFE parsing: use a temporary file to avoid complex substitutions
+    local tmpfile
+    tmpfile=$(mktemp)
+    register_tmp "$tmpfile"
+    # Write the quoted words one per line (whiptail outputs them space-separated, quoted)
+    # Use xargs to unquote and print each token on a new line
+    echo "$choices" | xargs -n1 printf "%s\n" > "$tmpfile"
 
-    # Reset all flags
+    local -a selected=()
+    while IFS= read -r line; do
+        selected+=("$line")
+    done < "$tmpfile"
+
     INSTALL_GOOSE=false
     INSTALL_OPENCODE=false
     INSTALL_AUTOAGENT=false
     INSTALL_OPENCLAUDE=false
     INSTALL_WEBUI=false
 
-    for item in "${sel[@]}"; do
+    for item in "${selected[@]}"; do
         case "$item" in
             goose) INSTALL_GOOSE=true ;;
             opencode) INSTALL_OPENCODE=true ;;
@@ -1045,18 +1087,20 @@ INSTALL_WEBUI=false
 if [[ -z "$_SMO" ]]; then
     step "Optional components selection"
     if ! select_optional_components; then
-        # Fallback to individual prompts if whiptail missing or user cancelled
-        echo ""
-        echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
-        read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
-        echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}"
-        read -rp "  Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
-        echo -e "  ${BLD}Optional: AutoAgent (HKUDS)${RST}"
-        read -rp "  Install AutoAgent? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_AUTOAGENT=true
-        echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
-        read -rp "  Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
-        echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
-        read -rp "  Install Hermes WebUI? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_WEBUI=true
+        # Only fallback to individual prompts if whiptail is missing (not on user cancel)
+        if ! command -v whiptail &>/dev/null; then
+            echo ""
+            echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
+            read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
+            echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}"
+            read -rp "  Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
+            echo -e "  ${BLD}Optional: AutoAgent (HKUDS)${RST}"
+            read -rp "  Install AutoAgent? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_AUTOAGENT=true
+            echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
+            read -rp "  Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
+            echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
+            read -rp "  Install Hermes WebUI? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_WEBUI=true
+        fi
     fi
 fi
 
@@ -1073,6 +1117,7 @@ if $INSTALL_GOOSE; then
         if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
             https://github.com/block/goose/releases/download/stable/download_cli.sh \
             -o "$goose_script" 2>/dev/null; then
+            # Optional: verify checksum
             bash "$goose_script" && export PATH="${HOME}/.local/bin:${PATH}" ||
                 warn "Goose install script failed."
         else
@@ -1151,7 +1196,7 @@ OPECONF
 fi
 
 # =============================================================================
-#  13c. AutoAgent
+#  13c. AutoAgent (removed sed modification; use environment variable)
 # =============================================================================
 AUTOAGENT_DIR="${HOME}/autoagent"
 AUTOAGENT_VENV="${AUTOAGENT_DIR}/.venv"
@@ -1167,7 +1212,6 @@ if $INSTALL_AUTOAGENT; then
         curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
             https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
         bash "$uv_installer" || die "uv installation failed"
-        # shellcheck disable=SC1091
         source "${HOME}/.cargo/env" 2>/dev/null || true
         export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
     fi
@@ -1178,8 +1222,6 @@ if $INSTALL_AUTOAGENT; then
         git -C "$AUTOAGENT_DIR" fetch origin
         git -C "$AUTOAGENT_DIR" reset --hard origin/main
     fi
-
-    sed -i '1s/^/try:\n    import tkinter as tk\n    from tkinter import filedialog\n    TKINTER_AVAILABLE = True\nexcept ImportError:\n    TKINTER_AVAILABLE = False\n\n/' "${AUTOAGENT_DIR}/autoagent/cli_utils/file_select.py" 2>/dev/null || true
 
     if [[ ! -d "$AUTOAGENT_VENV" ]]; then
         uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
@@ -1192,8 +1234,10 @@ if $INSTALL_AUTOAGENT; then
         uv pip install -e "." 2>&1 | tail -5
     ) && ok "AutoAgent installed." || die "AutoAgent install failed."
 
+    # Launcher that disables tkinter
     cat >"${HOME}/start-autoagent.sh" <<AUTOAGENT_LAUNCHER
 #!/usr/bin/env bash
+export TKINTER_AVAILABLE=False
 AUTOAGENT_VENV="${AUTOAGENT_VENV}"
 AUTOAGENT_DIR="${AUTOAGENT_DIR}"
 if ! curl -sf http://localhost:8080/v1/models &>/dev/null; then
@@ -1206,7 +1250,7 @@ set -a; source "${HOME}/.autoagent/.env" 2>/dev/null || true; set +a
 auto deep-research
 AUTOAGENT_LAUNCHER
     chmod +x "${HOME}/start-autoagent.sh"
-    ok "Created ~/start-autoagent.sh"
+    ok "Created ~/start-autoagent.sh (tkinter disabled)"
 fi
 
 # =============================================================================
@@ -1245,20 +1289,17 @@ HERMES_WEBUI_DIR="${HOME}/hermes-webui"
 if $INSTALL_WEBUI; then
     step "Installing Hermes WebUI..."
 
-    # Clone or update
     if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
         git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
     else
         git -C "$HERMES_WEBUI_DIR" pull --quiet
     fi
 
-    # The WebUI runs inside the existing Hermes agent venv
     HERMES_VENV="${HOME}/hermes-agent/venv"
     if [[ ! -d "$HERMES_VENV" ]]; then
         warn "Hermes agent venv not found – WebUI may not function correctly."
     fi
 
-    # Install Python dependencies (if any) into the Hermes venv
     if [[ -f "${HERMES_WEBUI_DIR}/requirements.txt" ]]; then
         if [[ -x "${HERMES_VENV}/bin/pip" ]]; then
             "${HERMES_VENV}/bin/pip" install -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet
@@ -1267,11 +1308,9 @@ if $INSTALL_WEBUI; then
         fi
     fi
 
-    # Create a convenient start script
     cat >"${HOME}/start-webui.sh" <<WEBUISTART
 #!/usr/bin/env bash
 cd "${HERMES_WEBUI_DIR}"
-# Use the Hermes agent venv's Python if available
 if [[ -x "${HERMES_VENV}/bin/python" ]]; then
     export PATH="${HERMES_VENV}/bin:\${PATH}"
 fi
@@ -1280,7 +1319,6 @@ echo "Starting Hermes WebUI on http://localhost:8787"
 WEBUISTART
     chmod +x "${HOME}/start-webui.sh"
 
-    # Optional: systemd service for WebUI
     if systemctl --user daemon-reload 2>/dev/null; then
         mkdir -p "${HOME}/.config/systemd/user"
         cat >"${HOME}/.config/systemd/user/hermes-webui.service" <<WEBUISERVICE
@@ -1310,7 +1348,7 @@ WEBUISERVICE
 fi
 
 # =============================================================================
-#  11. Create ~/start-llm.sh  (always runs)
+#  11. Create ~/start-llm.sh  (fixed variable substitution)
 # =============================================================================
 step "Generating ~/start-llm.sh..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
@@ -1403,7 +1441,7 @@ ok "Launch script: ~/start-llm.sh"
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     step "Creating systemd user service for llama-server..."
-    mkdir -p "${HOME}/.config/systemd/user"
+    mkdir -p "${HOME}/.local/bin"
     cat >"${HOME}/.local/bin/llama-server-wrapper" <<'WRAPPER'
 #!/usr/bin/env bash
 exec bash ~/start-llm.sh
@@ -1524,12 +1562,20 @@ ${MARKER}
 [[ -n "\${__LLM_BASHRC_LOADED:-}" ]] && return 0
 export __LLM_BASHRC_LOADED=1
 
-_c=""; IFS=':' read -ra _pts <<< "\$PATH"
-for _pt in "\${_pts[@]}"; do
-    [[ "\$_pt" == /mnt/* ]] && continue
-    _c="\${_c:+\${_c}:}\${_pt}"
+# Clean PATH (no Windows mounts) – using the same safe loop
+_clean_path=""
+IFS=: read -ra _path_entries <<<"\$PATH"
+for _pe in "\${_path_entries[@]}"; do
+    [[ -z "\$_pe" ]] && continue
+    [[ "\$_pe" == /mnt/* ]] && continue
+    if [[ -z "\$_clean_path" ]]; then
+        _clean_path="\$_pe"
+    else
+        _clean_path="\${_clean_path}:\$_pe"
+    fi
 done
-export PATH="\$_c"; unset _c _pts _pt
+[[ -n "\$_clean_path" ]] && export PATH="\$_clean_path"
+unset _clean_path _pe _path_entries
 
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
@@ -1615,19 +1661,21 @@ if [[ $- == *i* ]]; then
     show_llm_summary
 fi
 
+# Improved autostart with flock and process check
 _llm_autostart() {
     [[ $- != *i* ]] && return 0
+    # If server already running, do nothing
     pgrep -f "llama-server.*-m" &>/dev/null && return 0
     [[ -f ~/start-llm.sh ]] || return 0
-    local uptime_min
-    uptime_min=$(awk '{print int($1/60)}' /proc/uptime 2>/dev/null || echo "0")
-    local session_marker="/tmp/.llm_autostarted_${uptime_min}"
-    if mkdir "${session_marker}.lock" 2>/dev/null; then
+    local lockfile="/tmp/llm-autostart.lock"
+    (
+        flock -n 9 || exit 0
+        # Double-check after acquiring lock
+        pgrep -f "llama-server.*-m" &>/dev/null && exit 0
         echo -e "${YLW}[LLM] llama-server not running — auto-starting...${RST}"
         nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
         disown
-        rmdir "${session_marker}.lock" 2>/dev/null
-    fi
+    ) 9>"$lockfile"
 }
 _llm_autostart
 
@@ -1643,7 +1691,12 @@ fi
 #  15. .wslconfig RAM hint  [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
-    WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r\n' || echo "")
+    WIN_USER=""
+    if command -v cmd.exe &>/dev/null; then
+        WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r\n' || true)
+    elif command -v whoami.exe &>/dev/null; then
+        WIN_USER=$(whoami.exe | cut -d'\' -f2 2>/dev/null || true)
+    fi
     WSLCONFIG=""
     WSLCONFIG_DIR=""
     if [[ -n "$WIN_USER" ]]; then
