@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # =============================================================================
 #  install.zsh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + optional tools
-#  Version: production-hardened (CLEAN) – all debug prints removed
+#  Version: FINAL – all known issues resolved
 # =============================================================================
 emulate -L zsh -o extendedglob -o errreturn -o pipefail -o no_unset
 
@@ -338,6 +338,9 @@ fi
 if [[ -f ~/.zsh/plugins/powerlevel10k/powerlevel10k.zsh-theme ]]; then
     source ~/.zsh/plugins/powerlevel10k/powerlevel10k.zsh-theme
 fi
+
+# [FIX] Source Powerlevel10k configuration BEFORE the LLM guard
+[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
 $ZSHRC_END_MARKER
 ZSH_CONFIG
@@ -1628,7 +1631,7 @@ if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
 fi
 
 # =============================================================================
-#  14. ~/.zshrc helpers [SKIPPED by switch-model]
+#  14. ~/.zshrc helpers [SKIPPED by switch-model] – FIXED: no output during init
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     step "Adding helpers to ~/.zshrc..."
@@ -1741,10 +1744,18 @@ show_llm_summary() {
     print ""
 }
 
-if [[ -o interactive ]]; then
-    show_llm_summary
-fi
+# [FIX] Show welcome banner only after first prompt (no output during init)
+_llm_welcome_shown=false
+_llm_welcome_banner() {
+    if [[ "$_llm_welcome_shown" == false ]]; then
+        show_llm_summary
+        _llm_welcome_shown=true
+    fi
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _llm_welcome_banner
 
+# [FIX] Auto-start llama-server silently (no console output)
 _llm_autostart() {
     [[ ! -o interactive ]] && return 0
     pgrep -f "llama-server.*-m" &>/dev/null && return 0
@@ -1754,7 +1765,7 @@ _llm_autostart() {
     local lock_fd
     exec {lock_fd}> "$lockfile"
     if flock -n "$lock_fd"; then
-        print -P "${YLW}[LLM] llama-server not running — auto-starting...${RST}"
+        # Start silently – no print here to avoid instant prompt warning
         nohup bash ~/start-llm.sh < /dev/null >> /tmp/llama-server.log 2>&1 &
         disown
         flock -u "$lock_fd"
@@ -1764,6 +1775,9 @@ _llm_autostart() {
 _llm_autostart
 
 alias clear='show_llm_summary; command clear'
+
+# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
+# Note: p10k config is already sourced above (before the LLM guard), so no need to source it again.
 ZSH_FUNCTIONS
         ok "Helpers written to ~/.zshrc."
     else
