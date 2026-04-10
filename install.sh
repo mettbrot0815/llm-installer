@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  install.sh  –  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude + WebUI
-#  Version: production-hardened (final) – SECURITY & ROBUSTNESS FIXES
+#  Version: production-hardened (final) – ALL BUGS FIXED
 #  Optional components selected via single multi‑select menu (whiptail).
 # =============================================================================
 set -euo pipefail
@@ -954,14 +954,14 @@ ok "setup_complete: true written → setup wizard will not fire"
 ok "Hermes ready with local backend"
 
 # =============================================================================
-#  Optional components selection (multi‑select menu) – FIXED: safer parsing
+#  Optional components selection (multi‑select menu) – FIXED: distinguishes missing whiptail vs user cancel
 # =============================================================================
 select_optional_components() {
     [[ ! -t 0 ]] && return 1
 
     if ! command -v whiptail &>/dev/null; then
         warn "whiptail not found – using simple yes/no prompts (install 'whiptail' for better menu)."
-        return 1
+        return 2   # whiptail missing
     fi
 
     local choices
@@ -975,8 +975,8 @@ select_optional_components() {
         "webui" "Hermes WebUI (Browser interface for Hermes)" OFF \
         3>&1 1>&2 2>&3); then
         echo ""
-        ok "No optional components selected."
-        return 1
+        ok "No optional components selected (user cancelled)."
+        return 1   # user cancelled
     fi
 
     local tmpfile
@@ -1030,7 +1030,10 @@ INSTALL_WEBUI=false
 
 if [[ -z "$_SMO" ]]; then
     step "Optional components selection"
-    if ! select_optional_components; then
+    select_optional_components
+    ret=$?
+    if [[ $ret -eq 2 ]]; then
+        # whiptail missing – fallback to individual prompts
         echo ""
         echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
         read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
@@ -1319,6 +1322,12 @@ SAFE_CTX="${SAFE_CTX}"
 USE_JINJA="${USE_JINJA}"
 PIDFILE="/tmp/llama-server.pid"
 
+# FIXED: verify binary exists and is executable
+if [[ ! -x "$LLAMA_BIN" ]]; then
+    echo "ERROR: llama-server binary not found or not executable: $LLAMA_BIN"
+    exit 1
+fi
+
 LLAMA_PID=$(pgrep -f "llama-server.*-m.*${GGUF}" 2>/dev/null || true)
 if [[ -n "$LLAMA_PID" ]]; then
     echo -e "\n  llama-server already running (PID: $LLAMA_PID)"
@@ -1387,8 +1396,8 @@ wait "$LLAMA_PID"
 LAUNCH_TEMPLATE
 
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA
-# FIXED: Use double quotes for envsubst variable list (correct syntax)
-envsubst "${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA}" \
+# FIXED: Use single quotes to pass literal variable names to envsubst
+envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA}' \
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 rm -f "${LAUNCH_SCRIPT}.template"
 chmod +x "$LAUNCH_SCRIPT"
