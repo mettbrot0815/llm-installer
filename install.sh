@@ -4,8 +4,12 @@
 #  Version: production-hardened (final clean)
 #  Optional components selected via single multi‑select menu (whiptail).
 #
-#  ShellCheck: clean (exit 0).  See README.md for test results.
+#  Features:
+#    - Smart version checking - only downloads/installs when outdated
+#    - Caches installed versions in ~/.llm-versions
+#    - Skips redundant downloads
 # =============================================================================
+
 # FIX-H-6: Require Bash 4.0+ for associative arrays (declare -A).
 if ((BASH_VERSINFO[0] < 4)); then
     echo "ERROR: Bash 4.0 or later is required (found ${BASH_VERSION})." >&2
@@ -17,6 +21,56 @@ set -euo pipefail
 # ── SWITCH_MODEL_ONLY sentinel ─────────────────────────────────────────────────
 _SMO="${SWITCH_MODEL_ONLY:-}"
 unset SWITCH_MODEL_ONLY
+
+# ── Version tracking file ──────────────────────────────────────────────────────
+readonly VERSION_FILE="${HOME}/.llm-versions"
+mkdir -p "$(dirname "$VERSION_FILE")"
+touch "$VERSION_FILE"
+
+_get_installed_version() {
+    local component="$1"
+    if [[ -f "$VERSION_FILE" ]]; then
+        grep "^${component}=" "$VERSION_FILE" 2>/dev/null | head -1 | cut -d'=' -f2-
+    fi
+}
+
+_set_installed_version() {
+    local component="$1" version="$2"
+    if [[ -f "$VERSION_FILE" ]] && grep -q "^${component}=" "$VERSION_FILE" 2>/dev/null; then
+        local tmp
+        tmp=$(mktemp "${VERSION_FILE}.XXXXXX")
+        while IFS= read -r line; do
+            if [[ "$line" == "${component}="* ]]; then
+                echo "${component}=${version}"
+            else
+                echo "$line"
+            fi
+        done < "$VERSION_FILE" > "$tmp"
+        mv -f "$tmp" "$VERSION_FILE"
+    else
+        echo "${component}=${version}" >> "$VERSION_FILE"
+    fi
+    chmod 600 "$VERSION_FILE"
+}
+
+_version_compare() {
+    # Returns 0 if $1 >= $2, 1 otherwise
+    local ver1="$1" ver2="$2"
+    if [[ "$ver1" == "$ver2" ]]; then
+        return 0
+    fi
+    local IFS=.
+    local i ver1_arr=($ver1) ver2_arr=($ver2)
+    for ((i=0; i<${#ver1_arr[@]} || i<${#ver2_arr[@]}; i++)); do
+        local v1=${ver1_arr[i]:-0} v2=${ver2_arr[i]:-0}
+        if ((10#$v1 > 10#$v2)); then
+            return 0
+        elif ((10#$v1 < 10#$v2)); then
+            return 1
+        fi
+    done
+    return 0
+}
 
 # ── Strip Windows /mnt/* from PATH ────────────────────────────────────────────
 _clean_path=""
@@ -31,17 +85,15 @@ unset _clean_path _path_parts _p
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 readonly RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 readonly CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
-# FIX-ST-3: Do NOT export colour codes – they are only used within this script.
-#   Exporting pollutes the environment of every child process.
 
 step() { echo -e "\n${CYN}[*] $*${RST}"; }
 ok()   { echo -e "${GRN}[+] $*${RST}"; }
 warn() { echo -e "${YLW}[!] $*${RST}"; }
 die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
+skip() { echo -e "${CYN}[~] $*${RST}"; }
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
-# shellcheck disable=SC2317  # cleanup called by trap, not directly
 cleanup() {
     local f
     for f in "${TMPFILES[@]}"; do
@@ -51,11 +103,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 register_tmp() { TMPFILES+=("$1"); }
 
-# ── FIX-H-3: Save original umask so we can restore it on exit ─────────────────
+# ── Save original umask so we can restore it on exit ─────────────────
 _ORIG_UMASK=$(umask -p)
-# shellcheck disable=SC2317
 restore_umask() { eval "$_ORIG_UMASK"; }
-trap restore_umask EXIT   # chained with cleanup above
+trap restore_umask EXIT
 
 # ── Banner ─────────────────────────────────────────────────────────────────────
 echo -e "${BLD}${CYN}"
@@ -69,6 +120,7 @@ else
     cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════════╗
 ║  Ubuntu WSL2  ·  llama.cpp + Hermes + Goose + AutoAgent      ║
+║  Smart downloads - only installs outdated components        ║
 ╚══════════════════════════════════════════════════════════════╝
 BANNER
 fi
@@ -84,8 +136,6 @@ fi
 
 # =============================================================================
 #  1. HuggingFace token – SAFE EXTRACTION
-#  FIX-H-2 / FIX-S-1: Tokens are stored in ~/.llm-tokens (mode 600), not
-#  in ~/.bashrc.  The .bashrc alias simply sources that file.
 # =============================================================================
 readonly TOKEN_FILE="${HOME}/.llm-tokens"
 
@@ -99,7 +149,6 @@ _load_token_from_file() {
 _save_token_to_file() {
     local key="$1" val="$2"
     if [[ -f "$TOKEN_FILE" ]] && grep -qF "${key}=" "$TOKEN_FILE" 2>/dev/null; then
-        # Replace existing entry in-place
         local tmp
         tmp=$(mktemp "${TOKEN_FILE}.XXXXXX")
         register_tmp "$tmp"
@@ -165,8 +214,6 @@ export HF_TOKEN
 
 # =============================================================================
 #  2. GitHub token – SECURE EXTRACTION AND GIT CONFIG
-#  FIX-H-1: Use git credential-store with a protected file (mode 600)
-#  instead of embedding the token verbatim in a shell-function helper.
 # =============================================================================
 _GH_ENV="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 GITHUB_TOKEN=""
@@ -212,18 +259,12 @@ fi
 
 if [[ -n "$GITHUB_TOKEN" ]]; then
     export GITHUB_TOKEN
-    # FIX-H-1: Use credential-store with a mode-600 protected file.
-    #   The old approach embedded the raw token in a shell function in .gitconfig,
-    #   making it visible to any reader of that file and in process listings.
     _git_creds="${HOME}/.git-credentials"
     if [[ ! -f "$_git_creds" ]] || ! grep -qF "x-oauth-basic" "$_git_creds" 2>/dev/null; then
-        # Format: https://<token>@x-oauth-basic@github.com
-        # Git will use this for authenticated requests.
         umask 077
         echo "https://${GITHUB_TOKEN}@x-oauth-basic@github.com" >> "$_git_creds"
         git config --global credential.helper store 2>/dev/null || \
             warn "Could not set git credential helper."
-        # Restore umask immediately
         eval "$_ORIG_UMASK"
     fi
     if git config --global credential.helper 2>/dev/null | grep -q store; then
@@ -235,8 +276,7 @@ if [[ -n "$GITHUB_TOKEN" ]]; then
 fi
 
 # =============================================================================
-#  3. System packages  [SKIPPED by switch-model]
-#  Renumbered from original section 2 for sequential consistency (FIX-M-1).
+#  3. System packages [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     step "Updating system packages..."
@@ -250,22 +290,21 @@ if [[ -z "$_SMO" ]]; then
         procps gettext-base
     ok "System packages ready."
 
-    step "Checking Python 3.11..."
-    if python3.11 --version &>/dev/null; then
-        ok "Python 3.11: $(python3.11 --version)"
+    step "Checking Python version..."
+    if python3 --version 2>&1 | grep -qE '3\.(1[0-9]|[2-9][0-9])'; then
+        ok "Python 3.10+ found: $(python3 --version)"
     else
         sudo add-apt-repository -y ppa:deadsnakes/ppa
         sudo apt-get update -qq
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             python3.11 python3.11-venv
-        ok "Python 3.11 installed: $(python3.11 --version)"
+        sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+        ok "Python 3.11 installed and set as default"
     fi
 fi
 
 # =============================================================================
-#  4. Hardware detection  (always runs)
-#  FIX-P-1: Cache nvidia-smi output to avoid calling it twice.
-#  Renumbered from original section 3.
+#  4. Hardware detection (always runs)
 # =============================================================================
 step "Detecting hardware..."
 RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
@@ -281,8 +320,6 @@ VRAM_MiB=0
 GPU_NAME="None detected"
 
 if command -v nvidia-smi &>/dev/null; then
-    # FIX-P-1: Capture nvidia-smi output once; reuse for check and values.
-    #   FIX-Q-1: Separate local declaration from assignment (SC2155).
     local_nvsmi_out=""
     local_nvsmi_out=$(nvidia-smi --query-gpu=name,memory.total \
         --format=csv,noheader 2>/dev/null | head -1) || true
@@ -319,28 +356,39 @@ if [[ -z "$_SMO" && "$HAS_NVIDIA" != "true" ]]; then
 fi
 
 # =============================================================================
-#  5. CUDA toolkit  [SKIPPED by switch-model; paths re-exported if GPU present]
-#  FIX-H-8: Add --proto '=https' and --max-redirs to curl calls.
-#  Renumbered from original section 4.
+#  5. CUDA toolkit [SKIPPED by switch-model; paths re-exported if GPU present]
 # =============================================================================
 if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
     step "Checking CUDA toolkit..."
     if command -v nvcc &>/dev/null; then
-        ok "CUDA already installed: $(nvcc --version 2>/dev/null | head -1)"
+        CUDA_VERSION=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9.]*\).*/\1/')
+        INSTALLED_CUDA=$(_get_installed_version "cuda")
+        if _version_compare "$CUDA_VERSION" "12.6" && [[ "$INSTALLED_CUDA" == "12.6" ]]; then
+            ok "CUDA 12.6 already installed (${CUDA_VERSION}) — skipping"
+        else
+            warn "CUDA ${CUDA_VERSION:-none} found, upgrading to 12.6..."
+            _install_cuda
+        fi
     else
         step "Installing CUDA toolkit 12.6 for WSL2..."
-        cuda_deb=$(mktemp /tmp/cuda-keyring.XXXXXX.deb)
-        register_tmp "$cuda_deb"
-        curl -fsSL --proto '=https' --max-redirs 5 \
-            --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 \
-            https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb \
-            -o "$cuda_deb" || die "Failed to download CUDA keyring"
-        sudo dpkg -i "$cuda_deb"
-        sudo apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6
-        ok "CUDA toolkit 12.6 installed."
+        _install_cuda
     fi
 fi
+
+_install_cuda() {
+    cuda_deb=$(mktemp /tmp/cuda-keyring.XXXXXX.deb)
+    register_tmp "$cuda_deb"
+    curl -fsSL --proto '=https' --max-redirs 5 \
+        --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 \
+        https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb \
+        -o "$cuda_deb" || die "Failed to download CUDA keyring"
+    sudo dpkg -i "$cuda_deb"
+    sudo apt-get update -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6
+    _set_installed_version "cuda" "12.6"
+    ok "CUDA toolkit 12.6 installed."
+}
+
 if [[ "$HAS_NVIDIA" == "true" ]]; then
     export PATH="/usr/local/cuda/bin:${PATH}"
     export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
@@ -348,16 +396,10 @@ fi
 
 # =============================================================================
 #  6. Model catalogue
-#  Renumbered from original section 5.
-#  FIX-H-7: Added inline comment explaining field count; consider adding
-#  validation if descriptions ever contain '|'.
 # =============================================================================
 readonly MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
 
-# Format per entry (10 pipe-delimited fields):
-#   id | hf_repo | gguf_filename | display_name | size_gb | context_window
-#   min_ram_gib | min_vram_gib | tier | tags | description (absorbed by last var)
 MODELS=(
     "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
     "2|unsloth/Qwen3.5-2B-GGUF|Qwen3.5-2B-Q4_K_M.gguf|Qwen 3.5 2B|1.0|256K|3|0|tiny|chat,multilingual|Alibaba · ultra-fast"
@@ -375,7 +417,6 @@ MODELS=(
     "14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
 )
 
-# ── Grade helpers ──────────────────────────────────────────────────────────────
 grade_model() {
     local min_ram="$1" min_vram="$2"
     local ram_gib="$3" vram_gib="$4" has_nvidia="$5"
@@ -438,8 +479,6 @@ grade_color() {
     esac
 }
 
-# ── Context + Jinja settings ───────────────────────────────────────────────────
-# FIX-ST-1: Use declare -g to make it explicit that these are globals.
 apply_model_settings() {
     local gguf="$1"
     declare -g SAFE_CTX USE_JINJA
@@ -471,7 +510,6 @@ apply_model_settings() {
     ok "Context window: ${SAFE_CTX} tokens"
 }
 
-# ── Draw model table ───────────────────────────────────────────────────────────
 show_model_table() {
     /usr/bin/clear 2>/dev/null || true
     echo -e "${BLD}${CYN}"
@@ -562,8 +600,6 @@ HDR
     echo ""
 }
 
-# ── HF URL / repo download ─────────────────────────────────────────────────────
-# FIX-H-8: Add --proto '=https' and --max-redirs to all curl calls.
 download_from_hf_url() {
     echo ""
     echo -e "  ${BLD}Download via HuggingFace${RST}"
@@ -673,10 +709,7 @@ PYLIST
 }
 
 # =============================================================================
-#  7. HF CLI setup  (always runs)
-#  FIX-D-1: Replace --break-system-packages with venv-based install where
-#  possible.  For the CLI tool, use --user but note the PEP 668 trade-off.
-#  Renumbered from original section 6.
+#  7. HF CLI setup (always runs)
 # =============================================================================
 step "Setting up HuggingFace CLI..."
 export PATH="${HOME}/.local/bin:${PATH}"
@@ -687,11 +720,20 @@ HF_CLI_B="${HOME}/.local/bin/huggingface-cli"
 if [[ ! -x "$HF_CLI_A" && ! -x "$HF_CLI_B" ]]; then
     pip3 install --quiet --user huggingface_hub 2>/dev/null || \
         pip3 install --quiet --user --break-system-packages huggingface_hub || \
-        die "Failed to install huggingface_hub. Try: python3 -m venv ~/.hf-venv && source ~/.hf-venv/bin/activate && pip install huggingface_hub"
-fi
-if [[ -z "$_SMO" ]]; then
-    pip3 install --quiet --user --upgrade huggingface_hub 2>/dev/null || \
-        pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub 2>&1 | tail -2 || true
+        die "Failed to install huggingface_hub"
+    _set_installed_version "huggingface_hub" "$(pip3 show huggingface_hub 2>/dev/null | grep Version | awk '{print $2}')"
+else
+    CURRENT_HF_VER=$(pip3 show huggingface_hub 2>/dev/null | grep Version | awk '{print $2}')
+    INSTALLED_HF_VER=$(_get_installed_version "huggingface_hub")
+    if [[ -n "$CURRENT_HF_VER" ]] && [[ "$CURRENT_HF_VER" != "$INSTALLED_HF_VER" ]]; then
+        warn "huggingface_hub version mismatch (installed: $INSTALLED_HF_VER, current: $CURRENT_HF_VER)"
+        step "Upgrading huggingface_hub..."
+        pip3 install --quiet --user --upgrade huggingface_hub 2>/dev/null || \
+            pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub
+        _set_installed_version "huggingface_hub" "$CURRENT_HF_VER"
+    else
+        skip "huggingface_hub already up to date (${CURRENT_HF_VER})"
+    fi
 fi
 
 if [[ -x "$HF_CLI_A" ]]; then
@@ -722,8 +764,7 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
 fi
 
 # =============================================================================
-#  8. Model selector  (always runs)
-#  Renumbered from original section 5 (continued).
+#  8. Model selector (always runs)
 # =============================================================================
 NUM_MODELS=${#MODELS[@]}
 SEL_HF_REPO=""
@@ -744,21 +785,31 @@ while true; do
         CHOICE="5"
         break
     fi
-    read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE || {
-        echo ""
-        warn "EOF detected. Exiting."
-        exit 0
-    }
-    if [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
+    
+    if [[ -n "${INSTALL_TIMEOUT:-}" ]]; then
+        read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" -t "$INSTALL_TIMEOUT" CHOICE || {
+            warn "Timeout - defaulting to model 5"
+            CHOICE="5"
+            break
+        }
+    else
+        read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE || {
+            echo ""
+            warn "EOF detected. Exiting."
+            exit 0
+        }
+    fi
+    
+    if [[ "$CHOICE" =~ ^[Uu]$ ]]; then
         download_from_hf_url
         break
     elif [[ "$CHOICE" =~ ^[0-9]+$ ]] && ((CHOICE >= 1 && CHOICE <= NUM_MODELS)); then
         break
     fi
-    warn "Enter a number between 1 and ${NUM_MODELS}, or 'u'."
+    warn "Invalid choice: '$CHOICE'"
 done
 
-if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
+if [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
     while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
         min_ram min_vram tier tags _desc; do
         idx="${idx// /}"
@@ -800,12 +851,11 @@ if [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
 fi
 
 # =============================================================================
-#  9. Download model from catalogue if not present  (always runs)
-#  Renumbered from original section 7.
+#  9. Download model from catalogue if not present (always runs)
 # =============================================================================
 if [[ -f "$GGUF_PATH" ]]; then
     ok "Model already on disk: ${GGUF_PATH} — skipping download."
-elif [[ "$CHOICE" != "u" && "$CHOICE" != "U" ]]; then
+elif [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
     step "Downloading ${SEL_NAME} from HuggingFace..."
     warn "This may take several minutes."
 
@@ -856,7 +906,7 @@ needs_update() {
     local repo_dir="$1"
     local branch="${2:-main}"
     if [[ ! -d "$repo_dir/.git" ]]; then
-        return 1
+        return 0  # Needs clone
     fi
     git -C "$repo_dir" fetch origin "$branch" 2>/dev/null || true
     local local_commit remote_commit
@@ -866,8 +916,7 @@ needs_update() {
 }
 
 # =============================================================================
-#  10. Build llama.cpp  [SKIPPED by switch-model]
-#  Renumbered from original section 8.
+#  10. Build llama.cpp [SKIPPED by switch-model]
 # =============================================================================
 find_llama_server() {
     local p vo
@@ -895,6 +944,13 @@ find_llama_server() {
     return 1
 }
 
+_get_llama_version() {
+    local bin="$1"
+    if [[ -x "$bin" ]]; then
+        "$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+    fi
+}
+
 if [[ -n "$_SMO" ]]; then
     step "Locating llama-server (switch-model — skipping build)..."
     LLAMA_SERVER_BIN=$(find_llama_server || true)
@@ -905,12 +961,23 @@ else
     step "Checking llama.cpp..."
     LLAMA_SERVER_BIN=$(find_llama_server || true)
     if [[ -n "$LLAMA_SERVER_BIN" ]]; then
-        ok "llama-server: ${LLAMA_SERVER_BIN} — skipping build."
-        ok "To force rebuild: rm ${LLAMA_SERVER_BIN} and rerun."
+        CURRENT_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
+        INSTALLED_VER=$(_get_installed_version "llama.cpp")
+        if _version_compare "${CURRENT_VER:-0}" "1.0" && [[ "$CURRENT_VER" == "$INSTALLED_VER" ]]; then
+            ok "llama-server ${CURRENT_VER} already installed — skipping build"
+        else
+            warn "llama.cpp version mismatch (installed: ${INSTALLED_VER:-none}, current: ${CURRENT_VER:-none})"
+            step "Rebuilding llama.cpp..."
+            _rebuild_llama=true
+        fi
     else
+        _rebuild_llama=true
+    fi
+    
+    if [[ "${_rebuild_llama:-false}" == "true" ]]; then
         LLAMA_DIR="${HOME}/llama.cpp"
         if needs_update "$LLAMA_DIR" "master"; then
-            step "Updates available for llama.cpp — building..."
+            step "Building/updating llama.cpp..."
             if [[ -d "$LLAMA_DIR/.git" ]]; then
                 git -C "$LLAMA_DIR" fetch origin
                 git -C "$LLAMA_DIR" reset --hard origin/master
@@ -918,7 +985,6 @@ else
                 git clone https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
             fi
 
-            # FIX-H-5: Use cd -- "$HOME" instead of cd ~.
             cd -- "$LLAMA_DIR"
             if command -v ccache &>/dev/null; then
                 export CC="ccache gcc" CXX="ccache g++"
@@ -939,8 +1005,12 @@ else
                 warn "Sudo requires password; skipping system install. Using build directory."
             fi
             cd -- "$HOME"
+            
+            NEW_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
+            _set_installed_version "llama.cpp" "${NEW_VER:-latest}"
+            ok "llama.cpp built successfully"
         else
-            ok "llama.cpp already up‑to‑date."
+            skip "llama.cpp already up‑to‑date."
         fi
 
         LLAMA_SERVER_BIN=$(find_llama_server || true)
@@ -950,89 +1020,84 @@ else
 fi
 
 # =============================================================================
-#  11. Hermes Agent install  [SKIPPED by switch-model]
-#  Renumbered from original section 9.
-#  FIX-D-1: Use venv for uv install instead of --break-system-packages.
-#  FIX-Q-1: Separate local declaration from assignment.
+#  11. Hermes Agent install - FIXED VERSION using official installer
 # =============================================================================
-HERMES_AGENT_DIR="${HOME}/hermes-agent"
-HERMES_DIR="${HOME}/.hermes"
-export PATH="${HOME}/.local/bin:${PATH}"
+HERMES_HOME="${HOME}/.hermes"
+HERMES_INSTALL_DIR="${HERMES_HOME}/hermes-agent"
 
-_install_uv() {
-    step "Installing uv..."
-    local uv_installer
-    uv_installer=$(mktemp /tmp/uv-install.XXXXXX.sh)
-    register_tmp "$uv_installer"
+_check_hermes_version() {
+    if command -v hermes &>/dev/null; then
+        hermes --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+    fi
+}
+
+_install_hermes_agent() {
+    step "Installing Hermes Agent (official method)..."
+    
+    # Remove old broken installation if exists
+    if [[ -d "${HERMES_INSTALL_DIR}" ]]; then
+        warn "Removing old Hermes installation..."
+        rm -rf "${HERMES_INSTALL_DIR}"
+    fi
+    
+    # Download and run official installer
+    local install_script
+    install_script=$(mktemp /tmp/hermes-install.XXXXXX.sh)
+    register_tmp "$install_script"
+    
     curl -fsSL --proto '=https' --max-redirs 5 \
-        --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 \
-        https://astral.sh/uv/install.sh -o "$uv_installer" || die "Failed to download uv installer"
-    bash "$uv_installer" || die "uv installation failed"
-    # shellcheck disable=SC1091
-    source "${HOME}/.cargo/env" 2>/dev/null || true
-    export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+        https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
+        -o "$install_script" || die "Failed to download Hermes installer"
+    
+    # Run with skip-setup to avoid wizard
+    bash "$install_script" --branch main --skip-setup
+    
+    # Verify installation
+    if [[ -x "${HOME}/.local/bin/hermes" ]]; then
+        ok "Hermes Agent installed successfully"
+        export PATH="${HOME}/.local/bin:${PATH}"
+        NEW_VER=$(_check_hermes_version)
+        _set_installed_version "hermes" "${NEW_VER:-latest}"
+    elif [[ -x "${HERMES_INSTALL_DIR}/venv/bin/hermes" ]]; then
+        ok "Hermes Agent installed (venv mode)"
+        mkdir -p "${HOME}/.local/bin"
+        ln -sf "${HERMES_INSTALL_DIR}/venv/bin/hermes" "${HOME}/.local/bin/hermes"
+        NEW_VER=$(_check_hermes_version)
+        _set_installed_version "hermes" "${NEW_VER:-latest}"
+    else
+        die "Hermes Agent installation failed"
+    fi
 }
 
 if [[ -z "$_SMO" ]]; then
-    step "Installing Hermes Agent (manual, wizard‑free)..."
-
-    if needs_update "$HERMES_AGENT_DIR" "main"; then
-        if [[ ! -d "${HERMES_AGENT_DIR}/.git" ]]; then
-            git clone https://github.com/NousResearch/hermes-agent.git "${HERMES_AGENT_DIR}"
-        else
-            ok "Updates available — pulling Hermes Agent..."
-            git -C "$HERMES_AGENT_DIR" fetch origin
-            git -C "$HERMES_AGENT_DIR" reset --hard origin/main
-        fi
+    CURRENT_HERMES=$(_check_hermes_version)
+    INSTALLED_HERMES=$(_get_installed_version "hermes")
+    if [[ -n "$CURRENT_HERMES" ]] && [[ "$CURRENT_HERMES" == "$INSTALLED_HERMES" ]]; then
+        skip "Hermes Agent already up to date (${CURRENT_HERMES})"
     else
-        ok "Hermes Agent already up‑to‑date."
+        _install_hermes_agent
     fi
-
-    if ! command -v uv &>/dev/null; then
-        _install_uv
-    fi
-
-    # FIX-H-5: Use cd -- "$DIR" instead of cd ~.
-    cd -- "${HERMES_AGENT_DIR}"
-
-    if [[ ! -d "venv" ]]; then
-        uv venv venv --python 3.11
-    fi
-
-    # shellcheck disable=SC1091
-    source venv/bin/activate
-    uv pip install -e ".[all]"
-
-    mkdir -p "${HOME}/.local/bin"
-    ln -sf "${HERMES_AGENT_DIR}/venv/bin/hermes" "${HOME}/.local/bin/hermes"
-    cd -- "$HOME"
-
-    export PATH="${HOME}/.local/bin:${PATH}"
-    command -v hermes &>/dev/null || die "hermes not found after install."
-    ok "Hermes Agent installed (wizard skipped)."
 fi
 
 # =============================================================================
 #  11b. Configure Hermes for local llama-server – clean YAML overwrite
-#  Renumbered from original 9b.
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
 
-# FIX-H-3: Restrictive umask only for the duration of sensitive file creation.
 umask 077
-mkdir -p "${HERMES_DIR}"/{cron,sessions,logs,memories,skills}
+mkdir -p "${HERMES_HOME}"/{cron,sessions,logs,memories,skills}
 
-if [[ -f "${HERMES_DIR}/.env" && ! -L "${HERMES_DIR}/.env" ]]; then
-    cp "${HERMES_DIR}/.env" "${HERMES_DIR}/.env.backup.$(date +%Y%m%d%H%M%S)"
+if [[ -f "${HERMES_HOME}/.env" && ! -L "${HERMES_HOME}/.env" ]]; then
+    cp "${HERMES_HOME}/.env" "${HERMES_HOME}/.env.backup.$(date +%Y%m%d%H%M%S)"
     ok "Backed up existing $HOME/.hermes/.env"
 fi
-cat >"${HERMES_DIR}/.env" <<'ENV'
+cat >"${HERMES_HOME}/.env" <<'ENV'
 OPENAI_API_KEY=sk-no-key-needed
 OPENAI_BASE_URL=http://localhost:8080/v1
 ENV
 ok "$HOME/.hermes/.env written."
 
-CONFIG_FILE="${HERMES_DIR}/config.yaml"
+CONFIG_FILE="${HERMES_HOME}/config.yaml"
 
 if [[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]]; then
     cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%Y%m%d%H%M%S)"
@@ -1067,14 +1132,13 @@ ok "Hermes ready with local backend"
 
 # =============================================================================
 #  12. Optional components selection (multi‑select menu)
-#  Renumbered from original unnumbered section.
 # =============================================================================
 select_optional_components() {
     [[ ! -t 0 ]] && return 1
 
     if ! command -v whiptail &>/dev/null; then
         warn "whiptail not found – using simple yes/no prompts (install 'whiptail' for better menu)."
-        return 2   # whiptail missing
+        return 2
     fi
 
     local choices
@@ -1089,7 +1153,7 @@ select_optional_components() {
         3>&1 1>&2 2>&3); then
         echo ""
         ok "No optional components selected (user cancelled)."
-        return 1   # user cancelled
+        return 1
     fi
 
     local tmpfile
@@ -1102,7 +1166,6 @@ select_optional_components() {
         selected+=("$line")
     done < "$tmpfile"
 
-    # FIX-ST-1: Use declare -g to explicitly set globals from this function.
     declare -g INSTALL_GOOSE=false
     declare -g INSTALL_OPENCODE=false
     declare -g INSTALL_AUTOAGENT=false
@@ -1148,7 +1211,6 @@ if [[ -z "$_SMO" ]]; then
     select_optional_components
     ret=$?
     if [[ $ret -eq 2 ]]; then
-        # whiptail missing – fallback to individual prompts
         echo ""
         echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
         read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
@@ -1164,13 +1226,23 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-#  13a. Goose
+#  13a. Goose - with version checking
 # =============================================================================
-if $INSTALL_GOOSE; then
-    step "Installing Goose CLI..."
+_get_goose_version() {
     if command -v goose &>/dev/null; then
-        ok "Goose: $(goose --version 2>/dev/null || echo 'installed')"
+        goose --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+    fi
+}
+
+if $INSTALL_GOOSE; then
+    step "Checking Goose CLI..."
+    CURRENT_GOOSE=$(_get_goose_version)
+    INSTALLED_GOOSE=$(_get_installed_version "goose")
+    
+    if [[ -n "$CURRENT_GOOSE" ]] && [[ "$CURRENT_GOOSE" == "$INSTALLED_GOOSE" ]]; then
+        skip "Goose already up to date (${CURRENT_GOOSE})"
     else
+        step "Installing/Updating Goose CLI..."
         goose_script=$(mktemp /tmp/goose-install.XXXXXX.sh)
         register_tmp "$goose_script"
         if curl -fsSL --proto '=https' --max-redirs 5 \
@@ -1179,6 +1251,9 @@ if $INSTALL_GOOSE; then
             -o "$goose_script" 2>/dev/null; then
             if bash "$goose_script"; then
                 export PATH="${HOME}/.local/bin:${PATH}"
+                NEW_GOOSE=$(_get_goose_version)
+                _set_installed_version "goose" "${NEW_GOOSE:-latest}"
+                ok "Goose installed/updated"
             else
                 warn "Goose install script failed."
             fi
@@ -1205,13 +1280,23 @@ GOOSECONF
 fi
 
 # =============================================================================
-#  13b. OpenCode
+#  13b. OpenCode - with version checking
 # =============================================================================
-if $INSTALL_OPENCODE; then
-    step "Installing OpenCode..."
+_get_opencode_version() {
     if command -v opencode &>/dev/null; then
-        ok "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
+        opencode --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+    fi
+}
+
+if $INSTALL_OPENCODE; then
+    step "Checking OpenCode..."
+    CURRENT_OPENCODE=$(_get_opencode_version)
+    INSTALLED_OPENCODE=$(_get_installed_version "opencode")
+    
+    if [[ -n "$CURRENT_OPENCODE" ]] && [[ "$CURRENT_OPENCODE" == "$INSTALLED_OPENCODE" ]]; then
+        skip "OpenCode already up to date (${CURRENT_OPENCODE})"
     else
+        step "Installing/Updating OpenCode..."
         opencode_installer=$(mktemp /tmp/opencode-install.XXXXXX.sh)
         register_tmp "$opencode_installer"
         if curl -fsSL --proto '=https' --max-redirs 5 \
@@ -1219,6 +1304,9 @@ if $INSTALL_OPENCODE; then
             https://opencode.ai/install -o "$opencode_installer" 2>/dev/null; then
             if XDG_BIN_DIR="${HOME}/.local/bin" bash "$opencode_installer" 2>/dev/null; then
                 export PATH="${HOME}/.local/bin:${PATH}"
+                NEW_OPENCODE=$(_get_opencode_version)
+                _set_installed_version "opencode" "${NEW_OPENCODE:-latest}"
+                ok "OpenCode installed/updated"
             else
                 warn "OpenCode install script failed."
             fi
@@ -1264,97 +1352,119 @@ OPECONF
 fi
 
 # =============================================================================
-#  13c. AutoAgent
-#  Renumbered from original 13c.
-#  FIX-C-1: Replace the ( ... ) subshell that masks set -e with an explicit
-#  function that checks exit status correctly.
-#  FIX-Q-1: Separate local declarations from assignments.
-#  FIX-H-5: Use cd -- "$DIR".
+#  13c. AutoAgent - FIXED VERSION with version checking
 # =============================================================================
 AUTOAGENT_DIR="${HOME}/autoagent"
 AUTOAGENT_VENV="${AUTOAGENT_DIR}/.venv"
 
-# FIX-C-1: Dedicated function for AutoAgent install – preserves set -e semantics.
+_get_autoagent_version() {
+    if [[ -f "${AUTOAGENT_VENV}/bin/python" ]]; then
+        "${AUTOAGENT_VENV}/bin/python" -c "import autoagent; print(autoagent.__version__)" 2>/dev/null || echo ""
+    fi
+}
+
 _install_autoagent() {
-    export VIRTUAL_ENV="${AUTOAGENT_VENV}"
-    export PATH="${AUTOAGENT_VENV}/bin:${PATH}"
     cd -- "${AUTOAGENT_DIR}"
-    # Capture output AND check exit status correctly.
-    local install_output
-    install_output=$(uv pip install -e "." 2>&1) || return 1
-    echo "$install_output" | tail -5
+    "${AUTOAGENT_VENV}/bin/pip" install --upgrade pip setuptools wheel
+    if ! "${AUTOAGENT_VENV}/bin/pip" install -e .; then
+        return 1
+    fi
     return 0
 }
 
 if $INSTALL_AUTOAGENT; then
-    step "Installing AutoAgent..."
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk 2>/dev/null || true
-
-    if ! command -v uv &>/dev/null; then
-        _install_uv
-    fi
-
-    if [[ ! -d "${AUTOAGENT_DIR}/.git" ]]; then
-        git clone https://github.com/HKUDS/AutoAgent.git "${AUTOAGENT_DIR}"
+    step "Checking AutoAgent..."
+    CURRENT_AUTOAGENT=$(_get_autoagent_version)
+    INSTALLED_AUTOAGENT=$(_get_installed_version "autoagent")
+    
+    if [[ -n "$CURRENT_AUTOAGENT" ]] && [[ "$CURRENT_AUTOAGENT" == "$INSTALLED_AUTOAGENT" ]]; then
+        skip "AutoAgent already up to date (${CURRENT_AUTOAGENT})"
     else
-        git -C "$AUTOAGENT_DIR" fetch origin
-        git -C "$AUTOAGENT_DIR" reset --hard origin/main
-    fi
+        step "Installing/Updating AutoAgent..."
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk python3-dev build-essential 2>/dev/null || true
 
-    cat >"${HOME}/start-autoagent.sh" <<AUTOAGENT_LAUNCHER
+        if [[ ! -d "${AUTOAGENT_DIR}" ]]; then
+            git clone https://github.com/HKUDS/AutoAgent.git "${AUTOAGENT_DIR}"
+        else
+            cd -- "${AUTOAGENT_DIR}"
+            git fetch origin
+            git reset --hard origin/main
+            cd -- "$HOME"
+        fi
+
+        # Create venv with system site packages for tkinter
+        if [[ ! -d "${AUTOAGENT_VENV}" ]]; then
+            python3 -m venv "${AUTOAGENT_VENV}" --system-site-packages
+        fi
+
+        if _install_autoagent; then
+            NEW_AUTOAGENT=$(_get_autoagent_version)
+            _set_installed_version "autoagent" "${NEW_AUTOAGENT:-latest}"
+            ok "AutoAgent installed/updated"
+        else
+            die "AutoAgent install failed"
+        fi
+
+        cat >"${HOME}/start-autoagent.sh" <<'AUTOAGENT_LAUNCHER'
 #!/usr/bin/env bash
 set -euo pipefail
 export TKINTER_AVAILABLE=False
-AUTOAGENT_VENV="${AUTOAGENT_VENV}"
-AUTOAGENT_DIR="${AUTOAGENT_DIR}"
+AUTOAGENT_VENV="${HOME}/autoagent/.venv"
+AUTOAGENT_DIR="${HOME}/autoagent"
+
 if ! curl -sf http://localhost:8080/v1/models &>/dev/null; then
     echo "llama-server not running. Start with: start-llm"
     exit 1
 fi
-source "\${AUTOAGENT_VENV}/bin/activate"
-cd -- "\${AUTOAGENT_DIR}"
-set -a; source "\${HOME}/.autoagent/.env" 2>/dev/null || true; set +a
-auto deep-research
+
+source "${AUTOAGENT_VENV}/bin/activate"
+cd -- "${AUTOAGENT_DIR}"
+python -m autoagent.cli deep-research
 AUTOAGENT_LAUNCHER
-    chmod +x "${HOME}/start-autoagent.sh"
-    ok "Created ~/start-autoagent.sh (tkinter disabled)"
-
-    if [[ ! -d "$AUTOAGENT_VENV" ]]; then
-        uv venv "${AUTOAGENT_VENV}" --python 3.11 --system-site-packages
+        chmod +x "${HOME}/start-autoagent.sh"
     fi
-
-    # FIX-SC2310: '|| die' preserves set -e semantics (function exits non-zero on failure).
-    # shellcheck disable=SC2310
-    _install_autoagent || die "AutoAgent install failed."
-    ok "AutoAgent installed."
-    # FIX-H-5: Return to home directory.
     cd -- "$HOME"
 fi
 
 # =============================================================================
-#  13d. OpenClaude
+#  13d. OpenClaude - with version checking
 # =============================================================================
+_get_openclaude_version() {
+    if command -v openclaude &>/dev/null; then
+        openclaude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+    fi
+}
+
 if $INSTALL_OPENCLAUDE; then
-    step "Installing OpenClaude..."
-    # FIX-SC2312: Extract node version check from [[ ]] to avoid masking return value.
-    _node_major=""
-    if command -v node &>/dev/null; then
-        _node_major=$(node -v | cut -d. -f1 | tr -d 'v') || _node_major="0"
+    step "Checking OpenClaude..."
+    CURRENT_OPENCLAUDE=$(_get_openclaude_version)
+    INSTALLED_OPENCLAUDE=$(_get_installed_version "openclaude")
+    
+    if [[ -n "$CURRENT_OPENCLAUDE" ]] && [[ "$CURRENT_OPENCLAUDE" == "$INSTALLED_OPENCLAUDE" ]]; then
+        skip "OpenClaude already up to date (${CURRENT_OPENCLAUDE})"
+    else
+        step "Installing/Updating OpenClaude..."
+        _node_major=""
+        if command -v node &>/dev/null; then
+            _node_major=$(node -v | cut -d. -f1 | tr -d 'v') || _node_major="0"
+        fi
+        if ! command -v node &>/dev/null || [[ "${_node_major:-0}" -lt 20 ]]; then
+            step "Setting up NodeSource repository for Node.js 22..."
+            nodesource_key=$(mktemp /tmp/nodesource.gpg.XXXXXX)
+            register_tmp "$nodesource_key"
+            curl -fsSL --proto '=https' --max-redirs 5 \
+                https://deb.nodesource.com/gpgkey/nodesource.gpg.key -o "$nodesource_key"
+            sudo gpg --dearmor -o /usr/share/keyrings/nodesource.gpg "$nodesource_key"
+            rm -f "$nodesource_key"
+            echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq nodejs
+            ok "Node.js 22 installed via official repository (verified GPG)."
+        fi
+        sudo npm install -g @gitlawb/openclaude@latest
+        NEW_OPENCLAUDE=$(_get_openclaude_version)
+        _set_installed_version "openclaude" "${NEW_OPENCLAUDE:-latest}"
     fi
-    if ! command -v node &>/dev/null || [[ "${_node_major:-0}" -lt 20 ]]; then
-        step "Setting up NodeSource repository for Node.js 22..."
-        nodesource_key=$(mktemp /tmp/nodesource.gpg.XXXXXX)
-        register_tmp "$nodesource_key"
-        curl -fsSL --proto '=https' --max-redirs 5 \
-            https://deb.nodesource.com/gpgkey/nodesource.gpg.key -o "$nodesource_key"
-        sudo gpg --dearmor -o /usr/share/keyrings/nodesource.gpg "$nodesource_key"
-        rm -f "$nodesource_key"
-        echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq nodejs
-        ok "Node.js 22 installed via official repository (verified GPG)."
-    fi
-    sudo npm install -g @gitlawb/openclaude@latest
 
     if command -v openclaude &>/dev/null; then
         umask 077
@@ -1376,35 +1486,49 @@ OPENCLAUDE
 fi
 
 # =============================================================================
-#  13e. Hermes WebUI (Python-based)
+#  13e. Hermes WebUI (Python-based) - with version checking
 # =============================================================================
 HERMES_WEBUI_DIR="${HOME}/hermes-webui"
 
+_get_webui_version() {
+    if [[ -f "${HERMES_WEBUI_DIR}/.git/config" ]]; then
+        git -C "${HERMES_WEBUI_DIR}" rev-parse --short HEAD 2>/dev/null || echo ""
+    fi
+}
+
 if $INSTALL_WEBUI; then
-    step "Installing Hermes WebUI..."
-
-    if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
-        git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
+    step "Checking Hermes WebUI..."
+    CURRENT_WEBUI=$(_get_webui_version)
+    INSTALLED_WEBUI=$(_get_installed_version "webui")
+    
+    if [[ -n "$CURRENT_WEBUI" ]] && [[ "$CURRENT_WEBUI" == "$INSTALLED_WEBUI" ]]; then
+        skip "Hermes WebUI already up to date (${CURRENT_WEBUI})"
     else
-        git -C "$HERMES_WEBUI_DIR" pull --quiet
-    fi
-
-    HERMES_VENV="${HOME}/hermes-agent/venv"
-    if [[ ! -d "$HERMES_VENV" ]]; then
-        warn "Hermes agent venv not found – WebUI may not function correctly."
-    fi
-
-    if [[ -f "${HERMES_WEBUI_DIR}/requirements.txt" ]]; then
-        if [[ -x "${HERMES_VENV}/bin/pip" ]]; then
-            "${HERMES_VENV}/bin/pip" install -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet
+        step "Installing/Updating Hermes WebUI..."
+        
+        if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
+            git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
         else
-            pip3 install --user -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet 2>/dev/null || \
-                pip3 install --user --break-system-packages -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet || \
-                warn "Failed to install WebUI requirements.txt"
+            git -C "$HERMES_WEBUI_DIR" pull --quiet
         fi
-    fi
 
-    cat >"${HOME}/start-webui.sh" <<WEBUISTART
+        HERMES_VENV="${HOME}/.hermes/hermes-agent/venv"
+        if [[ ! -d "$HERMES_VENV" ]]; then
+            warn "Hermes agent venv not found – WebUI may not function correctly."
+            HERMES_VENV="${HOME}/hermes-agent/venv"
+        fi
+
+        if [[ -f "${HERMES_WEBUI_DIR}/requirements.txt" ]]; then
+            if [[ -x "${HERMES_VENV}/bin/pip" ]]; then
+                "${HERMES_VENV}/bin/pip" install -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet
+            else
+                pip3 install --user -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet 2>/dev/null || \
+                    pip3 install --user --break-system-packages -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet || \
+                    warn "Failed to install WebUI requirements.txt"
+            fi
+        fi
+
+        cat >"${HOME}/start-webui.sh" <<WEBUISTART
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- "${HERMES_WEBUI_DIR}"
@@ -1414,12 +1538,11 @@ fi
 echo "Starting Hermes WebUI on http://localhost:8787"
 ./start.sh
 WEBUISTART
-    chmod +x "${HOME}/start-webui.sh"
+        chmod +x "${HOME}/start-webui.sh"
 
-    # FIX-D-3: More robust systemd availability check.
-    if systemctl --user is-system-running &>/dev/null; then
-        mkdir -p "${HOME}/.config/systemd/user"
-        cat >"${HOME}/.config/systemd/user/hermes-webui.service" <<WEBUISERVICE
+        if systemctl --user is-system-running &>/dev/null; then
+            mkdir -p "${HOME}/.config/systemd/user"
+            cat >"${HOME}/.config/systemd/user/hermes-webui.service" <<WEBUISERVICE
 [Unit]
 Description=Hermes WebUI
 After=network.target
@@ -1438,26 +1561,23 @@ StandardError=append:/tmp/hermes-webui.log
 [Install]
 WantedBy=default.target
 WEBUISERVICE
-        systemctl --user enable hermes-webui.service 2>/dev/null || true
-        ok "WebUI systemd service enabled (starts on login)."
-    else
-        warn "systemd --user unavailable — use '~/start-webui.sh' to start manually."
+            systemctl --user enable hermes-webui.service 2>/dev/null || true
+            ok "WebUI systemd service enabled (starts on login)."
+        else
+            warn "systemd --user unavailable — use '~/start-webui.sh' to start manually."
+        fi
+        
+        NEW_WEBUI=$(_get_webui_version)
+        _set_installed_version "webui" "${NEW_WEBUI:-latest}"
+        ok "Hermes WebUI installed/updated"
     fi
-
-    ok "Hermes WebUI installed. Start with: ~/start-webui.sh  →  http://localhost:8787"
 fi
 
 # =============================================================================
-#  14. Create ~/start-llm.sh  (always runs)
-#  Renumbered from original section 11.
-#  FIX-C-2: Quote all variable expansions in the generated script template.
-#  FIX-H-4: Escape regex metacharacters in pgrep -f patterns.
+#  14. Create ~/start-llm.sh (always runs)
 # =============================================================================
 step "Generating ~/start-llm.sh..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
-
-# FIX-H-4: The pgrep pattern in the generated start-llm.sh uses grep -F
-# for fixed-string matching of $GGUF, avoiding regex injection.
 
 cat >"${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
 #!/usr/bin/env bash
@@ -1469,13 +1589,12 @@ SAFE_CTX="${SAFE_CTX}"
 USE_JINJA="${USE_JINJA}"
 PIDFILE="${PIDFILE_PATH}"
 
-# FIXED: verify binary exists and is executable
 if [[ ! -x "$LLAMA_BIN" ]]; then
     echo "ERROR: llama-server binary not found or not executable: $LLAMA_BIN"
     exit 1
 fi
 
-# FIX-H-4: Use fixed-string matching (-x with -f not possible; use grep -F instead).
+# Check for existing process using fixed-string matching
 LLAMA_PID=$(pgrep -f "llama-server.*-m" 2>/dev/null | xargs -I{} ps -p {} -o pid=,args= 2>/dev/null | grep -F "$GGUF" | awk '{print $1}' || true)
 if [[ -n "$LLAMA_PID" ]]; then
     echo -e "\n  llama-server already running (PID: $LLAMA_PID)"
@@ -1513,7 +1632,7 @@ echo ""
     --cache-type-v q4_0 \
     --host 0.0.0.0 \
     --port 8080 \
-    "${USE_JINJA}" &
+    ${USE_JINJA} &
 LLAMA_PID=$!
 echo "$LLAMA_PID" > "$PIDFILE"
 
@@ -1546,7 +1665,6 @@ LAUNCH_TEMPLATE
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA PIDFILE_PATH
 PIDFILE_PATH=$(mktemp /tmp/llama-server.XXXXXX.pid)
 register_tmp "$PIDFILE_PATH"
-# shellcheck disable=SC2016  # Single quotes preserve literal ${VAR} for envsubst
 envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${PIDFILE_PATH}' \
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 rm -f "${LAUNCH_SCRIPT}.template"
@@ -1554,9 +1672,7 @@ chmod +x "$LAUNCH_SCRIPT"
 ok "Launch script: ~/start-llm.sh"
 
 # =============================================================================
-#  15. systemd user service  [SKIPPED by switch-model]
-#  Renumbered from original section 12.
-#  FIX-D-3: Use is-system-running for robust check.
+#  15. systemd user service [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     step "Creating systemd user service for llama-server..."
@@ -1603,18 +1719,8 @@ register_tmp "$PIDFILE_MAIN"
 pkill -f "llama-server.*-m" 2>/dev/null || true
 sleep 1
 
-bash "$LAUNCH_SCRIPT" >/tmp/llama-server.log 2>&1 &
-sleep 2
-if [[ -f "$PIDFILE_MAIN" ]]; then
-    SERVER_PID=$(cat "$PIDFILE_MAIN")
-    if kill -0 "$SERVER_PID" 2>/dev/null; then
-        ok "llama-server started (PID: $SERVER_PID, log: tail -f /tmp/llama-server.log)"
-    else
-        warn "llama-server PID file exists but process is not running. Check log."
-    fi
-else
-    warn "Could not detect llama-server PID. Check log: tail -f /tmp/llama-server.log"
-fi
+nohup bash "$LAUNCH_SCRIPT" >/tmp/llama-server.log 2>&1 &
+sleep 3
 
 READY=false
 for _ in {1..30}; do
@@ -1629,7 +1735,6 @@ done
 
 # =============================================================================
 #  15b. Hermes skills (if installed)
-#  Renumbered from original 12b.
 # =============================================================================
 if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
     step "Installing recommended Hermes skills..."
@@ -1653,10 +1758,7 @@ if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
 fi
 
 # =============================================================================
-#  16. ~/.bashrc helpers  [SKIPPED by switch-model]
-#  Renumbered from original section 14.
-#  FIX-H-2/S-1: Source tokens from ~/.llm-tokens instead of embedding in .bashrc.
-#  FIX-H-5: Use cd -- "$HOME" in generated code.
+#  16. ~/.bashrc helpers [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     step "Adding helpers to ~/.bashrc..."
@@ -1664,7 +1766,6 @@ if [[ -z "$_SMO" ]]; then
     INSTALL_COPY="${HOME}/.local/bin/install-llm.sh"
     if [[ "$SCRIPT_SELF" == "/dev/stdin" || -z "$SCRIPT_SELF" || "$SCRIPT_SELF" == "/proc/"* ]]; then
         warn "Script run via pipe — copying to ${INSTALL_COPY} for switch-model."
-        # FIX-S-2: Instead of curl | bash, download to a file first and verify.
         mkdir -p "${HOME}/.local/bin"
         cat >"$INSTALL_COPY" <<'STUB'
 #!/usr/bin/env bash
@@ -1711,9 +1812,7 @@ export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 export PATH="/usr/local/cuda/bin:\${HOME}/.local/bin:\${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:\${LD_LIBRARY_PATH:-}"
 
-# FIX-H-2/S-1: Source tokens from protected file (mode 600) instead of hardcoding.
 if [[ -f "${TOKEN_FILE}" ]]; then
-    # shellcheck disable=SC1090
     while IFS='=' read -r _key _val; do
         case "\$_key" in
             HF_TOKEN) export HF_TOKEN="\$_val" ;;
@@ -1823,8 +1922,7 @@ BASHRC_FUNCTIONS
 fi
 
 # =============================================================================
-#  17. .wslconfig RAM hint  [SKIPPED by switch-model]
-#  Renumbered from original section 15.
+#  17. .wslconfig RAM hint [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
     WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r\n' || echo "")
@@ -1872,7 +1970,6 @@ fi
 
 # =============================================================================
 #  18. Claude Configuration
-#  Renumbered from original section 16.
 # =============================================================================
 if [[ -z "$_SMO" ]] && (command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]); then
     step "Configuring Claude to use local llama.cpp server..."
@@ -1919,6 +2016,7 @@ else
     cat <<'EOF'
 ╔══════════════════════════════════════════════════════════════╗
 ║                   Setup Complete!                            ║
+║          Smart downloads - only updated when needed          ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 fi
@@ -1930,7 +2028,7 @@ echo -e " ${BLD}Context:${RST}       ${SAFE_CTX} tokens   ${BLD}Jinja:${RST} ${U
 echo ""
 
 if [[ -z "$_SMO" ]]; then
-    echo -e " ${BLD}Installed:${RST}"
+    echo -e " ${BLD}Installed/Updated:${RST}"
     echo -e "  llama-server  →  http://localhost:8080/v1"
     echo -e "  Hermes Agent  →  hermes"
     $INSTALL_GOOSE && echo -e "  Goose         →  goose"
