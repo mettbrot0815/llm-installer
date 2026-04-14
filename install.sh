@@ -10,7 +10,7 @@
 #    - Skips redundant downloads
 # =============================================================================
 
-# FIX-H-6: Require Bash 4.0+ for associative arrays (declare -A).
+# Require Bash 4.0+ (4.2 features removed for compatibility)
 if ((BASH_VERSINFO[0] < 4)); then
     echo "ERROR: Bash 4.0 or later is required (found ${BASH_VERSION})." >&2
     exit 1
@@ -53,6 +53,7 @@ _set_installed_version() {
     chmod 600 "$VERSION_FILE"
 }
 
+# CORRECTED: Version comparison using read -a to split on dots
 _version_compare() {
     # Returns 0 if $1 >= $2, 1 otherwise
     local ver1="$1" ver2="$2"
@@ -60,12 +61,19 @@ _version_compare() {
         return 0
     fi
     local IFS=.
-    local i ver1_arr=($ver1) ver2_arr=($ver2)
+    local -a ver1_arr ver2_arr
+    read -ra ver1_arr <<< "$ver1"
+    read -ra ver2_arr <<< "$ver2"
+    local i v1 v2
     for ((i=0; i<${#ver1_arr[@]} || i<${#ver2_arr[@]}; i++)); do
-        local v1=${ver1_arr[i]:-0} v2=${ver2_arr[i]:-0}
-        if ((10#$v1 > 10#$v2)); then
+        v1=${ver1_arr[i]:-0}
+        v2=${ver2_arr[i]:-0}
+        # Strip leading zeros safely
+        v1=$((10#$v1)) 2>/dev/null || v1=0
+        v2=$((10#$v2)) 2>/dev/null || v2=0
+        if (( v1 > v2 )); then
             return 0
-        elif ((10#$v1 < 10#$v2)); then
+        elif (( v1 < v2 )); then
             return 1
         fi
     done
@@ -79,18 +87,19 @@ for _p in "${_path_parts[@]}"; do
     [[ "$_p" == /mnt/* ]] && continue
     _clean_path="${_clean_path:+${_clean_path}:}${_p}"
 done
-export PATH="$_clean_path"
+PATH="$_clean_path"
+export PATH
 unset _clean_path _path_parts _p
 
-# ── Colour helpers ─────────────────────────────────────────────────────────────
+# ── Colour helpers (now using printf for portability) ─────────────────────────
 readonly RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 readonly CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 
-step() { echo -e "\n${CYN}[*] $*${RST}"; }
-ok()   { echo -e "${GRN}[+] $*${RST}"; }
-warn() { echo -e "${YLW}[!] $*${RST}"; }
-die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
-skip() { echo -e "${CYN}[~] $*${RST}"; }
+step() { printf "\n${CYN}[*] %s${RST}\n" "$*"; }
+ok()   { printf "${GRN}[+] %s${RST}\n" "$*"; }
+warn() { printf "${YLW}[!] %s${RST}\n" "$*"; }
+die()  { printf "${RED}[ERROR] %s${RST}\n" "$*"; exit 1; }
+skip() { printf "${CYN}[~] %s${RST}\n" "$*"; }
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
@@ -103,13 +112,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 register_tmp() { TMPFILES+=("$1"); }
 
-# ── Save original umask so we can restore it on exit ─────────────────
-_ORIG_UMASK=$(umask -p)
-restore_umask() { eval "$_ORIG_UMASK"; }
+# ── Save original umask and restore directly (no eval) ────────────────────────
+_ORIG_UMASK=$(umask)
+restore_umask() { umask "$_ORIG_UMASK"; }
 trap restore_umask EXIT
 
 # ── Banner ─────────────────────────────────────────────────────────────────────
-echo -e "${BLD}${CYN}"
+printf "${BLD}${CYN}"
 if [[ -n "$_SMO" ]]; then
     cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════════╗
@@ -124,7 +133,7 @@ else
 ╚══════════════════════════════════════════════════════════════╝
 BANNER
 fi
-echo -e "${RST}"
+printf "${RST}\n"
 
 if [[ -z "$_SMO" ]]; then
     if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
@@ -186,11 +195,9 @@ if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
 fi
 
 if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
-    echo ""
-    echo -e "  ${BLD}Why add a HuggingFace token?${RST}"
-    echo -e "  Faster downloads · higher rate limits · gated model access"
-    echo -e "  ${CYN}https://huggingface.co/settings/tokens${RST}"
-    echo ""
+    printf "\n  ${BLD}Why add a HuggingFace token?${RST}\n"
+    printf "  Faster downloads · higher rate limits · gated model access\n"
+    printf "  ${CYN}https://huggingface.co/settings/tokens${RST}\n\n"
     if [[ -t 0 ]]; then
         read -rp "  Do you have a HuggingFace token to add? [y/N]: " hf_yn
         if [[ "$hf_yn" =~ ^[Yy]$ ]]; then
@@ -213,7 +220,7 @@ fi
 export HF_TOKEN
 
 # =============================================================================
-#  2. GitHub token – SECURE EXTRACTION AND GIT CONFIG
+#  2. GitHub token – SECURE EXTRACTION AND GIT CONFIG (now with gh CLI support)
 # =============================================================================
 _GH_ENV="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 GITHUB_TOKEN=""
@@ -231,12 +238,10 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
 fi
 
 if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
-    echo ""
-    echo -e "  ${BLD}Why add a GitHub token?${RST}"
-    echo -e "  Higher API rate limits (5,000 vs 60) · access private repositories"
-    echo -e "  ${CYN}https://github.com/settings/tokens${RST} → Generate new token (classic)"
-    echo -e "  Required scopes: ${YLW}repo${RST}, ${YLW}read:org${RST} (optional)"
-    echo ""
+    printf "\n  ${BLD}Why add a GitHub token?${RST}\n"
+    printf "  Higher API rate limits (5,000 vs 60) · access private repositories\n"
+    printf "  ${CYN}https://github.com/settings/tokens${RST} → Generate new token (classic)\n"
+    printf "  Required scopes: ${YLW}repo${RST}, ${YLW}read:org${RST} (optional)\n\n"
     if [[ -t 0 ]]; then
         read -rp "  Do you have a GitHub token to add? [y/N]: " gh_yn
         if [[ "$gh_yn" =~ ^[Yy]$ ]]; then
@@ -259,13 +264,15 @@ fi
 
 if [[ -n "$GITHUB_TOKEN" ]]; then
     export GITHUB_TOKEN
+    # Also set GH_TOKEN for gh CLI
+    export GH_TOKEN="$GITHUB_TOKEN"
     _git_creds="${HOME}/.git-credentials"
     if [[ ! -f "$_git_creds" ]] || ! grep -qF "x-oauth-basic" "$_git_creds" 2>/dev/null; then
         umask 077
         echo "https://${GITHUB_TOKEN}@x-oauth-basic@github.com" >> "$_git_creds"
         git config --global credential.helper store 2>/dev/null || \
             warn "Could not set git credential helper."
-        eval "$_ORIG_UMASK"
+        restore_umask
     fi
     if git config --global credential.helper 2>/dev/null | grep -q store; then
         ok "Git configured to use stored GitHub token."
@@ -273,6 +280,15 @@ if [[ -n "$GITHUB_TOKEN" ]]; then
         warn "Could not verify git credential helper configuration."
     fi
     unset _git_creds
+
+    # Configure gh CLI if installed later (or already present)
+    if command -v gh &>/dev/null; then
+        step "Configuring GitHub CLI (gh) authentication..."
+        echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null && \
+            ok "gh CLI authenticated." || \
+            warn "gh CLI authentication failed; token still available via GH_TOKEN env var."
+        gh config set git_protocol https 2>/dev/null || true
+    fi
 fi
 
 # =============================================================================
@@ -289,6 +305,36 @@ if [[ -z "$_SMO" ]]; then
         pciutils wget curl ca-certificates zstd \
         procps gettext-base
     ok "System packages ready."
+
+    # --- Install GitHub CLI (gh) from official repository ---
+    step "Setting up GitHub CLI repository..."
+    if ! command -v gh &>/dev/null; then
+        # Add GitHub CLI GPG key and repository
+        (type -p wget >/dev/null || sudo apt-get install -y -qq wget) \
+            && sudo mkdir -p -m 755 /etc/apt/keyrings \
+            && out=$(mktemp) && wget -nv -O "$out" https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            && cat "$out" | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+            && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+            && rm -f "$out"
+
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+            | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh
+        ok "GitHub CLI (gh) installed."
+    else
+        ok "GitHub CLI (gh) already installed."
+    fi
+
+    # If token is already available, configure gh now
+    if [[ -n "$GITHUB_TOKEN" ]] && command -v gh &>/dev/null; then
+        step "Configuring gh CLI authentication..."
+        echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null && \
+            ok "gh CLI authenticated." || \
+            warn "gh CLI authentication failed; token still available via GH_TOKEN env var."
+        gh config set git_protocol https 2>/dev/null || true
+    fi
 
     step "Checking Python version..."
     if python3 --version 2>&1 | grep -qE '3\.(1[0-9]|[2-9][0-9])'; then
@@ -338,9 +384,9 @@ else
     warn "nvidia-smi not found — CPU-only mode. GPU (lspci): ${GPU_NAME}"
 fi
 
-echo -e "\n  ${BLD}Hardware${RST}"
-echo -e "  RAM  : ${RAM_GiB} GiB   CPUs: ${CPUS}"
-echo -e "  GPU  : ${GPU_NAME}   VRAM: ${VRAM_GiB} GiB   CUDA: ${HAS_NVIDIA}"
+printf "\n  ${BLD}Hardware${RST}\n"
+printf "  RAM  : ${RAM_GiB} GiB   CPUs: ${CPUS}\n"
+printf "  GPU  : ${GPU_NAME}   VRAM: ${VRAM_GiB} GiB   CUDA: ${HAS_NVIDIA}\n"
 
 if [[ -z "$_SMO" && "$HAS_NVIDIA" != "true" ]]; then
     warn "No NVIDIA GPU — llama.cpp will be CPU-only (much slower)."
@@ -376,6 +422,7 @@ if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
 fi
 
 _install_cuda() {
+    local cuda_deb
     cuda_deb=$(mktemp /tmp/cuda-keyring.XXXXXX.deb)
     register_tmp "$cuda_deb"
     curl -fsSL --proto '=https' --max-redirs 5 \
@@ -390,8 +437,10 @@ _install_cuda() {
 }
 
 if [[ "$HAS_NVIDIA" == "true" ]]; then
-    export PATH="/usr/local/cuda/bin:${PATH}"
-    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+    PATH="/usr/local/cuda/bin:${PATH}"
+    export PATH
+    LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+    export LD_LIBRARY_PATH
 fi
 
 # =============================================================================
@@ -481,7 +530,7 @@ grade_color() {
 
 apply_model_settings() {
     local gguf="$1"
-    declare -g SAFE_CTX USE_JINJA
+    # Instead of 'declare -g', assign globally using explicit export
     case "$gguf" in
     *Qwen3.5* | *Carnice*)
         SAFE_CTX=262144
@@ -507,21 +556,22 @@ apply_model_settings() {
         USE_JINJA="--jinja"
         ;;
     esac
+    export SAFE_CTX USE_JINJA
     ok "Context window: ${SAFE_CTX} tokens"
 }
 
 show_model_table() {
     /usr/bin/clear 2>/dev/null || true
-    echo -e "${BLD}${CYN}"
+    printf "${BLD}${CYN}"
     cat <<'HDR'
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                        Model Selection                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 HDR
-    echo -e "${RST}"
+    printf "${RST}\n"
     printf "  GPU: %-28s  RAM: %s GiB   VRAM: %s GiB   CUDA: %s\n\n" \
         "${GPU_NAME:0:28}" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA"
-    echo -e "  ${BLD} #   Model                    Size    Ctx     Grade              Tags${RST}"
+    printf "  ${BLD} #   Model                    Size    Ctx     Grade              Tags${RST}\n"
     echo "  ─────────────────────────────────────────────────────────────────────────────"
 
     local last_tier="" idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags _desc
@@ -539,11 +589,11 @@ HDR
         gguf_file="${gguf_file// /}"
         if [[ "$tier" != "$last_tier" ]]; then
             case "$tier" in
-            tiny) echo -e "\n  ${BLD}▸ TINY   (< 1 GB · instant · edge/test)${RST}" ;;
-            small) echo -e "\n  ${BLD}▸ SMALL  (1–2 GB · fast CPU · everyday use)${RST}" ;;
-            mid) echo -e "\n  ${BLD}▸ MID    (4–17 GB · quality/speed balance)${RST}" ;;
-            large) echo -e "\n  ${BLD}▸ LARGE  (15 GB+ · high-end GPU or lots of RAM)${RST}" ;;
-            *) echo -e "\n  ${BLD}▸ UNKNOWN  (tier: ${tier})${RST}" ;;
+            tiny) printf "\n  ${BLD}▸ TINY   (< 1 GB · instant · edge/test)${RST}\n" ;;
+            small) printf "\n  ${BLD}▸ SMALL  (1–2 GB · fast CPU · everyday use)${RST}\n" ;;
+            mid) printf "\n  ${BLD}▸ MID    (4–17 GB · quality/speed balance)${RST}\n" ;;
+            large) printf "\n  ${BLD}▸ LARGE  (15 GB+ · high-end GPU or lots of RAM)${RST}\n" ;;
+            *) printf "\n  ${BLD}▸ UNKNOWN  (tier: ${tier})${RST}\n" ;;
             esac
             last_tier="$tier"
         fi
@@ -557,9 +607,9 @@ HDR
             cached=""
         fi
         tag_display="${tags//,/ }"
-        echo -e "  ${BLD}$(printf '%2s' "$idx")${RST}  $(printf '%-26s' "$dname")" \
+        printf "  ${BLD}$(printf '%2s' "$idx")${RST}  $(printf '%-26s' "$dname")" \
             " $(printf '%5s' "$size_gb") GB  $(printf '%-7s' "$ctx")" \
-            "  ${GC}$(printf '%-13s' "$GL")${RST}  $(printf '%-24s' "$tag_display") $cached"
+            "  ${GC}$(printf '%-13s' "$GL")${RST}  $(printf '%-24s' "$tag_display") $cached\n"
     done < <(printf '%s\n' "${MODELS[@]}")
 
     declare -A catalogued
@@ -574,7 +624,7 @@ HDR
         if [[ -z "${catalogued[$fname]:-}" ]]; then
             extra_count=$((extra_count + 1))
             if ((extra_count == 1)); then
-                echo -e "\n  ${BLD}▸ LOCAL  (in $HOME/llm-models, not in catalogue)${RST}"
+                printf "\n  ${BLD}▸ LOCAL  (in $HOME/llm-models, not in catalogue)${RST}\n"
             fi
             local sz_bytes sz
             sz_bytes=$(wc -c <"$f" 2>/dev/null || echo 0)
@@ -587,26 +637,24 @@ HDR
             else
                 sz="${sz_bytes}B"
             fi
-            echo -e "  ${CYN}↓${RST}  ${fname}  (${sz})"
+            printf "  ${CYN}↓${RST}  ${fname}  (${sz})\n"
         fi
     done
 
     echo ""
     echo "  ─────────────────────────────────────────────────────────────────────────────"
-    echo -e "  ${GRN}S/A${RST} Runs great/well   ${YLW}B/C${RST} Tight fit   ${RED}F${RST} Too heavy   ${CYN}↓${RST} Already on disk"
+    printf "  ${GRN}S/A${RST} Runs great/well   ${YLW}B/C${RST} Tight fit   ${RED}F${RST} Too heavy   ${CYN}↓${RST} Already on disk\n"
     echo ""
-    echo -e "  ${YLW}Tip:${RST} Model 5 (Qwen3.5-9B) = general · Model 6 (Carnice-9b) = Hermes-tuned"
-    echo -e "  Enter a number, or ${BLD}u${RST} to download via HuggingFace URL."
-    echo ""
+    printf "  ${YLW}Tip:${RST} Model 5 (Qwen3.5-9B) = general · Model 6 (Carnice-9b) = Hermes-tuned\n"
+    printf "  Enter a number, or ${BLD}u${RST} to download via HuggingFace URL.\n\n"
 }
 
 download_from_hf_url() {
     echo ""
-    echo -e "  ${BLD}Download via HuggingFace${RST}"
-    echo -e "  Accepted:"
-    echo -e "    https://huggingface.co/owner/repo/resolve/main/file.gguf"
-    echo -e "    owner/repo-name  (lists files, you pick)"
-    echo ""
+    printf "  ${BLD}Download via HuggingFace${RST}\n"
+    printf "  Accepted:\n"
+    printf "    https://huggingface.co/owner/repo/resolve/main/file.gguf\n"
+    printf "    owner/repo-name  (lists files, you pick)\n\n"
     read -rp "  Paste URL or repo (owner/name): " HF_INPUT
     HF_INPUT="${HF_INPUT//[[:space:]]/}"
     [[ -z "$HF_INPUT" ]] && die "No input provided."
@@ -666,7 +714,7 @@ PYLIST
                 ok "Only one GGUF found: ${SEL_GGUF}"
             else
                 echo ""
-                echo -e "  ${BLD}Available GGUFs:${RST}"
+                printf "  ${BLD}Available GGUFs:${RST}\n"
                 local fnum=1 gf
                 for gf in "${GGUF_FILES[@]}"; do
                     printf "  %2d  %s\n" "$fnum" "$gf"
@@ -712,7 +760,8 @@ PYLIST
 #  7. HF CLI setup (always runs)
 # =============================================================================
 step "Setting up HuggingFace CLI..."
-export PATH="${HOME}/.local/bin:${PATH}"
+PATH="${HOME}/.local/bin:${PATH}"
+export PATH
 
 HF_CLI_A="${HOME}/.local/bin/hf"
 HF_CLI_B="${HOME}/.local/bin/huggingface-cli"
@@ -787,13 +836,13 @@ while true; do
     fi
     
     if [[ -n "${INSTALL_TIMEOUT:-}" ]]; then
-        read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" -t "$INSTALL_TIMEOUT" CHOICE || {
+        read -rp "$(printf "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" -t "$INSTALL_TIMEOUT" CHOICE || {
             warn "Timeout - defaulting to model 5"
             CHOICE="5"
             break
         }
     else
-        read -rp "$(echo -e "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE || {
+        read -rp "$(printf "  ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" CHOICE || {
             echo ""
             warn "EOF detected. Exiting."
             exit 0
@@ -960,6 +1009,7 @@ if [[ -n "$_SMO" ]]; then
 else
     step "Checking llama.cpp..."
     LLAMA_SERVER_BIN=$(find_llama_server || true)
+    _rebuild_llama=false
     if [[ -n "$LLAMA_SERVER_BIN" ]]; then
         CURRENT_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
         INSTALLED_VER=$(_get_installed_version "llama.cpp")
@@ -974,7 +1024,7 @@ else
         _rebuild_llama=true
     fi
     
-    if [[ "${_rebuild_llama:-false}" == "true" ]]; then
+    if [[ "$_rebuild_llama" == "true" ]]; then
         LLAMA_DIR="${HOME}/llama.cpp"
         if needs_update "$LLAMA_DIR" "master"; then
             step "Building/updating llama.cpp..."
@@ -987,10 +1037,13 @@ else
 
             cd -- "$LLAMA_DIR"
             if command -v ccache &>/dev/null; then
-                export CC="ccache gcc" CXX="ccache g++"
+                CC="ccache gcc"
+                CXX="ccache g++"
             else
-                export CC="gcc" CXX="g++"
+                CC="gcc"
+                CXX="g++"
             fi
+            export CC CXX
 
             if [[ "$HAS_NVIDIA" == "true" ]]; then
                 cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
@@ -1055,7 +1108,8 @@ _install_hermes_agent() {
     # Verify installation
     if [[ -x "${HOME}/.local/bin/hermes" ]]; then
         ok "Hermes Agent installed successfully"
-        export PATH="${HOME}/.local/bin:${PATH}"
+        PATH="${HOME}/.local/bin:${PATH}"
+        export PATH
         NEW_VER=$(_check_hermes_version)
         _set_installed_version "hermes" "${NEW_VER:-latest}"
     elif [[ -x "${HERMES_INSTALL_DIR}/venv/bin/hermes" ]]; then
@@ -1124,7 +1178,7 @@ memory:
     enabled: true
 YAML
 
-umask 022
+restore_umask
 
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
 ok "setup_complete: true written → setup wizard will not fire"
@@ -1166,11 +1220,11 @@ select_optional_components() {
         selected+=("$line")
     done < "$tmpfile"
 
-    declare -g INSTALL_GOOSE=false
-    declare -g INSTALL_OPENCODE=false
-    declare -g INSTALL_AUTOAGENT=false
-    declare -g INSTALL_OPENCLAUDE=false
-    declare -g INSTALL_WEBUI=false
+    INSTALL_GOOSE=false
+    INSTALL_OPENCODE=false
+    INSTALL_AUTOAGENT=false
+    INSTALL_OPENCLAUDE=false
+    INSTALL_WEBUI=false
 
     for item in "${selected[@]}"; do
         case "$item" in
@@ -1212,15 +1266,15 @@ if [[ -z "$_SMO" ]]; then
     ret=$?
     if [[ $ret -eq 2 ]]; then
         echo ""
-        echo -e "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}"
+        printf "  ${BLD}Optional: Goose AI Agent (block/goose)${RST}\n"
         read -rp "  Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
-        echo -e "  ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}"
+        printf "  ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}\n"
         read -rp "  Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
-        echo -e "  ${BLD}Optional: AutoAgent (HKUDS)${RST}"
+        printf "  ${BLD}Optional: AutoAgent (HKUDS)${RST}\n"
         read -rp "  Install AutoAgent? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_AUTOAGENT=true
-        echo -e "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}"
+        printf "  ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}\n"
         read -rp "  Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
-        echo -e "  ${BLD}Optional: Hermes WebUI${RST}"
+        printf "  ${BLD}Optional: Hermes WebUI${RST}\n"
         read -rp "  Install Hermes WebUI? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_WEBUI=true
     fi
 fi
@@ -1243,6 +1297,7 @@ if $INSTALL_GOOSE; then
         skip "Goose already up to date (${CURRENT_GOOSE})"
     else
         step "Installing/Updating Goose CLI..."
+        local goose_script
         goose_script=$(mktemp /tmp/goose-install.XXXXXX.sh)
         register_tmp "$goose_script"
         if curl -fsSL --proto '=https' --max-redirs 5 \
@@ -1250,7 +1305,8 @@ if $INSTALL_GOOSE; then
             https://github.com/block/goose/releases/download/stable/download_cli.sh \
             -o "$goose_script" 2>/dev/null; then
             if bash "$goose_script"; then
-                export PATH="${HOME}/.local/bin:${PATH}"
+                PATH="${HOME}/.local/bin:${PATH}"
+                export PATH
                 NEW_GOOSE=$(_get_goose_version)
                 _set_installed_version "goose" "${NEW_GOOSE:-latest}"
                 ok "Goose installed/updated"
@@ -1274,7 +1330,7 @@ models:
     api_key: sk-local
     default: true
 GOOSECONF
-        umask 022
+        restore_umask
         ok "Goose configured."
     fi
 fi
@@ -1297,13 +1353,15 @@ if $INSTALL_OPENCODE; then
         skip "OpenCode already up to date (${CURRENT_OPENCODE})"
     else
         step "Installing/Updating OpenCode..."
+        local opencode_installer
         opencode_installer=$(mktemp /tmp/opencode-install.XXXXXX.sh)
         register_tmp "$opencode_installer"
         if curl -fsSL --proto '=https' --max-redirs 5 \
             --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
             https://opencode.ai/install -o "$opencode_installer" 2>/dev/null; then
             if XDG_BIN_DIR="${HOME}/.local/bin" bash "$opencode_installer" 2>/dev/null; then
-                export PATH="${HOME}/.local/bin:${PATH}"
+                PATH="${HOME}/.local/bin:${PATH}"
+                export PATH
                 NEW_OPENCODE=$(_get_opencode_version)
                 _set_installed_version "opencode" "${NEW_OPENCODE:-latest}"
                 ok "OpenCode installed/updated"
@@ -1444,12 +1502,13 @@ if $INSTALL_OPENCLAUDE; then
         skip "OpenClaude already up to date (${CURRENT_OPENCLAUDE})"
     else
         step "Installing/Updating OpenClaude..."
-        _node_major=""
+        local _node_major=""
         if command -v node &>/dev/null; then
             _node_major=$(node -v | cut -d. -f1 | tr -d 'v') || _node_major="0"
         fi
         if ! command -v node &>/dev/null || [[ "${_node_major:-0}" -lt 20 ]]; then
             step "Setting up NodeSource repository for Node.js 22..."
+            local nodesource_key
             nodesource_key=$(mktemp /tmp/nodesource.gpg.XXXXXX)
             register_tmp "$nodesource_key"
             curl -fsSL --proto '=https' --max-redirs 5 \
@@ -1480,7 +1539,7 @@ if $INSTALL_OPENCLAUDE; then
   "model": "local/${SEL_GGUF}"
 }
 OPENCLAUDE
-        umask 022
+        restore_umask
         ok "OpenClaude configured."
     fi
 fi
@@ -1574,7 +1633,7 @@ WEBUISERVICE
 fi
 
 # =============================================================================
-#  14. Create ~/start-llm.sh (always runs)
+#  14. Create ~/start-llm.sh (always runs) with envsubst fallback
 # =============================================================================
 step "Generating ~/start-llm.sh..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
@@ -1662,11 +1721,25 @@ fi
 wait "$LLAMA_PID"
 LAUNCH_TEMPLATE
 
+# Export variables for substitution
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA PIDFILE_PATH
 PIDFILE_PATH=$(mktemp /tmp/llama-server.XXXXXX.pid)
 register_tmp "$PIDFILE_PATH"
-envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${PIDFILE_PATH}' \
-    <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
+
+# Use envsubst if available, otherwise fallback to sed
+if command -v envsubst &>/dev/null; then
+    envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${PIDFILE_PATH}' \
+        <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
+else
+    warn "envsubst not found; using sed fallback (slower)."
+    sed -e "s|\${GGUF_PATH}|${GGUF_PATH}|g" \
+        -e "s|\${SEL_NAME}|${SEL_NAME}|g" \
+        -e "s|\${LLAMA_SERVER_BIN}|${LLAMA_SERVER_BIN}|g" \
+        -e "s|\${SAFE_CTX}|${SAFE_CTX}|g" \
+        -e "s|\${USE_JINJA}|${USE_JINJA}|g" \
+        -e "s|\${PIDFILE_PATH}|${PIDFILE_PATH}|g" \
+        "${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
+fi
 rm -f "${LAUNCH_SCRIPT}.template"
 chmod +x "$LAUNCH_SCRIPT"
 ok "Launch script: ~/start-llm.sh"
@@ -1816,7 +1889,10 @@ if [[ -f "${TOKEN_FILE}" ]]; then
     while IFS='=' read -r _key _val; do
         case "\$_key" in
             HF_TOKEN) export HF_TOKEN="\$_val" ;;
-            GITHUB_TOKEN) export GITHUB_TOKEN="\$_val" ;;
+            GITHUB_TOKEN)
+                export GITHUB_TOKEN="\$_val"
+                export GH_TOKEN="\$_val"   # for gh CLI
+                ;;
         esac
     done < "${TOKEN_FILE}"
 fi
@@ -2005,7 +2081,7 @@ fi
 #  Done — Summary
 # =============================================================================
 echo ""
-echo -e "${GRN}${BLD}"
+printf "${GRN}${BLD}"
 if [[ -n "$_SMO" ]]; then
     cat <<'EOF'
 ╔══════════════════════════════════════════════════════════════╗
@@ -2020,48 +2096,44 @@ else
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 fi
-echo -e "${RST}"
+printf "${RST}\n"
 
-echo -e " ${BLD}Active model:${RST}  ${SEL_NAME}"
-echo -e "               ${SEL_GGUF}"
-echo -e " ${BLD}Context:${RST}       ${SAFE_CTX} tokens   ${BLD}Jinja:${RST} ${USE_JINJA}"
-echo ""
+printf " ${BLD}Active model:${RST}  ${SEL_NAME}\n"
+printf "               ${SEL_GGUF}\n"
+printf " ${BLD}Context:${RST}       ${SAFE_CTX} tokens   ${BLD}Jinja:${RST} ${USE_JINJA}\n\n"
 
 if [[ -z "$_SMO" ]]; then
-    echo -e " ${BLD}Installed/Updated:${RST}"
-    echo -e "  llama-server  →  http://localhost:8080/v1"
-    echo -e "  Hermes Agent  →  hermes"
-    $INSTALL_GOOSE && echo -e "  Goose         →  goose"
-    $INSTALL_OPENCODE && echo -e "  OpenCode      →  opencode  (alias: oc)"
-    $INSTALL_AUTOAGENT && echo -e "  AutoAgent     →  autoagent"
-    $INSTALL_OPENCLAUDE && echo -e "  OpenClaude    →  openclaude"
-    $INSTALL_WEBUI && echo -e "  Hermes WebUI  →  start-webui  (http://localhost:8787)"
-    echo ""
+    printf " ${BLD}Installed/Updated:${RST}\n"
+    printf "  llama-server  →  http://localhost:8080/v1\n"
+    printf "  Hermes Agent  →  hermes\n"
+    $INSTALL_GOOSE && printf "  Goose         →  goose\n"
+    $INSTALL_OPENCODE && printf "  OpenCode      →  opencode  (alias: oc)\n"
+    $INSTALL_AUTOAGENT && printf "  AutoAgent     →  autoagent\n"
+    $INSTALL_OPENCLAUDE && printf "  OpenClaude    →  openclaude\n"
+    $INSTALL_WEBUI && printf "  Hermes WebUI  →  start-webui  (http://localhost:8787)\n"
+    printf "\n"
 fi
 
-echo -e " ${BLD}════ Quick Reference ════${RST}"
-echo ""
-echo -e " ${BLD}Server:${RST}"
-echo -e "  ${CYN}start-llm${RST}       Start llama-server"
-echo -e "  ${CYN}stop-llm${RST}        Stop llama-server"
-echo -e "  ${CYN}restart-llm${RST}     Restart llama-server"
-echo -e "  ${CYN}switch-model${RST}    Pick different model"
-echo -e "  ${CYN}llm-status${RST}      Status + active model"
-echo -e "  ${CYN}llm-log${RST}         Tail llama-server log"
-echo -e "  ${CYN}llm-models${RST}      List all .gguf files"
-echo -e "  ${CYN}vram${RST}            GPU/VRAM usage"
-echo ""
-echo -e " ${BLD}Agents:${RST}"
-echo -e "  ${CYN}hermes${RST}          Hermes Agent"
-$INSTALL_GOOSE && echo -e "  ${CYN}goose${RST}           Goose"
-$INSTALL_OPENCODE && echo -e "  ${CYN}opencode${RST} / ${CYN}oc${RST}  OpenCode"
-$INSTALL_AUTOAGENT && echo -e "  ${CYN}autoagent${RST}       AutoAgent"
-$INSTALL_OPENCLAUDE && echo -e "  ${CYN}openclaude${RST}      OpenClaude"
-$INSTALL_WEBUI && echo -e "  ${CYN}start-webui${RST}     Hermes WebUI"
-echo ""
-echo -e " ${YLW}Note:${RST}       source ~/.bashrc or open a new terminal."
-echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal."
-echo -e " ${GRN}Persistent:${RST} sudo loginctl enable-linger $USER"
-echo ""
+printf " ${BLD}════ Quick Reference ════${RST}\n\n"
+printf " ${BLD}Server:${RST}\n"
+printf "  ${CYN}start-llm${RST}       Start llama-server\n"
+printf "  ${CYN}stop-llm${RST}        Stop llama-server\n"
+printf "  ${CYN}restart-llm${RST}     Restart llama-server\n"
+printf "  ${CYN}switch-model${RST}    Pick different model\n"
+printf "  ${CYN}llm-status${RST}      Status + active model\n"
+printf "  ${CYN}llm-log${RST}         Tail llama-server log\n"
+printf "  ${CYN}llm-models${RST}      List all .gguf files\n"
+printf "  ${CYN}vram${RST}            GPU/VRAM usage\n\n"
+printf " ${BLD}Agents:${RST}\n"
+printf "  ${CYN}hermes${RST}          Hermes Agent\n"
+$INSTALL_GOOSE && printf "  ${CYN}goose${RST}           Goose\n"
+$INSTALL_OPENCODE && printf "  ${CYN}opencode${RST} / ${CYN}oc${RST}  OpenCode\n"
+$INSTALL_AUTOAGENT && printf "  ${CYN}autoagent${RST}       AutoAgent\n"
+$INSTALL_OPENCLAUDE && printf "  ${CYN}openclaude${RST}      OpenClaude\n"
+$INSTALL_WEBUI && printf "  ${CYN}start-webui${RST}     Hermes WebUI\n"
+printf "\n"
+printf " ${YLW}Note:${RST}       source ~/.bashrc or open a new terminal.\n"
+printf " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal.\n"
+printf " ${GRN}Persistent:${RST} sudo loginctl enable-linger $USER\n\n"
 
 exit 0
