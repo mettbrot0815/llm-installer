@@ -300,27 +300,30 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
     fi
 fi
 
-if [[ -n "$GITHUB_TOKEN" ]]; then
-    export GITHUB_TOKEN
-    # Also set GH_TOKEN for gh CLI
-    export GH_TOKEN="$GITHUB_TOKEN"
-
-    # FIX (S-1): Use gh auth for GitHub authentication instead of writing
-    # plaintext tokens to ~/.git-credentials via credential.helper store.
-    # gh auth stores tokens securely in its own credential store.
-    if command -v gh &>/dev/null; then
-        step "Authenticating GitHub CLI (gh)..."
-        if echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null; then
-            ok "gh CLI authenticated via gh auth login."
-        else
-            warn "gh auth login failed; token still available via GH_TOKEN env var."
-        fi
-        gh config set git_protocol https 2>/dev/null || true
-    else
-        warn "gh CLI not found — GitHub token available via env vars only."
-        warn "Install 'gh' and re-run for secure git authentication."
-    fi
-    unset _git_creds
+if command -v gh &>/dev/null; then
+ if [[ -t 0 ]]; then
+   step "Authenticating GitHub CLI (gh) interactively..."
+   gh auth login
+   gh config set git_protocol https 2>/dev/null || true
+   ok "gh CLI authenticated."
+ else
+   if [[ -n "$GITHUB_TOKEN" ]]; then
+     export GITHUB_TOKEN
+     export GH_TOKEN="$GITHUB_TOKEN"
+     step "Authenticating GitHub CLI (gh)..."
+     if echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null; then
+       ok "gh CLI authenticated via token."
+     else
+       warn "gh auth login failed; token available via GH_TOKEN env var."
+     fi
+     gh config set git_protocol https 2>/dev/null || true
+   else
+     warn "gh CLI not authenticated and no GITHUB_TOKEN available."
+   fi
+ fi
+else
+ warn "gh CLI not found — GitHub token available via env vars only."
+ warn "Install 'gh' and re-run for secure git authentication."
 fi
 
 # =============================================================================
@@ -1507,22 +1510,59 @@ fi
 # =============================================================================
 if $INSTALL_OPENCLAUDE; then
     step "Installing/Updating OpenClaude..."
-    if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
-        step "Setting up NodeSource repository for Node.js 22..."
-        nodesource_key="/tmp/nodesource.gpg.key"
-        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource.gpg.key -o "$nodesource_key"
-        sudo gpg --dearmor -o /usr/share/keyrings/nodesource.gpg "$nodesource_key"
-        rm -f "$nodesource_key"
-        echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq nodejs
-        ok "Node.js 22 installed via official repository (verified GPG)."
-    fi
-
-    if command -v openclaude &>/dev/null; then
-        umask 077
-        mkdir -p "${HOME}/.openclaude"
-        cat >"${HOME}/.openclaude/config.json" <<OPENCLAUDE
+ if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
+  step "Setting up Node.js LTS (Node.js 24.x)..."
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.gpg.key
+  sudo mkdir -p /etc/apt/keyrings
+  sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg /tmp/nodesource.gpg.key 2>/dev/null || \
+  sudo tee /etc/apt/keyrings/nodesource.gpg < /tmp/nodesource.gpg.key > /dev/null
+  rm -f /tmp/nodesource.gpg.key
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_lts.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm
+  ok "Node.js LTS installed via official NodeSource repository."
+ fi
+ # Verify Node.js is working
+ if ! command -v node &>/dev/null; then
+  die "Node.js installation failed - openclaude cannot be installed."
+ fi
+ node_ver=$(node -v 2>/dev/null || echo "unknown")
+ ok "Node.js version: ${node_ver}"
+ # Install/upgrade npm to 11.12.1
+ step "Installing npm 11.12.1..."
+ if command -v npm &>/dev/null; then
+  npm_ver=$(npm -v 2>/dev/null || echo "0")
+  if [[ "$npm_ver" != "11.12.1" ]]; then
+   step "Upgrading npm to 11.12.1..."
+   if npm install -g npm@11.12.1 2>&1; then
+    ok "npm upgraded to $(npm -v)"
+   else
+    warn "npm upgrade failed - continuing with existing npm ${npm_ver}"
+   fi
+  else
+   skip "npm ${npm_ver} already installed."
+  fi
+ else
+  step "Installing npm..."
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq npm
+ fi
+ # Actually install OpenClaude via npm
+ step "Installing OpenClaude (@gitlawb/openclaude)..."
+ if npm install -g @gitlawb/openclaude 2>&1; then
+  ok "OpenClaude installed successfully."
+ else
+  die "Failed to install OpenClaude via npm. Check output above for errors."
+ fi
+ # Verify openclaude command is available
+ if ! command -v openclaude &>/dev/null; then
+  die "OpenClaude installed but 'openclaude' command not found in PATH. Check npm global bin path."
+ fi
+ openclaude_ver=$(openclaude --version 2>/dev/null || echo "unknown")
+ ok "OpenClaude version: ${openclaude_ver}"
+ if command -v openclaude &>/dev/null; then
+  umask 077
+  mkdir -p "${HOME}/.openclaude"
+  cat >"${HOME}/.openclaude/config.json" <<OPENCLAUDE
 {
   "providers": {
     "local": {
@@ -1533,9 +1573,9 @@ if $INSTALL_OPENCLAUDE; then
   "model": "local/${SEL_GGUF}"
 }
 OPENCLAUDE
-        umask "$_ORIG_UMASK"
-        ok "OpenClaude configured."
-    fi
+  umask "$_ORIG_UMASK"
+  ok "OpenClaude configured."
+ fi
 fi
 
 # =============================================================================
