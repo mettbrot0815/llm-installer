@@ -963,8 +963,15 @@ fi
 needs_update() {
     local repo_dir="$1"
     local branch="${2:-main}"
+
+    # If directory doesn't exist, needs clone (return 0 = needs update)
+    if [[ ! -d "$repo_dir" ]]; then
+        return 0
+    fi
+
+    # If directory exists but no .git, needs clone
     if [[ ! -d "$repo_dir/.git" ]]; then
-        return 0  # Needs clone
+        return 0
     fi
     git -C "$repo_dir" fetch origin "$branch" 2>/dev/null || true
     local local_commit remote_commit
@@ -1222,7 +1229,7 @@ select_optional_components() {
     local tmpfile
     tmpfile=$(mktemp)
     register_tmp "$tmpfile"
-    echo "$choices" | xargs -n1 echo -e "%s\n" > "$tmpfile"
+    echo "$choices" | tr -d '"' | tr ' ' '\n' | grep -v '^$' > "$tmpfile"
 
     local -a selected=()
     while IFS= read -r line; do
@@ -1494,41 +1501,18 @@ fi
 # =============================================================================
 #  13d. OpenClaude - with version checking
 # =============================================================================
-_get_openclaude_version() {
-    if command -v openclaude &>/dev/null; then
-        openclaude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
-    fi
-}
-
 if $INSTALL_OPENCLAUDE; then
-    step "Checking OpenClaude..."
-    CURRENT_OPENCLAUDE=$(_get_openclaude_version)
-    INSTALLED_OPENCLAUDE=$(_get_installed_version "openclaude")
-    
-    if [[ -n "$CURRENT_OPENCLAUDE" ]] && [[ "$CURRENT_OPENCLAUDE" == "$INSTALLED_OPENCLAUDE" ]]; then
-        skip "OpenClaude already up to date (${CURRENT_OPENCLAUDE})"
-    else
-        step "Installing/Updating OpenClaude..."
-        _node_major=""
-        if command -v node &>/dev/null; then
-            _node_major=$(node -v | cut -d. -f1 | tr -d 'v') || _node_major="0"
-        fi
-        if ! command -v node &>/dev/null || [[ "${_node_major:-0}" -lt 20 ]]; then
-            step "Setting up NodeSource repository for Node.js 22..."
-            nodesource_key=$(mktemp /tmp/nodesource.gpg.XXXXXX)
-            register_tmp "$nodesource_key"
-            curl -fsSL --proto '=https' --max-redirs 5 \
-                https://deb.nodesource.com/gpgkey/nodesource.gpg.key -o "$nodesource_key"
-            sudo gpg --dearmor -o /usr/share/keyrings/nodesource.gpg "$nodesource_key"
-            rm -f "$nodesource_key"
-            echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq nodejs
-            ok "Node.js 22 installed via official repository (verified GPG)."
-        fi
-        sudo npm install -g @gitlawb/openclaude@latest
-        NEW_OPENCLAUDE=$(_get_openclaude_version)
-        _set_installed_version "openclaude" "${NEW_OPENCLAUDE:-latest}"
+    step "Installing OpenClaude..."
+    if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
+        step "Setting up NodeSource repository for Node.js 22..."
+        nodesource_key="/tmp/nodesource.gpg.key"
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource.gpg.key -o "$nodesource_key"
+        sudo gpg --dearmor -o /usr/share/keyrings/nodesource.gpg "$nodesource_key"
+        rm -f "$nodesource_key"
+        echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq nodejs
+        ok "Node.js 22 installed via official repository (verified GPG)."
     fi
 
     if command -v openclaude &>/dev/null; then
