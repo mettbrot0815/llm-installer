@@ -1026,9 +1026,10 @@ else
    warn "llama.cpp version ${CURRENT_VER:-unknown} < 1.0 or unversioned"
    step "Rebuilding llama.cpp..."
    _rebuild_llama=true
-    else
-        _rebuild_llama=true
-    fi
+ fi
+ else
+ _rebuild_llama=true
+ fi
     
     if [[ "$_rebuild_llama" == "true" ]]; then
         LLAMA_DIR="${HOME}/llama.cpp"
