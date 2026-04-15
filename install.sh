@@ -1003,7 +1003,7 @@ find_llama_server() {
 _get_llama_version() {
     local bin="$1"
     if [[ -x "$bin" ]]; then
-        "$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
+        "$bin" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
     fi
 }
 
