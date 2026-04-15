@@ -300,30 +300,12 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
     fi
 fi
 
-if command -v gh &>/dev/null; then
- if [[ -t 0 ]]; then
-   step "Authenticating GitHub CLI (gh) interactively..."
-   gh auth login
-   gh config set git_protocol https 2>/dev/null || true
-   ok "gh CLI authenticated."
- else
-   if [[ -n "$GITHUB_TOKEN" ]]; then
-     export GITHUB_TOKEN
-     export GH_TOKEN="$GITHUB_TOKEN"
-     step "Authenticating GitHub CLI (gh)..."
-     if echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null; then
-       ok "gh CLI authenticated via token."
-     else
-       warn "gh auth login failed; token available via GH_TOKEN env var."
-     fi
-     gh config set git_protocol https 2>/dev/null || true
-   else
-     warn "gh CLI not authenticated and no GITHUB_TOKEN available."
-   fi
- fi
-else
- warn "gh CLI not found — GitHub token available via env vars only."
- warn "Install 'gh' and re-run for secure git authentication."
+# GitHub token — use GH_TOKEN/GITHUB_TOKEN env var only (no gh auth store)
+if [[ -n "$GITHUB_TOKEN" ]]; then
+ export GITHUB_TOKEN
+ export GH_TOKEN="$GITHUB_TOKEN"
+elif [[ -n "$GH_TOKEN" ]]; then
+ export GITHUB_TOKEN="$GH_TOKEN"
 fi
 
 # =============================================================================
