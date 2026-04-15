@@ -1484,6 +1484,7 @@ if $INSTALL_AUTOAGENT; then
 #!/usr/bin/env bash
 set -euo pipefail
 export TKINTER_AVAILABLE=False
+LLAMA_PORT="8080"
 AUTOAGENT_VENV="${HOME}/autoagent/.venv"
 AUTOAGENT_DIR="${HOME}/autoagent"
 
@@ -1895,6 +1896,8 @@ alias stop-llm='pkill -f "llama-server.*-m" 2>/dev/null || true; echo "llama-ser
 alias restart-llm='stop-llm; sleep 2; start-llm'
 alias llm-log='tail -f /tmp/llama-server.log'
 alias switch-model='SWITCH_MODEL_ONLY=1 bash ${INSTALL_COPY}'
+alias autoagent='bash ~/start-autoagent.sh'
+alias start-webui='bash ~/start-webui.sh'
 BASHRC_EXPANDED
 
         cat >>"${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
