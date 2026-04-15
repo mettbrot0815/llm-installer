@@ -1018,15 +1018,14 @@ else
     LLAMA_SERVER_BIN=$(find_llama_server || true)
     _rebuild_llama=false
     if [[ -n "$LLAMA_SERVER_BIN" ]]; then
-        CURRENT_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
-        INSTALLED_VER=$(_get_installed_version "llama.cpp")
-        if _version_compare "${CURRENT_VER:-0}" "1.0" && [[ "$CURRENT_VER" == "$INSTALLED_VER" ]]; then
-            ok "llama-server ${CURRENT_VER} already installed — skipping build"
-        else
-            warn "llama.cpp version mismatch (installed: ${INSTALLED_VER:-none}, current: ${CURRENT_VER:-none})"
-            step "Rebuilding llama.cpp..."
-            _rebuild_llama=true
-        fi
+ CURRENT_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
+ INSTALLED_VER=$(_get_installed_version "llama.cpp")
+ if _version_compare "${CURRENT_VER:-0}" "1.0"; then
+   ok "llama-server ${CURRENT_VER} already installed — skipping build"
+ else
+   warn "llama.cpp version ${CURRENT_VER:-unknown} < 1.0 or unversioned"
+   step "Rebuilding llama.cpp..."
+   _rebuild_llama=true
     else
         _rebuild_llama=true
     fi
