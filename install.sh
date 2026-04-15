@@ -109,6 +109,10 @@ warn() { echo -e "${YLW}[!] $*${RST}"; }
 die()  { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
 skip() { echo -e "${CYN}[~] $*${RST}"; }
 
+# ── Port constants ─────────────────────────────────────────────────────────────
+readonly LLAMA_PORT=8080
+readonly WEBUI_PORT=8787
+
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
 cleanup() {
@@ -305,9 +309,11 @@ if [[ -n "$GITHUB_TOKEN" ]]; then
     # gh auth stores tokens securely in its own credential store.
     if command -v gh &>/dev/null; then
         step "Authenticating GitHub CLI (gh)..."
-        echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null && \
-            ok "gh CLI authenticated via gh auth login." || \
+        if echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null; then
+            ok "gh CLI authenticated via gh auth login."
+        else
             warn "gh auth login failed; token still available via GH_TOKEN env var."
+        fi
         gh config set git_protocol https 2>/dev/null || true
     else
         warn "gh CLI not found — GitHub token available via env vars only."
@@ -338,7 +344,7 @@ if [[ -z "$_SMO" ]]; then
         (type -p wget >/dev/null || sudo apt-get install -y -qq wget) \
             && sudo mkdir -p -m 755 /etc/apt/keyrings \
             && out=$(mktemp) && wget -nv -O "$out" https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-            && cat "$out" | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+            && sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg < "$out" > /dev/null \
             && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
             && rm -f "$out"
 
@@ -442,7 +448,7 @@ if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
     fi
 fi
 # Debug: Confirm we passed CUDA section
-echo "DEBUG: Passed CUDA section" >&2
+
 
 # CUDA paths (GPU present case)
 if [[ "$HAS_NVIDIA" == "true" ]]; then
@@ -1163,7 +1169,7 @@ if [[ -f "${HERMES_HOME}/.env" && ! -L "${HERMES_HOME}/.env" ]]; then
 fi
 cat >"${HERMES_HOME}/.env" <<'ENV'
 OPENAI_API_KEY=sk-no-key-needed
-OPENAI_BASE_URL=http://localhost:8080/v1
+OPENAI_BASE_URL=http://localhost:${LLAMA_PORT}/v1
 ENV
 ok "$HOME/.hermes/.env written."
 
@@ -1179,7 +1185,7 @@ setup_complete: true
 
 model:
   provider: custom
-  base_url: http://localhost:8080/v1
+  base_url: http://localhost:${LLAMA_PORT}/v1
   default: "${SEL_NAME}"
   context_length: ${SAFE_CTX}
 
@@ -1341,7 +1347,7 @@ if $INSTALL_GOOSE; then
 models:
   - name: local
     provider: openai
-    base_url: http://localhost:8080/v1
+    base_url: http://localhost:${LLAMA_PORT}/v1
     api_key: sk-local
     default: true
 GOOSECONF
@@ -1484,7 +1490,7 @@ export TKINTER_AVAILABLE=False
 AUTOAGENT_VENV="${HOME}/autoagent/.venv"
 AUTOAGENT_DIR="${HOME}/autoagent"
 
-if ! curl -sf http://localhost:8080/v1/models &>/dev/null; then
+if ! curl -sf http://localhost:${LLAMA_PORT}/v1/models &>/dev/null; then
     echo "llama-server not running. Start with: start-llm"
     exit 1
 fi
@@ -1522,7 +1528,7 @@ if $INSTALL_OPENCLAUDE; then
 {
   "providers": {
     "local": {
-      "baseUrl": "http://127.0.0.1:8080/v1",
+      "baseUrl": "http://127.0.0.1:${LLAMA_PORT}/v1",
       "apiKey": "local"
     }
   },
@@ -1687,7 +1693,7 @@ echo "$LLAMA_PID" > "$PIDFILE"
 
 ready=false
 for _ in {1..30}; do
-    if curl -sf http://localhost:8080/v1/models &>/dev/null; then
+    if curl -sf http://localhost:${LLAMA_PORT}/v1/models &>/dev/null; then
         echo "  llama-server ready (PID: $LLAMA_PID)"
         echo "  Run: hermes    ← Hermes Agent"
         echo "  Run: goose     ← Goose (if installed)"
@@ -1787,7 +1793,7 @@ sleep 3
 
 READY=false
 for _ in {1..30}; do
-    if curl -sf http://localhost:8080/v1/models &>/dev/null; then
+    if curl -sf http://localhost:${LLAMA_PORT}/v1/models &>/dev/null; then
         ok "llama-server ready at http://localhost:8080"
         READY=true
         break
@@ -2049,7 +2055,7 @@ if [[ -z "$_SMO" ]] && (command -v claude &>/dev/null || [[ -d "${HOME}/.claude"
   },
   "providers": {
     "local": {
-      "baseUrl": "http://127.0.0.1:8080/v1",
+      "baseUrl": "http://127.0.0.1:${LLAMA_PORT}/v1",
       "apiKey": "local",
       "models": {
         "${SEL_GGUF}": {
