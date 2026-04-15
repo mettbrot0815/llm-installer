@@ -112,7 +112,7 @@ skip() { echo -e "${CYN}[~] $*${RST}"; }
 # ── Port constants ─────────────────────────────────────────────────────────────
 readonly LLAMA_PORT=8080
 readonly WEBUI_PORT=8787
-readonly IDLE_TIMEOUT_SECS=180  # Auto-unload after 3 minutes of inactivity
+
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
