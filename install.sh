@@ -1466,11 +1466,11 @@ if $INSTALL_AUTOAGENT; then
             git reset --hard origin/main
             cd -- "$HOME"
         fi
-
-        # Create venv with system site packages for tkinter
-        if [[ ! -d "${AUTOAGENT_VENV}" ]]; then
-            python3 -m venv "${AUTOAGENT_VENV}" --system-site-packages
-        fi
+		# Create venv with system site packages for tkinter (recreate if broken)
+		if [[ ! -d "${AUTOAGENT_VENV}" ]] || [[ ! -x "${AUTOAGENT_VENV}/bin/pip" ]]; then
+			rm -rf "${AUTOAGENT_VENV}"
+			python3 -m venv "${AUTOAGENT_VENV}" --system-site-packages
+		fi
 
         if _install_autoagent; then
             NEW_AUTOAGENT=$(_get_autoagent_version)
