@@ -1502,7 +1502,7 @@ fi
 #  13d. OpenClaude - with version checking
 # =============================================================================
 if $INSTALL_OPENCLAUDE; then
-    step "Installing OpenClaude..."
+    step "Installing/Updating OpenClaude..."
     if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
         step "Setting up NodeSource repository for Node.js 22..."
         nodesource_key="/tmp/nodesource.gpg.key"
