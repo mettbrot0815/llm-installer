@@ -112,6 +112,7 @@ skip() { echo -e "${CYN}[~] $*${RST}"; }
 # ── Port constants ─────────────────────────────────────────────────────────────
 readonly LLAMA_PORT=8080
 readonly WEBUI_PORT=8787
+readonly IDLE_TIMEOUT_SECS=180  # Auto-unload after 3 minutes of inactivity
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
@@ -1687,6 +1688,7 @@ echo ""
     --cache-type-v q4_0 \
     --host 0.0.0.0 \
     --port 8080 \
+    --idle-timeout 180 \
     "${USE_JINJA}" &
 LLAMA_PID=$!
 echo "$LLAMA_PID" > "$PIDFILE"
