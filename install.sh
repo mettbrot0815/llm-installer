@@ -839,7 +839,6 @@ SEL_MIN_RAM="0"
 SEL_MIN_VRAM="0"
 SAFE_CTX=32768
 USE_JINJA="--jinja"
-GGUF_PATH=""
 CHOICE=""
 
 show_model_table
@@ -925,7 +924,7 @@ elif [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
     warn "This may take several minutes."
 
     AVAIL_KB=$(df -k "${MODEL_DIR}" | awk 'NR==2 {print $4}')
-    AVAIL_GB=$(awk -v kb="$AVAIL_KB" 'BEGIN { echo -e "%.1f", kb/1024/1024 }')
+    AVAIL_GB=$(awk -v kb="$AVAIL_KB" 'BEGIN { printf "%.1f", kb/1024/1024 }')
     AVAIL_GB_INT=$(awk -v kb="$AVAIL_KB" 'BEGIN { print int((kb/1024/1024) + 0.999) }')
 
     REQ_GB=""
@@ -1236,7 +1235,7 @@ select_optional_components() {
     local tmpfile
     tmpfile=$(mktemp)
     register_tmp "$tmpfile"
-    echo "$choices" | tr -d '"' | tr ' ' '\n' | grep -v '^$' > "$tmpfile"
+    echo "$choices" | tr -d '"' | tr ' ' '\n' | grep -v '^$' > "$tmpfile" || true
 
     local -a selected=()
     while IFS= read -r line; do
@@ -1268,13 +1267,10 @@ select_optional_components() {
     if $INSTALL_OPENCLAUDE; then echo "  ✓ OpenClaude"; count=$((count+1)); fi
     if $INSTALL_WEBUI; then echo "  ✓ Hermes WebUI"; count=$((count+1)); fi
 
-    if [[ $count -eq 0 ]]; then
-        ok "No optional components selected."
-        return 1
-    else
-        ok "$count component(s) selected for installation."
-        return 0
-    fi
+	if [[ $count -eq 0 ]]; then
+		ok "No optional components selected."
+	fi
+	return 0
 }
 
 INSTALL_GOOSE=false
@@ -1642,6 +1638,7 @@ GGUF="${GGUF_PATH}"
 MODEL_NAME="${SEL_NAME}"
 LLAMA_BIN="${LLAMA_SERVER_BIN}"
 SAFE_CTX="${SAFE_CTX}"
+LLAMA_PORT="8080"
 USE_JINJA="${USE_JINJA}"
 PIDFILE="${PIDFILE_PATH}"
 
@@ -1686,11 +1683,9 @@ echo ""
     -np 1 \
     --cache-type-k q4_0 \
     --cache-type-v q4_0 \
-    --host 0.0.0.0 \
-    --port 8080 \
-    --idle-timeout 180 \
-    "${USE_JINJA}" &
-LLAMA_PID=$!
+	--host 0.0.0.0 \
+	--port "${LLAMA_PORT}" \
+	"${USE_JINJA}" &
 echo "$LLAMA_PID" > "$PIDFILE"
 
 ready=false
@@ -1906,7 +1901,7 @@ BASHRC_EXPANDED
 
 vram() {
     nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null | \
-        awk -F, '{echo -e "GPU: %s\nVRAM: %s / %s MiB\nUtil: %s%%\n",$1,$2,$3,$4}' || echo "nvidia-smi not available"
+        awk -F, '{printf "GPU: %s\nVRAM: %s / %s MiB\nUtil: %s%%\n",$1,$2,$3,$4}' || echo "nvidia-smi not available"
 }
 
 llm-models() {
