@@ -1686,6 +1686,7 @@ echo ""
     --cache-type-v q4_0 \
 	--host 0.0.0.0 \
 	--port "${LLAMA_PORT}" \
+	--sleep-idle-seconds 300 \
 	"${USE_JINJA}" &
 echo "$LLAMA_PID" > "$PIDFILE"
 
