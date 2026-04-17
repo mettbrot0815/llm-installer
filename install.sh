@@ -44,6 +44,7 @@ _set_installed_version() {
   if [[ -f "$VERSION_FILE" ]] && grep -qF "${component}=" "$VERSION_FILE" 2>/dev/null; then
     local tmp
     tmp=$(mktemp "${VERSION_FILE}.XXXXXX") || die "Failed to create temp file for version update"
+  register_tmp "$tmp"
     while IFS= read -r line; do
       if [[ "$line" == "${component}="* ]]; then
         echo "${component}=${version}"
@@ -138,9 +139,9 @@ trap _combined_exit_handler EXIT INT TERM
 # ── Integrity verification helper ──────────────────────────────────────────────
 # Known-good SHA256 hashes for installer scripts (update when upstream changes)
 declare -A INSTALLER_HASHES=(
-  ["hermes"]="456789abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234"
+  ["hermes"]="1c10b1553f4632a1beabcefdc3d241cb3e6735f450dc4ee0dc44766a68112537"
   ["goose"]="ef85145e8d0162106d9d9c8ef51dd51e9d0b6a3ee5edddb9f6658fa7f0f0a892"
-  ["opencode"]="1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+  ["opencode"]="fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e"
 )
 
 _verify_script_integrity() {
@@ -173,9 +174,9 @@ _install_cuda() {
     --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 \
     https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb \
     -o "$cuda_deb" || die "Failed to download CUDA keyring"
-  sudo dpkg -i "$cuda_deb"
-  sudo apt-get update -qq
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6
+  sudo dpkg -i "$cuda_deb" || die "Failed to install CUDA keyring"
+  sudo apt-get update -qq || die "Failed to update apt cache"
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6 || die "Failed to install cuda-toolkit-12-6"
   _set_installed_version "cuda" "12.6"
   ok "CUDA toolkit 12.6 installed."
 }
@@ -498,6 +499,7 @@ MODELS=(
   "12|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params"
   "13|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
   "14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
+ "15|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
 )
 
 grade_model() {
@@ -511,7 +513,12 @@ grade_model() {
   ram_h=$((ram_gib - min_ram))
   if ((min_vram > 0)) && [[ "$has_nvidia" == "true" ]]; then
     vram_h=$((vram_gib - min_vram))
-    if ((vram_h >= 4)); then
+    # BUGFIX 1: Check vram_h < 0 BEFORE falling back to RAM-based grades.
+    # A negative vram_h means insufficient VRAM — the model will OOM on GPU
+    # regardless of how much system RAM is available. Return "F" immediately.
+    if ((vram_h < 0)); then
+      echo "F"
+    elif ((vram_h >= 4)); then
       echo "S"
     elif ((vram_h >= 0)); then
       echo "A"
@@ -523,6 +530,8 @@ grade_model() {
       echo "F"
     fi
   elif ((min_vram > 0)); then
+    # BUGFIX 2: vram_h is intentionally NOT referenced here (CPU-only path).
+    # The original code could use an uninitialized vram_h from a prior call.
     if ((ram_h >= 8)); then
       echo "B"
     elif ((ram_h >= 0)); then
@@ -566,10 +575,10 @@ apply_model_settings() {
   local gguf="$1"
   # Instead of 'declare -g', assign globally using explicit export
   case "$gguf" in
-    *Qwen3.5* | *Carnice*)
+    *Qwen3.5* | *Carnice* | *Hermes*)
       SAFE_CTX=262144
       USE_JINJA="--jinja"
-      ok "Qwen3.5/Carnice: 256K context, Jinja enabled"
+      ok "Qwen3.5/Carnice/Hermes: 256K context, Jinja enabled"
       ;;
     *Llama-3.1* | *Llama-3.3* | *Qwen3-30B*)
       SAFE_CTX=131072
@@ -737,6 +746,8 @@ for f in files:
 PYLIST
     local py_out
     py_out=$(python3 "$list_py" "$SEL_HF_REPO" 2>/dev/null || true)
+  py_out="${py_out#"${py_out%%[![:space:]]*}"}"
+  py_out="${py_out%"${py_out##*[![:space:]]}"}"
     if [[ -z "$py_out" ]]; then
       warn "Could not auto-list files. Enter filename manually."
       read -rp " Filename (e.g. model-Q4_K_M.gguf): " SEL_GGUF
