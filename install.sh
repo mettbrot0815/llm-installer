@@ -449,6 +449,9 @@ if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
   step "Checking CUDA toolkit..."
   if command -v nvcc &>/dev/null; then
     CUDA_VERSION=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9.]*\).*/\1/' || true)
+ # FIX (Item 7): nvcc output like "release 12.6, built for..." has comma. Strip it.
+ CUDA_VERSION="${CUDA_VERSION//[^0-9.]/}"
+ CUDA_VERSION="${CUDA_VERSION%.}"
     [[ -z "$CUDA_VERSION" ]] && CUDA_VERSION="unknown"
     INSTALLED_CUDA=$(_get_installed_version "cuda")
     if [[ -n "$CUDA_VERSION" && "$CUDA_VERSION" != "unknown" ]] && \
@@ -499,7 +502,8 @@ MODELS=(
   "12|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params"
   "13|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
   "14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
- "15|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
+  "15|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
+  "16|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM-18B (Healed)|9.84|131072|8|6|mid|reasoning,code,production|~18B parameter frankenmerge of Qwen3.5-9B, 90.9% score"
 )
 
 grade_model() {
@@ -787,10 +791,11 @@ PYLIST
     else
       step "Downloading ${SEL_GGUF}..."
       if [[ -n "${HF_TOKEN:-}" ]]; then
-        env HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" \
-          --local-dir "$MODEL_DIR"
-      else
-        "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" --local-dir "$MODEL_DIR"
+ env HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" --local-dir "$MODEL_DIR" \
+  || _hf_fallback "$SEL_HF_REPO" "$SEL_GGUF" "$MODEL_DIR" "$HF_TOKEN"
+ else
+ "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" --local-dir "$MODEL_DIR" \
+  || _hf_fallback "$SEL_HF_REPO" "$SEL_GGUF" "$MODEL_DIR"
       fi
       [[ -f "$GGUF_PATH" ]] || die "Download completed but file not found."
       local fs
@@ -857,6 +862,21 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
     warn "HF login could not be verified — downloads may be unauthenticated."
   fi
 fi
+
+# ── HF direct-download fallback (used when hf CLI fails) ─────────────────────
+_hf_fallback() {
+ local repo="$1" gguf="$2" dir="$3" token="${4:-}"
+ local url="https://huggingface.co/${repo}/resolve/main/${gguf}"
+ local out="${dir}/${gguf}"
+ local -a curl_args=(-fSL --proto '=https' --max-redirs 5 \
+ --progress-bar -o "$out")
+ [[ -n "$token" ]] && curl_args+=(-H "Authorization: Bearer ${token}")
+ step "HF CLI failed — trying direct curl download..."
+ curl "${curl_args[@]}" "$url" || {
+  rm -f "$out"
+  die "Fallback curl also failed for ${gguf}."
+ }
+}
 
 # =============================================================================
 # 8. Model selector (always runs)
@@ -986,10 +1006,11 @@ elif [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
   warn "This may take several minutes."
 
   if [[ -n "${HF_TOKEN:-}" ]]; then
-    env HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" \
-      --local-dir "${MODEL_DIR}"
-  else
-    "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}"
+  env HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}" \
+   || _hf_fallback "${SEL_HF_REPO}" "${SEL_GGUF}" "${MODEL_DIR}" "${HF_TOKEN}"
+ else
+  "$HF_CLI" download "${SEL_HF_REPO}" "${SEL_GGUF}" --local-dir "${MODEL_DIR}" \
+   || _hf_fallback "${SEL_HF_REPO}" "${SEL_GGUF}" "${MODEL_DIR}"
   fi
   [[ -f "$GGUF_PATH" ]] || die "Download completed but file not found."
   FILE_SIZE=$(wc -c <"$GGUF_PATH" 2>/dev/null || echo 0)
