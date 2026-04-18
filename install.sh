@@ -126,6 +126,12 @@ cleanup() {
 }
 register_tmp() { TMPFILES+=("$1"); }
 
+# Escape sed replacement metacharacters (& and \) in dynamic values.
+# This is used by the envsubst fallback path to avoid template corruption.
+_escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[&\\]/\\&/g'
+}
+
 # ── Save original umask ───────────────────────────────────────────────────────
 _ORIG_UMASK=$(umask)
 
@@ -767,7 +773,8 @@ PYLIST
         echo -e " ${BLD}Available GGUFs:${RST}\\n"
         local fnum=1 gf
         for gf in "${GGUF_FILES[@]}"; do
-          echo -e " %2d %s\\n" "$fnum" "$gf"
+          # Use printf (not echo) for format specifiers.
+          printf ' %2d %s\n\n' "$fnum" "$gf"
           fnum=$((fnum + 1))
         done
         echo ""
@@ -1107,52 +1114,52 @@ else
 
   if [[ "$_rebuild_llama" == "true" ]]; then
     LLAMA_DIR="${HOME}/llama.cpp"
-    if needs_update "$LLAMA_DIR" "master"; then
-      step "Building/updating llama.cpp..."
-      if [[ -d "$LLAMA_DIR/.git" ]]; then
+    step "Building/updating llama.cpp..."
+    if [[ -d "$LLAMA_DIR/.git" ]]; then
+      # Update source only when remote changed; still build regardless.
+      if needs_update "$LLAMA_DIR" "master"; then
         git -C "$LLAMA_DIR" fetch origin
         git -C "$LLAMA_DIR" reset --hard origin/master
       else
-        git clone https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+        skip "llama.cpp source already up‑to‑date; rebuilding locally."
       fi
-
-      cd -- "$LLAMA_DIR"
-      # Use ccache for faster rebuilds if available
-      if command -v ccache &>/dev/null; then
-        CC="ccache gcc"
-        CXX="ccache g++"
-      else
-        CC="gcc"
-        CXX="g++"
-      fi
-      export CC CXX
-
-      # Build with CUDA if NVIDIA GPU detected
-      # -ngl 99: Offload all layers to GPU for maximum performance
-      # --cache-type-k/v q4_0: Use 4-bit quantized KV cache to save VRAM
-      if [[ "$HAS_NVIDIA" == "true" ]]; then
-        cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
-          -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
-      else
-        cmake -B build -DGGML_CCACHE=ON
-      fi
-      cmake --build build --config Release -j"$(nproc)"
-      if sudo -n true 2>/dev/null; then
-        sudo cmake --install build || warn "System install failed — using build directory."
-      else
-        warn "Sudo requires password; skipping system install. Using build directory."
-      fi
-      cd -- "$HOME"
-
-      NEW_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
-      _set_installed_version "llama.cpp" "${NEW_VER:-latest}"
-      ok "llama.cpp built successfully"
     else
-      skip "llama.cpp already up‑to‑date."
+      git clone https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
     fi
 
+    cd -- "$LLAMA_DIR"
+    # Use ccache for faster rebuilds if available
+    if command -v ccache &>/dev/null; then
+      CC="ccache gcc"
+      CXX="ccache g++"
+    else
+      CC="gcc"
+      CXX="g++"
+    fi
+    export CC CXX
+
+    # Build with CUDA if NVIDIA GPU detected
+    # -ngl 99: Offload all layers to GPU for maximum performance
+    # --cache-type-k/v q4_0: Use 4-bit quantized KV cache to save VRAM
+    if [[ "$HAS_NVIDIA" == "true" ]]; then
+      cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
+        -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
+    else
+      cmake -B build -DGGML_CCACHE=ON
+    fi
+    cmake --build build --config Release -j"$(nproc)"
+    if sudo -n true 2>/dev/null; then
+      sudo cmake --install build || warn "System install failed — using build directory."
+    else
+      warn "Sudo requires password; skipping system install. Using build directory."
+    fi
+    cd -- "$HOME"
+
+    # Re-discover binary after build/install, then cache the version from real path.
     LLAMA_SERVER_BIN=$(find_llama_server || true)
     [[ -n "$LLAMA_SERVER_BIN" ]] || die "llama-server not found after build."
+    NEW_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
+    _set_installed_version "llama.cpp" "${NEW_VER:-latest}"
     ok "llama-server: ${LLAMA_SERVER_BIN}"
   fi
 fi
@@ -1577,10 +1584,13 @@ if $INSTALL_OPENCLAUDE; then
   step "Installing/Updating OpenClaude..."
   if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
     step "Setting up Node.js LTS..."
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.gpg.key
+    # Use mktemp to avoid predictable /tmp filename races.
+    nodesource_key=$(mktemp /tmp/nodesource.XXXXXX.gpg) || die "Failed to create temp file for NodeSource key"
+    register_tmp "$nodesource_key"
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o "$nodesource_key"
     sudo mkdir -p /etc/apt/keyrings
-    sudo install -m 644 /tmp/nodesource.gpg.key /etc/apt/keyrings/nodesource.gpg
-    rm -f /tmp/nodesource.gpg.key
+    sudo install -m 644 "$nodesource_key" /etc/apt/keyrings/nodesource.gpg
+    rm -f "$nodesource_key"
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_lts.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
     sudo apt-get update -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm
@@ -1843,14 +1853,24 @@ if command -v envsubst &>/dev/null; then
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 else
   warn "envsubst not found; using sed fallback (slower)."
-  sed -e "s|\${GGUF_PATH}|${GGUF_PATH}|g" \
-    -e "s|\${SEL_NAME}|${SEL_NAME}|g" \
-    -e "s|\${LLAMA_SERVER_BIN}|${LLAMA_SERVER_BIN}|g" \
-    -e "s|\${SAFE_CTX}|${SAFE_CTX}|g" \
-    -e "s|\${USE_JINJA}|${USE_JINJA}|g" \
-    -e "s|\${PIDFILE_PATH}|${PIDFILE_PATH}|g" \
-    -e "s|\${LLAMA_PORT}|${LLAMA_PORT}|g" \
+  # Escape replacement strings for sed to prevent '&' and '\' corruption.
+  _GGUF_PATH_ESC=$(_escape_sed_replacement "${GGUF_PATH}")
+  _SEL_NAME_ESC=$(_escape_sed_replacement "${SEL_NAME}")
+  _LLAMA_SERVER_BIN_ESC=$(_escape_sed_replacement "${LLAMA_SERVER_BIN}")
+  _SAFE_CTX_ESC=$(_escape_sed_replacement "${SAFE_CTX}")
+  _USE_JINJA_ESC=$(_escape_sed_replacement "${USE_JINJA}")
+  _PIDFILE_PATH_ESC=$(_escape_sed_replacement "${PIDFILE_PATH}")
+  _LLAMA_PORT_ESC=$(_escape_sed_replacement "${LLAMA_PORT}")
+  sed -e "s|\${GGUF_PATH}|${_GGUF_PATH_ESC}|g" \
+    -e "s|\${SEL_NAME}|${_SEL_NAME_ESC}|g" \
+    -e "s|\${LLAMA_SERVER_BIN}|${_LLAMA_SERVER_BIN_ESC}|g" \
+    -e "s|\${SAFE_CTX}|${_SAFE_CTX_ESC}|g" \
+    -e "s|\${USE_JINJA}|${_USE_JINJA_ESC}|g" \
+    -e "s|\${PIDFILE_PATH}|${_PIDFILE_PATH_ESC}|g" \
+    -e "s|\${LLAMA_PORT}|${_LLAMA_PORT_ESC}|g" \
     "${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
+  unset _GGUF_PATH_ESC _SEL_NAME_ESC _LLAMA_SERVER_BIN_ESC _SAFE_CTX_ESC \
+    _USE_JINJA_ESC _PIDFILE_PATH_ESC _LLAMA_PORT_ESC
 fi
 rm -f "${LAUNCH_SCRIPT}.template"
 chmod +x "$LAUNCH_SCRIPT"
@@ -1862,6 +1882,7 @@ ok "Launch script: ~/start-llm.sh"
 if [[ -z "$_SMO" ]]; then
   step "Creating systemd user service for llama-server..."
   mkdir -p "${HOME}/.local/bin"
+  mkdir -p "${HOME}/.config/systemd/user"
   cat >"${HOME}/.local/bin/llama-server-wrapper" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1901,8 +1922,14 @@ fi
 
 # ── Start llama-server ────────────────────────────────────────────────────────
 step "Starting llama-server..."
-# Kill any existing llama-server processes
-pkill -f "llama-server.*-m" 2>/dev/null || true
+# Kill existing listener only on configured llama-server TCP port.
+EXISTING_PID=""
+if command -v ss &>/dev/null; then
+  EXISTING_PID=$(ss -tlnp 2>/dev/null | awk -v port=":${LLAMA_PORT}" '$4 ~ port {match($0, /pid=([0-9]+)/, arr); print arr[1]}' | head -1 || true)
+elif command -v netstat &>/dev/null; then
+  EXISTING_PID=$(netstat -tlnp 2>/dev/null | awk -v port=":${LLAMA_PORT}" '$4 ~ port {split($7, arr, "/"); print arr[1]}' | head -1 || true)
+fi
+[[ -n "$EXISTING_PID" ]] && kill "$EXISTING_PID" 2>/dev/null || true
 sleep 1
 
 # Start via the generated launch script
@@ -2018,7 +2045,6 @@ BASHRC_EXPANDED
 
     # Add aliases and functions with proper escaping for INSTALL_COPY
     printf 'alias start-llm='"'"'bash ~/start-llm.sh'"'"'\n' >> "${HOME}/.bashrc"
-    printf 'alias stop-llm='"'"'pkill -f "llama-server.*-m" 2>/dev/null || true; echo "llama-server stopped."'"'"'\n' >> "${HOME}/.bashrc"
     printf 'alias restart-llm='"'"'stop-llm; sleep 2; start-llm'"'"'\n' >> "${HOME}/.bashrc"
     printf 'alias llm-log='"'"'tail -f /tmp/llama-server.log'"'"'\n' >> "${HOME}/.bashrc"
     printf 'alias switch-model='"'"'SWITCH_MODEL_ONLY=1 bash %s'"'"'\n' "${INSTALL_COPY}" >> "${HOME}/.bashrc"
@@ -2065,6 +2091,22 @@ llm-status() {
   echo -e "${BLD}${CYN}│${RST} ──────────────────────────────────────────────────────"
   echo -e "${BLD}${CYN}│${RST} ${CYN}start-llm${RST} · ${CYN}stop-llm${RST} · ${CYN}switch-model${RST} · ${CYN}llm-models${RST}"
   echo -e "${BLD}${CYN}╰────────────────────────────────────────────────────────────────╯${RST}"
+}
+
+stop-llm() {
+  local llm_port="8080" pid=""
+  # Stop only the process bound to llama-server port, not broad -f pattern matches.
+  if command -v ss &>/dev/null; then
+    pid=$(ss -tlnp 2>/dev/null | awk -v port=":${llm_port}" '$4 ~ port {match($0, /pid=([0-9]+)/, arr); print arr[1]}' | head -1 || true)
+  elif command -v netstat &>/dev/null; then
+    pid=$(netstat -tlnp 2>/dev/null | awk -v port=":${llm_port}" '$4 ~ port {split($7, arr, "/"); print arr[1]}' | head -1 || true)
+  fi
+  if [[ -n "$pid" ]]; then
+    kill "$pid" 2>/dev/null || true
+    echo "llama-server stopped."
+  else
+    echo "llama-server not running."
+  fi
 }
 
 show_llm_summary() {
