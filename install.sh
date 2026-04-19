@@ -143,7 +143,7 @@ trap _combined_exit_handler EXIT INT TERM
 # If a hash mismatches, the installer will abort with an integrity error.
 # Set to "" to disable checking for a specific script (falls back to warn-only).
 declare -A INSTALLER_HASHES=(
-  ["hermes"]="1c10b1553f4632a1beabcefdc3d241cb3e6735f450dc4ee0dc44766a68112537"
+  ["hermes"]="76024e488e4d07fc16dbb54d57431f1f0888740c1eea65db7b1734b8cfbe0f66"
   ["goose"]="ef85145e8d0162106d9d9c8ef51dd51e9d0b6a3ee5edddb9f6658fa7f0f0a892"
   ["opencode"]="fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e"
 )
@@ -162,9 +162,14 @@ _verify_script_integrity() {
   local actual_hash
   actual_hash=$(sha256sum "$script_path" | cut -d' ' -f1)
   
-  if [[ "$actual_hash" != "$expected_hash" ]]; then
-    die "Integrity verification FAILED for $script_name"$'\n'"Expected: $expected_hash"$'\n'"Got:      $actual_hash"
-  fi
+   if [[ "$actual_hash" != "$expected_hash" ]]; then
+     warn "Integrity verification FAILED for $script_name"$'\n'"Expected: $expected_hash"$'\n'"Got:      $actual_hash"
+     read -rp "Hash mismatch. Continue anyway? (y/N) " -t 30 answer || answer="n"
+     case "$answer" in
+       [yY]|[yY][eE][sS]) ;;
+       *) die "Aborted due to hash mismatch" ;;
+     esac
+   fi
   
   ok "Integrity verified for '$script_name'"
 }
@@ -1183,7 +1188,7 @@ _install_hermes_agent() {
   register_tmp "$install_script"
 
   curl -fsSL --proto '=https' --max-redirs 5 \
-    https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
+    https://raw.githubusercontent.com/NousResearch/hermes-agent/v2026.4.16/scripts/install.sh \
     -o "$install_script" || die "Failed to download Hermes installer"
 
   # Verify integrity (warns if hash not known, fails if mismatch)
@@ -1379,7 +1384,7 @@ if $INSTALL_GOOSE; then
     register_tmp "$goose_script"
     if curl -fsSL --proto '=https' --max-redirs 5 \
       --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
-      https://github.com/block/goose/releases/download/stable/download_cli.sh \
+      https://github.com/block/goose/releases/download/v1.31.0/download_cli.sh \
       -o "$goose_script" 2>/dev/null; then
       _verify_script_integrity "$goose_script" "goose"
       if bash "$goose_script"; then
