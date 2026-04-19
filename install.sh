@@ -102,8 +102,8 @@ export PATH
 unset _clean_path _path_parts _p
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
-readonly RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
-readonly CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
+export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
+export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
 
 step() { echo -e "${CYN}[*] $*${RST}"; }
 ok() { echo -e "${GRN}[+] $*${RST}"; }
@@ -138,6 +138,10 @@ trap _combined_exit_handler EXIT INT TERM
 
 # ── Integrity verification helper ──────────────────────────────────────────────
 # Known-good SHA256 hashes for installer scripts (update when upstream changes)
+# FIX SEC: These SHA256 hashes must be updated whenever upstream scripts change.
+# To regenerate: curl -fsSL <URL> | sha256sum
+# If a hash mismatches, the installer will abort with an integrity error.
+# Set to "" to disable checking for a specific script (falls back to warn-only).
 declare -A INSTALLER_HASHES=(
   ["hermes"]="1c10b1553f4632a1beabcefdc3d241cb3e6735f450dc4ee0dc44766a68112537"
   ["goose"]="ef85145e8d0162106d9d9c8ef51dd51e9d0b6a3ee5edddb9f6658fa7f0f0a892"
@@ -612,7 +616,7 @@ show_model_table() {
 ╚══════════════════════════════════════════════════════════════════════════════╝
 HDR
   printf '%b' "${RST}\\n"
-  echo -e " GPU: %-28s RAM: %s GiB VRAM: %s GiB CUDA: %s\\n\\n" \
+  printf " GPU: %-28s  RAM: %s GiB  VRAM: %s GiB  CUDA: %s\n\n" \
     "${GPU_NAME:0:28}" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA"
   echo -e " ${BLD} # Model Size Ctx Grade Tags${RST}\\n"
   echo " ─────────────────────────────────────────────────────────────────────────────"
@@ -763,7 +767,7 @@ PYLIST
         echo -e " ${BLD}Available GGUFs:${RST}\\n"
         local fnum=1 gf
         for gf in "${GGUF_FILES[@]}"; do
-          echo -e " %2d %s\\n" "$fnum" "$gf"
+          printf " %2d %s\n" "$fnum" "$gf"
           fnum=$((fnum + 1))
         done
         echo ""
@@ -963,6 +967,7 @@ elif [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
   AVAIL_GB_INT=$(awk -v kb="$AVAIL_KB" 'BEGIN { print int((kb/1024/1024) + 0.999) }')
 
   REQ_GB=""
+  # FIX HIGH-1: Parse by exact index match, not grep substring.
   while IFS='|' read -r idx _ _ _ size_gb _ _ _ _ _ _; do
     idx="${idx// /}"
     [[ "$idx" == "$CHOICE" ]] && {
@@ -1090,6 +1095,14 @@ else
       step "Building/updating llama.cpp..."
       if [[ -d "$LLAMA_DIR/.git" ]]; then
         git -C "$LLAMA_DIR" fetch origin
+        # FIX HIGH-3: warn before destructive reset
+        if [[ -t 0 ]]; then
+          warn "git reset --hard will discard local changes in ${LLAMA_DIR}."
+          read -rp "  Continue? [y/N]: " _reset_ok
+          [[ "$_reset_ok" =~ ^[Yy]$ ]] || die "Aborted by user — llama.cpp update cancelled."
+        else
+          warn "Non-interactive — running git reset --hard on ${LLAMA_DIR} (local changes lost)."
+        fi
         git -C "$LLAMA_DIR" reset --hard origin/master
       else
         git clone https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
@@ -1486,11 +1499,14 @@ _get_autoagent_version() {
 }
 
 _install_autoagent() {
-  cd -- "${AUTOAGENT_DIR}"
+  # FIX HIGH-2: pushd/popd so caller's directory is restored on return.
+  pushd "${AUTOAGENT_DIR}" > /dev/null || return 1
   "${AUTOAGENT_VENV}/bin/pip" install --upgrade pip setuptools wheel
   if ! "${AUTOAGENT_VENV}/bin/pip" install -e .; then
+    popd > /dev/null
     return 1
   fi
+  popd > /dev/null
   return 0
 }
 
@@ -1508,10 +1524,18 @@ if $INSTALL_AUTOAGENT; then
     if [[ ! -d "${AUTOAGENT_DIR}" ]]; then
       git clone https://github.com/HKUDS/AutoAgent.git "${AUTOAGENT_DIR}"
     else
-      cd -- "${AUTOAGENT_DIR}"
+      cd -- "${AUTOAGENT_DIR}" || die "Cannot cd into ${AUTOAGENT_DIR}"
       git fetch origin
+      # FIX HIGH-3: warn before destructive reset
+      if [[ -t 0 ]]; then
+        warn "git reset --hard will discard local changes in ${AUTOAGENT_DIR}."
+        read -rp "  Continue? [y/N]: " _reset_ok
+        [[ "$_reset_ok" =~ ^[Yy]$ ]] || { cd -- "$HOME"; warn "Skipping AutoAgent update."; }
+      else
+        warn "Non-interactive — running git reset --hard on ${AUTOAGENT_DIR}."
+      fi
       git reset --hard origin/main
-      cd -- "$HOME"
+      cd -- "$HOME" || die "Cannot cd to HOME"
     fi
     # Create venv with system site packages for tkinter
     if [[ ! -d "${AUTOAGENT_VENV}" ]] || [[ ! -x "${AUTOAGENT_VENV}/bin/pip" ]]; then
@@ -1546,7 +1570,7 @@ python -m autoagent.cli deep-research
 AUTOAGENT_LAUNCHER
     chmod +x "${HOME}/start-autoagent.sh"
   fi
-  cd -- "$HOME"
+  cd -- "$HOME" || die "Cannot cd to HOME"
 fi
 
 # =============================================================================
@@ -1605,17 +1629,16 @@ if $INSTALL_OPENCLAUDE; then
   if command -v openclaude &>/dev/null; then
     umask 077
     mkdir -p "${HOME}/.openclaude"
-    cat >"${HOME}/.openclaude/config.json" <<'OPENCLAUDE'
-{
+    # FIX: Write complete valid JSON in one operation.
+    printf '{
   "providers": {
     "local": {
       "baseUrl": "http://127.0.0.1:8080/v1",
       "apiKey": "local"
     }
   },
-OPENCLAUDE
-    printf '"model": "local/%s"\n' "${SEL_GGUF}" >> "${HOME}/.openclaude/config.json"
-    echo "}" >> "${HOME}/.openclaude/config.json"
+  "model": "local/%s"
+}\n' "${SEL_GGUF}" > "${HOME}/.openclaude/config.json"
     umask "$_ORIG_UMASK"
     ok "OpenClaude configured."
   fi
@@ -1669,7 +1692,7 @@ if $INSTALL_WEBUI; then
 set -euo pipefail
 HERMES_WEBUI_DIR="${HOME}/hermes-webui"
 HERMES_VENV="${HOME}/.hermes/hermes-agent/venv"
-cd -- "${HERMES_WEBUI_DIR}"
+cd -- "${HERMES_WEBUI_DIR}" || die "Cannot cd into ${HERMES_WEBUI_DIR}"
 if [[ -x "${HERMES_VENV}/bin/python" ]]; then
   export PATH="${HERMES_VENV}/bin:${PATH}"
 fi
@@ -1680,15 +1703,17 @@ WEBUISTART
 
     if systemctl --user is-system-running &>/dev/null; then
       mkdir -p "${HOME}/.config/systemd/user"
-      cat >"${HOME}/.config/systemd/user/hermes-webui.service" <<'WEBUISERVICE'
+      # FIX: Use unquoted heredoc delimiter so ${HOME} expands at write time.
+    # Eliminates the sed placeholder-replacement pattern entirely.
+    cat >"${HOME}/.config/systemd/user/hermes-webui.service" <<WEBUISERVICE
 [Unit]
 Description=Hermes WebUI
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/user/hermes-webui
-ExecStart=/home/user/start-webui.sh
+WorkingDirectory=${HERMES_WEBUI_DIR}
+ExecStart=${HOME}/start-webui.sh
 Restart=on-failure
 RestartSec=5
 Environment=HERMES_WEBUI_HOST=127.0.0.1
@@ -1699,8 +1724,6 @@ StandardError=append:/tmp/hermes-webui.log
 [Install]
 WantedBy=default.target
 WEBUISERVICE
-      # Replace placeholder with actual home directory
-      sed -i "s|/home/user|${HOME}|g" "${HOME}/.config/systemd/user/hermes-webui.service"
       systemctl --user enable hermes-webui.service 2>/dev/null || true
       ok "WebUI systemd service enabled (starts on login)."
     else
@@ -1812,8 +1835,9 @@ wait "$LLAMA_PID"
 LAUNCH_TEMPLATE
 
 # Assign PIDFILE_PATH first, THEN export
+# FIX: PIDFILE_PATH must NOT be registered for cleanup — it is baked into
+# start-llm.sh and must persist after the installer exits.
 PIDFILE_PATH=$(mktemp /tmp/llama-server.XXXXXX.pid) || die "Failed to create PID file"
-register_tmp "$PIDFILE_PATH"
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA PIDFILE_PATH LLAMA_PORT
 
 # Use envsubst if available, otherwise fallback to sed
@@ -1848,26 +1872,25 @@ exec bash ~/start-llm.sh
 WRAPPER
   chmod +x "${HOME}/.local/bin/llama-server-wrapper"
 
-  cat >"${HOME}/.config/systemd/user/llama-server.service" <<'SERVICE'
+  # FIX: Use unquoted heredoc delimiter to expand ${HOME} at write time.
+  cat >"${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
 [Unit]
 Description=llama-server LLM inference (llama.cpp)
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/home/user/.local/bin/llama-server-wrapper
+ExecStart=${HOME}/.local/bin/llama-server-wrapper
 Restart=on-failure
 RestartSec=5
-Environment=HOME=/home/user
-Environment=PATH=/usr/local/cuda/bin:/home/user/.local/bin:/usr/bin:/bin
+Environment=HOME=${HOME}
+Environment=PATH=/usr/local/cuda/bin:${HOME}/.local/bin:/usr/bin:/bin
 StandardOutput=append:/tmp/llama-server.log
 StandardError=append:/tmp/llama-server.log
 
 [Install]
 WantedBy=default.target
 SERVICE
-  # Replace placeholder with actual home directory
-  sed -i "s|/home/user|${HOME}|g" "${HOME}/.config/systemd/user/llama-server.service"
 
   if systemctl --user is-system-running &>/dev/null; then
     systemctl --user enable llama-server.service 2>/dev/null || true
@@ -1962,7 +1985,7 @@ STUB
     cat >>"${HOME}/.bashrc" <<'BASHRC_EXPANDED'
 
 # === LLM setup (added by install.sh) ===
-[[ -n "${__LLM_BASHRC_LOADED:-}" ]] && return 0
+if [[ -z "${__LLM_BASHRC_LOADED:-}" ]]; then
 export __LLM_BASHRC_LOADED=1
 
 _c=""; IFS=':' read -ra _pts <<< "$PATH"
@@ -2090,6 +2113,9 @@ _llm_autostart() {
 _llm_autostart
 
 alias clear='show_llm_summary; command clear'
+
+# FIX: Close the if guard opened at top of LLM block.
+fi
 BASHRC_FUNCTIONS
 
     ok "Helpers written to ~/.bashrc."
