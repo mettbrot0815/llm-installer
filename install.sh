@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # =============================================================================
-# install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + OpenClaude + Codex + WebUI
+# install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + OpenClaude + Codex
 # Version: production-hardened (audited revision)
 # Optional components selected via single multi‑select menu (whiptail).
-# Includes: Goose, OpenCode, OpenClaude, Codex, Hermes WebUI
+# Includes: Goose, OpenCode, OpenClaude, Codex
 #
 # Features:
 # - Smart version checking - only downloads/installs when outdated
@@ -114,7 +114,6 @@ skip() { echo -e "${CYN}[~] $*${RST}"; }
 
 # ── Port constants ─────────────────────────────────────────────────────────────
 readonly LLAMA_PORT=8080
-readonly WEBUI_PORT=8787
 
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
@@ -197,7 +196,7 @@ BANNER
 else
   cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════════╗
-║ Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode          ║
+║ Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + Codex  ║
 ║ Smart downloads - only installs outdated components           ║
 ╚══════════════════════════════════════════════════════════════╝
 BANNER
@@ -1287,12 +1286,11 @@ select_optional_components() {
   local choices
   if ! choices=$(whiptail --title "Optional Components" --checklist \
     "Select additional components to install (use SPACE to toggle, ENTER to confirm):" \
-    21 80 5 \
+    20 80 4 \
     "goose" "Goose AI Agent (Rust CLI, 30k+ stars)" OFF \
     "opencode" "OpenCode (Terminal TUI coding agent)" OFF \
     "openclaude" "OpenClaude (Claude-compatible CLI)" OFF \
     "codex" "OpenAI Codex CLI (openai/codex)" OFF \
-    "webui" "Hermes WebUI (Browser interface for Hermes)" OFF \
     3>&1 1>&2 2>&3); then
     echo ""
     ok "No optional components selected (user cancelled)."
@@ -1313,7 +1311,6 @@ select_optional_components() {
   INSTALL_OPENCODE=false
   INSTALL_OPENCLAUDE=false
   INSTALL_CODEX=false
-  INSTALL_WEBUI=false
 
   for item in "${selected[@]}"; do
     case "$item" in
@@ -1321,7 +1318,6 @@ select_optional_components() {
       opencode) INSTALL_OPENCODE=true ;;
       openclaude) INSTALL_OPENCLAUDE=true ;;
       codex) INSTALL_CODEX=true ;;
-      webui) INSTALL_WEBUI=true ;;
       *) warn "Unknown component '$item' — skipped." ;;
     esac
   done
@@ -1332,7 +1328,6 @@ select_optional_components() {
   if $INSTALL_OPENCODE; then echo " ✓ OpenCode"; count=$((count+1)); fi
   if $INSTALL_OPENCLAUDE; then echo " ✓ OpenClaude"; count=$((count+1)); fi
   if $INSTALL_CODEX; then echo " ✓ Codex"; count=$((count+1)); fi
-  if $INSTALL_WEBUI; then echo " ✓ Hermes WebUI"; count=$((count+1)); fi
 
   if [[ $count -eq 0 ]]; then
     ok "No optional components selected."
@@ -1344,7 +1339,6 @@ INSTALL_GOOSE=false
 INSTALL_OPENCODE=false
 INSTALL_OPENCLAUDE=false
 INSTALL_CODEX=false
-INSTALL_WEBUI=false
 
 if [[ -z "$_SMO" ]]; then
   step "Optional components selection"
@@ -1360,8 +1354,6 @@ if [[ -z "$_SMO" ]]; then
     read -rp " Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
     echo -e " ${BLD}Optional: OpenAI Codex CLI (openai/codex)${RST}\\n"
     read -rp " Install Codex? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_CODEX=true
-    echo -e " ${BLD}Optional: Hermes WebUI${RST}\\n"
-    read -rp " Install Hermes WebUI? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_WEBUI=true
   fi
 fi
 
@@ -1415,9 +1407,25 @@ models:
   base_url: http://localhost:8080/v1
   api_key: sk-local
   default: true
+
+# Built-in extensions — developer gives file/shell/analyse tools,
+# memory gives persistent context across sessions.
+extensions:
+  developer:
+    bundled: true
+    enabled: true
+    name: developer
+    timeout: 300
+    type: builtin
+  memory:
+    bundled: true
+    enabled: true
+    name: memory
+    timeout: 300
+    type: builtin
 GOOSECONF
     umask "$_ORIG_UMASK"
-    ok "Goose configured."
+    ok "Goose configured (developer + memory extensions enabled)."
   fi
 fi
 
@@ -1631,6 +1639,26 @@ _configure_codex() {
   chmod 600 "${HOME}/.codex/config.json"
   ok "Codex configured → llama-server (${SEL_NAME} at http://localhost:8080/v1)"
   warn "Note: Set OPENAI_API_KEY=sk-local in your environment if Codex ignores config.json."
+
+  # Inject Superpowers methodology via AGENTS.md.
+  # Superpowers gives Codex: brainstorm → plan → subagent-driven execution.
+  # It auto-updates from obra/superpowers on each Codex session start.
+  # We write to ~/.codex/AGENTS.md (user-level) so it applies to all projects.
+  # Project-level .codex/AGENTS.md or AGENTS.md takes precedence if present.
+  local agents_md="${HOME}/.codex/AGENTS.md"
+  if [[ ! -f "$agents_md" ]]; then
+    cat > "$agents_md" <<'SUPERPOWERS_AGENTS'
+# Superpowers for Codex
+# Fetch and apply the Superpowers methodology at session start.
+# This gives you: brainstorm → spec → plan → subagent-driven execution.
+# Skills: brainstorming, writing-plans, using-git-worktrees, subagent-driven-development.
+
+Fetch and follow instructions from https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.opencode/INSTALL.md
+SUPERPOWERS_AGENTS
+    ok "Superpowers injected into ~/.codex/AGENTS.md"
+  else
+    ok "~/.codex/AGENTS.md already exists — Superpowers not overwritten."
+  fi
 }
 
 if $INSTALL_CODEX; then
@@ -1646,98 +1674,6 @@ if $INSTALL_CODEX; then
       _set_installed_version "codex" "${NEW_CODEX:-latest}"
       _configure_codex
     fi
-  fi
-fi
-
-# =============================================================================
-# 13f. Hermes WebUI (Python-based) - with version checking
-# =============================================================================
-HERMES_WEBUI_DIR="${HOME}/hermes-webui"
-
-_get_webui_version() {
-  if [[ -f "${HERMES_WEBUI_DIR}/.git/config" ]]; then
-    git -C "${HERMES_WEBUI_DIR}" rev-parse --short HEAD 2>/dev/null || echo ""
-  fi
-}
-
-if $INSTALL_WEBUI; then
-  step "Checking Hermes WebUI..."
-  CURRENT_WEBUI=$(_get_webui_version)
-  INSTALLED_WEBUI=$(_get_installed_version "webui")
-
-  if [[ -n "$CURRENT_WEBUI" ]] && [[ "$CURRENT_WEBUI" == "$INSTALLED_WEBUI" ]]; then
-    skip "Hermes WebUI already up to date (${CURRENT_WEBUI})"
-  else
-    step "Installing/Updating Hermes WebUI..."
-
-    if [[ ! -d "${HERMES_WEBUI_DIR}/.git" ]]; then
-      git clone https://github.com/nesquena/hermes-webui.git "${HERMES_WEBUI_DIR}"
-    else
-      git -C "$HERMES_WEBUI_DIR" pull --quiet
-    fi
-
-    HERMES_VENV="${HOME}/.hermes/hermes-agent/venv"
-    if [[ ! -d "$HERMES_VENV" ]]; then
-      warn "Hermes agent venv not found – WebUI may not function correctly."
-      HERMES_VENV="${HOME}/hermes-agent/venv"
-    fi
-
-    if [[ -f "${HERMES_WEBUI_DIR}/requirements.txt" ]]; then
-      if [[ -x "${HERMES_VENV}/bin/pip" ]]; then
-        "${HERMES_VENV}/bin/pip" install -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet
-      else
-        pip3 install --user -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet 2>/dev/null || \
-          pip3 install --user --break-system-packages -r "${HERMES_WEBUI_DIR}/requirements.txt" --quiet || \
-          warn "Failed to install WebUI requirements.txt"
-      fi
-    fi
-
-    cat >"${HOME}/start-webui.sh" <<'WEBUISTART'
-#!/usr/bin/env bash
-set -euo pipefail
-HERMES_WEBUI_DIR="${HOME}/hermes-webui"
-HERMES_VENV="${HOME}/.hermes/hermes-agent/venv"
-cd -- "${HERMES_WEBUI_DIR}" || die "Cannot cd into ${HERMES_WEBUI_DIR}"
-if [[ -x "${HERMES_VENV}/bin/python" ]]; then
-  export PATH="${HERMES_VENV}/bin:${PATH}"
-fi
-echo "Starting Hermes WebUI on http://localhost:8787"
-./start.sh
-WEBUISTART
-    chmod +x "${HOME}/start-webui.sh"
-
-    if systemctl --user is-system-running &>/dev/null; then
-      mkdir -p "${HOME}/.config/systemd/user"
-      # FIX: Use unquoted heredoc delimiter so ${HOME} expands at write time.
-    # Eliminates the sed placeholder-replacement pattern entirely.
-    cat >"${HOME}/.config/systemd/user/hermes-webui.service" <<WEBUISERVICE
-[Unit]
-Description=Hermes WebUI
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=${HERMES_WEBUI_DIR}
-ExecStart=${HOME}/start-webui.sh
-Restart=on-failure
-RestartSec=5
-Environment=HERMES_WEBUI_HOST=127.0.0.1
-Environment=HERMES_WEBUI_PORT=8787
-StandardOutput=append:/tmp/hermes-webui.log
-StandardError=append:/tmp/hermes-webui.log
-
-[Install]
-WantedBy=default.target
-WEBUISERVICE
-      systemctl --user enable hermes-webui.service 2>/dev/null || true
-      ok "WebUI systemd service enabled (starts on login)."
-    else
-      warn "systemd --user unavailable — use '~/start-webui.sh' to start manually."
-    fi
-
-    NEW_WEBUI=$(_get_webui_version)
-    _set_installed_version "webui" "${NEW_WEBUI:-latest}"
-    ok "Hermes WebUI installed/updated"
   fi
 fi
 
@@ -1932,7 +1868,18 @@ done
 # =============================================================================
 if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
   step "Installing recommended Hermes skills..."
-  SKILLS=("github-pr-workflow" "axolotl" "huggingface-hub")
+  # Core workflow + MLOps skills relevant to a local LLM setup.
+  # llama-cpp: guidance for the exact inference stack being used here.
+  # vllm: production serving patterns & optimisation.
+  # evaluating-llms-harness: benchmark local models against standards.
+  SKILLS=(
+    "github-pr-workflow"
+    "axolotl"
+    "huggingface-hub"
+    "llama-cpp"
+    "vllm"
+    "evaluating-llms-harness"
+  )
   for skill in "${SKILLS[@]}"; do
     if command -v timeout &>/dev/null; then
       if timeout 30s hermes skills install "official/${skill}" --yes --force 2>/dev/null; then
@@ -2030,7 +1977,6 @@ BASHRC_EXPANDED
     printf 'alias llm-log='"'"'tail -f /tmp/llama-server.log'"'"'\n' >> "${HOME}/.bashrc"
     printf 'alias switch-model='"'"'SWITCH_MODEL_ONLY=1 bash %s'"'"'\n' "${INSTALL_COPY}" >> "${HOME}/.bashrc"
     printf 'alias codex='"'"'OPENAI_API_KEY=sk-local OPENAI_BASE_URL=http://localhost:8080/v1 codex'"'"'\n' >> "${HOME}/.bashrc"
-    printf 'alias start-webui='"'"'bash ~/start-webui.sh'"'"'\n' >> "${HOME}/.bashrc"
 
     cat >>"${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
 
@@ -2087,6 +2033,7 @@ show_llm_summary() {
   echo -e "${BLD}${CYN}│${RST} ${CYN}stop-llm${RST} Stop llama-server"
   echo -e "${BLD}${CYN}│${RST} ${CYN}restart-llm${RST} Restart llama-server"
   echo -e "${BLD}${CYN}│${RST} ${CYN}switch-model${RST} Pick different model"
+  echo -e "${BLD}${CYN}│${RST} ${CYN}config-reset${RST} Repoint all tools → local LLM"
   echo -e "${BLD}${CYN}│${RST} ${CYN}llm-status${RST} Status + active model"
   echo -e "${BLD}${CYN}│${RST} ${CYN}llm-log${RST} Tail llama-server log"
   echo -e "${BLD}${CYN}│${RST} ${CYN}llm-models${RST} List all .gguf files"
@@ -2116,6 +2063,168 @@ _llm_autostart() {
   fi
 }
 _llm_autostart
+
+
+config-reset() {
+  # Repoint all installed AI tools to the local llama-server at localhost:8080/v1.
+  # Reads the active model name and GGUF filename from ~/start-llm.sh.
+
+  local BASE_URL="http://localhost:8080/v1"
+  local API_KEY="sk-local"
+  local MODEL_NAME="" GGUF_NAME="" CTX="32768"
+  local reset_count=0 skip_count=0
+
+  # ── Derive active model info from start-llm.sh ───────────────────────────
+  if [[ -f ~/start-llm.sh ]]; then
+    MODEL_NAME=$(grep '^MODEL_NAME=' ~/start-llm.sh 2>/dev/null | head -1 \
+      | sed 's/MODEL_NAME="//;s/".*//' || true)
+    GGUF_NAME=$(grep '^GGUF=' ~/start-llm.sh 2>/dev/null | head -1 \
+      | sed 's|GGUF="||;s|".*||;s|.*/||' || true)
+    CTX=$(grep '^SAFE_CTX=' ~/start-llm.sh 2>/dev/null | head -1 \
+      | sed 's/SAFE_CTX=//' || true)
+  fi
+  [[ -z "$MODEL_NAME" ]] && MODEL_NAME="local-model"
+  [[ -z "$GGUF_NAME"  ]] && GGUF_NAME="$MODEL_NAME"
+  [[ -z "$CTX"        ]] && CTX="32768"
+
+  echo -e "\n${BLD}${CYN}config-reset${RST} — pointing all tools → ${CYN}${BASE_URL}${RST}"
+  echo -e " Active model : ${CYN}${MODEL_NAME}${RST}"
+  echo -e " Context      : ${CTX} tokens\n"
+
+  # ── Hermes ~/.hermes/.env ─────────────────────────────────────────────────
+  if [[ -d "${HOME}/.hermes" ]]; then
+    mkdir -p "${HOME}/.hermes"
+    printf 'OPENAI_API_KEY=%s\nOPENAI_BASE_URL=%s\n' \
+      "$API_KEY" "$BASE_URL" > "${HOME}/.hermes/.env"
+    chmod 600 "${HOME}/.hermes/.env"
+    echo -e " ${GRN}✓${RST} Hermes .env"
+    reset_count=$((reset_count+1))
+  else
+    echo -e " ${YLW}~${RST} Hermes not installed — skipped"
+    skip_count=$((skip_count+1))
+  fi
+
+  # ── Hermes ~/.hermes/config.yaml ─────────────────────────────────────────
+  if [[ -d "${HOME}/.hermes" ]]; then
+    local hcfg="${HOME}/.hermes/config.yaml"
+    [[ -f "$hcfg" ]] && cp "$hcfg" "${hcfg}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null
+    cat > "$hcfg" <<HCFG
+setup_complete: true
+
+model:
+  provider: custom
+  base_url: ${BASE_URL}
+  default: "${MODEL_NAME}"
+  context_length: ${CTX}
+
+terminal:
+  backend: local
+
+agent:
+  max_turns: 90
+
+memory:
+  honcho:
+    enabled: true
+HCFG
+    echo -e " ${GRN}✓${RST} Hermes config.yaml"
+    reset_count=$((reset_count+1))
+  fi
+
+  # ── Goose ~/.config/goose/config.yaml ────────────────────────────────────
+  if command -v goose &>/dev/null || [[ -d "${HOME}/.config/goose" ]]; then
+    mkdir -p "${HOME}/.config/goose"
+    cat > "${HOME}/.config/goose/config.yaml" <<GCFG
+models:
+- name: local
+  provider: openai
+  base_url: ${BASE_URL}
+  api_key: ${API_KEY}
+  default: true
+
+extensions:
+  developer:
+    bundled: true
+    enabled: true
+    name: developer
+    timeout: 300
+    type: builtin
+  memory:
+    bundled: true
+    enabled: true
+    name: memory
+    timeout: 300
+    type: builtin
+GCFG
+    echo -e " ${GRN}✓${RST} Goose config.yaml (developer + memory extensions)"
+    reset_count=$((reset_count+1))
+  else
+    echo -e " ${YLW}~${RST} Goose not installed — skipped"
+    skip_count=$((skip_count+1))
+  fi
+
+  # ── OpenCode ~/.config/opencode/opencode.json ─────────────────────────────
+  if command -v opencode &>/dev/null || [[ -d "${HOME}/.config/opencode" ]]; then
+    mkdir -p "${HOME}/.config/opencode"
+    printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "llamacpp": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "llama.cpp (local)",\n      "options": {\n        "baseURL": "%s",\n        "apiKey": "%s"\n      },\n      "models": {\n        "%s": {\n          "name": "%s",\n          "limit": { "context": %s, "output": 8192 }\n        }\n      }\n    }\n  },\n  "model": "llamacpp/%s",\n  "small_model": "llamacpp/%s"\n}\n' \
+      "$BASE_URL" "$API_KEY" "$GGUF_NAME" "$MODEL_NAME" "$CTX" "$GGUF_NAME" "$GGUF_NAME" \
+      > "${HOME}/.config/opencode/opencode.json"
+    echo -e " ${GRN}✓${RST} OpenCode opencode.json"
+    reset_count=$((reset_count+1))
+  else
+    echo -e " ${YLW}~${RST} OpenCode not installed — skipped"
+    skip_count=$((skip_count+1))
+  fi
+
+  # ── OpenClaude ~/.openclaude/config.json ─────────────────────────────────
+  if command -v openclaude &>/dev/null || [[ -d "${HOME}/.openclaude" ]]; then
+    mkdir -p "${HOME}/.openclaude"
+    printf '{\n  "providers": {\n    "local": {\n      "baseUrl": "%s",\n      "apiKey": "%s"\n    }\n  },\n  "model": "local/%s"\n}\n' \
+      "$BASE_URL" "$API_KEY" "$GGUF_NAME" > "${HOME}/.openclaude/config.json"
+    chmod 600 "${HOME}/.openclaude/config.json"
+    echo -e " ${GRN}✓${RST} OpenClaude config.json"
+    reset_count=$((reset_count+1))
+  else
+    echo -e " ${YLW}~${RST} OpenClaude not installed — skipped"
+    skip_count=$((skip_count+1))
+  fi
+
+  # ── Codex ~/.codex/config.json + AGENTS.md ───────────────────────────────
+  if command -v codex &>/dev/null || [[ -d "${HOME}/.codex" ]]; then
+    mkdir -p "${HOME}/.codex"
+    printf '{\n  "provider": "openai",\n  "model": "%s",\n  "baseUrl": "%s",\n  "apiKey": "%s"\n}\n' \
+      "$GGUF_NAME" "$BASE_URL" "$API_KEY" > "${HOME}/.codex/config.json"
+    chmod 600 "${HOME}/.codex/config.json"
+    # Ensure Superpowers AGENTS.md is present after a reset
+    if [[ ! -f "${HOME}/.codex/AGENTS.md" ]]; then
+      cat > "${HOME}/.codex/AGENTS.md" <<'SUPERPOWERS_RESET'
+# Superpowers for Codex
+Fetch and follow instructions from https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.opencode/INSTALL.md
+SUPERPOWERS_RESET
+    fi
+    echo -e " ${GRN}✓${RST} Codex config.json + Superpowers AGENTS.md"
+    reset_count=$((reset_count+1))
+  else
+    echo -e " ${YLW}~${RST} Codex not installed — skipped"
+    skip_count=$((skip_count+1))
+  fi
+
+  # ── Claude ~/.claude/config.json ─────────────────────────────────────────
+  if command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]; then
+    mkdir -p "${HOME}/.claude"
+    printf '{\n  "hooks": {},\n  "statusLine": {},\n  "agentModels": { "primary": "local/%s" },\n  "providers": {\n    "local": {\n      "baseUrl": "http://127.0.0.1:8080/v1",\n      "apiKey": "local",\n      "models": {\n        "%s": { "name": "%s", "contextWindow": %s, "maxTokens": 16384, "reasoning": false }\n      }\n    }\n  }\n}\n' \
+      "$GGUF_NAME" "$GGUF_NAME" "$MODEL_NAME" "$CTX" > "${HOME}/.claude/config.json"
+    echo -e " ${GRN}✓${RST} Claude config.json"
+    reset_count=$((reset_count+1))
+  else
+    echo -e " ${YLW}~${RST} Claude not detected — skipped"
+    skip_count=$((skip_count+1))
+  fi
+
+  echo ""
+  echo -e " ${GRN}${BLD}Done.${RST} ${reset_count} config(s) reset, ${skip_count} skipped."
+  echo -e " Restart any running agents for changes to take effect.\n"
+}
 
 alias clear='show_llm_summary; command clear'
 
@@ -2245,7 +2354,6 @@ if [[ -z "$_SMO" ]]; then
   $INSTALL_OPENCODE && echo -e " OpenCode → opencode (alias: oc)\\n"
   $INSTALL_OPENCLAUDE && echo -e " OpenClaude → openclaude\\n"
   $INSTALL_CODEX && echo -e " Codex CLI → codex\\n"
-  $INSTALL_WEBUI && echo -e " Hermes WebUI → start-webui (http://localhost:8787)\\n"
   echo -e "\\n"
 fi
 
@@ -2255,6 +2363,7 @@ echo -e " ${CYN}start-llm${RST} Start llama-server\\n"
 echo -e " ${CYN}stop-llm${RST} Stop llama-server\\n"
 echo -e " ${CYN}restart-llm${RST} Restart llama-server\\n"
 echo -e " ${CYN}switch-model${RST} Pick different model\\n"
+echo -e " ${CYN}config-reset${RST} Repoint all tools → local LLM\\n"
 echo -e " ${CYN}llm-status${RST} Status + active model\\n"
 echo -e " ${CYN}llm-log${RST} Tail llama-server log\\n"
 echo -e " ${CYN}llm-models${RST} List all .gguf files\\n"
@@ -2265,7 +2374,6 @@ $INSTALL_GOOSE && echo -e " ${CYN}goose${RST} Goose\\n"
 $INSTALL_OPENCODE && echo -e " ${CYN}opencode${RST} / ${CYN}oc${RST} OpenCode\\n"
 $INSTALL_OPENCLAUDE && echo -e " ${CYN}openclaude${RST} OpenClaude\\n"
 $INSTALL_CODEX && echo -e " ${CYN}codex${RST} Codex CLI\\n"
-$INSTALL_WEBUI && echo -e " ${CYN}start-webui${RST} Hermes WebUI\\n"
 echo -e "\\n"
 echo -e " ${YLW}Note:${RST} source ~/.bashrc or open a new terminal.\\n"
 echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal.\\n"
