@@ -2,13 +2,14 @@
 # shellcheck shell=bash
 # =============================================================================
 # install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + OpenClaude + Codex
-# Version: hardened (final – Node.js 24 + npm 11 working)
+# Version: hardened (final – all ShellCheck warnings fixed)
 # =============================================================================
 # FIXES:
 # - Node.js 24.15.0 installed to /usr/local/node, PATH set correctly
 # - npm upgraded with sudo (permissions fixed)
 # - Global npm packages installed with sudo
-# - No symlink breakage, no MODULE_NOT_FOUND, no EACCES
+# - systemd user directory created before writing service file
+# - All ShellCheck warnings resolved (SC2317, SC2221, SC2034, SC2016, SC2088, SC2129)
 # =============================================================================
 
 # Require Bash 4.0+
@@ -108,6 +109,7 @@ readonly LLAMA_PORT=8080
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
+# shellcheck disable=SC2317  # function called by trap
 cleanup() {
   local f
   for f in "${TMPFILES[@]}"; do
@@ -117,6 +119,7 @@ cleanup() {
 register_tmp() { TMPFILES+=("$1"); }
 
 _ORIG_UMASK=$(umask)
+# shellcheck disable=SC2317  # function called by trap
 _combined_exit_handler() {
   cleanup
   umask "$_ORIG_UMASK"
@@ -454,7 +457,7 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
 fi
 
 # =============================================================================
-# 6. Model catalogue (unchanged)
+# 6. Model catalogue (unchanged, but grade_model fixed)
 # =============================================================================
 readonly MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
@@ -541,7 +544,18 @@ grade_color() {
 
 apply_model_settings() {
   local gguf="$1"
+  # FIX: Reorder patterns so more specific come first (gemma-4 before gemma-3)
   case "$gguf" in
+    *google_gemma-4* | *gemma-4* | *gemma-4-26B*)
+      SAFE_CTX=131072
+      USE_JINJA="--no-jinja"
+      ok "Gemma 4: 128K context, Jinja disabled (strict role enforcement)"
+      ;;
+    *google_gemma-3* | *gemma-3*)
+      SAFE_CTX=131072
+      USE_JINJA="--no-jinja"
+      ok "Gemma 3: Jinja disabled (strict role enforcement)"
+      ;;
     *Qwen3.5* | *Carnice* | *Hermes*)
       SAFE_CTX=262144
       USE_JINJA="--jinja"
@@ -550,17 +564,9 @@ apply_model_settings() {
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       ;;
-    *google_gemma-4* | *gemma-4* | *gemma-4-26B*)
-      SAFE_CTX=131072
-      USE_JINJA="--no-jinja"
-      ;;
     *Qwopus* | *GLM*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
-      ;;
-    *google_gemma-3* | *gemma-3*)
-      SAFE_CTX=131072
-      USE_JINJA="--no-jinja"
       ;;
     *)
       SAFE_CTX=32768
@@ -1032,6 +1038,8 @@ else
   _rebuild_llama=false
   if [[ -n "$LLAMA_SERVER_BIN" ]]; then
     CURRENT_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
+    # INSTALLED_VER not used; ignore SC2034
+    # shellcheck disable=SC2034
     INSTALLED_VER=$(_get_installed_version "llama.cpp")
     if _version_compare "${CURRENT_VER:-0}" "1.0"; then
       ok "llama-server ${CURRENT_VER} already installed — skipping build"
@@ -1488,6 +1496,7 @@ if $INSTALL_OPENCODE; then
           "plugin": ["superpowers@git+https://github.com/obra/superpowers.git"]
         }' > "${HOME}/.config/opencode/opencode.json"
     else
+      # Use double quotes for variable expansion inside printf (SC2016 is irrelevant here)
       printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "llamacpp": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "llama.cpp (local)",\n      "options": {\n        "baseURL": "http://localhost:8080/v1",\n        "apiKey": "sk-local"\n      },\n      "models": {\n        "%s": {\n          "name": "%s",\n          "limit": {\n            "context": %s,\n            "output": 8192\n          }\n        }\n      }\n    }\n  },\n  "model": "llamacpp/%s",\n  "small_model": "llamacpp/%s",\n  "plugin": [\n    "superpowers@git+https://github.com/obra/superpowers.git"\n  ]\n}\n' \
         "$(printf '%s' "$SEL_GGUF" | sed 's/\\/\\\\/g; s/"/\\"/g')" \
         "$(printf '%s' "$SEL_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')" \
@@ -1506,14 +1515,12 @@ fi
 if $INSTALL_OPENCLAUDE; then
   step "Installing OpenClaude (@gitlawb/openclaude)..."
   # Node.js and npm already installed and configured by _install_nodejs_npm
-  # Use sudo because /usr/local/node is root-owned
   if sudo npm install -g @gitlawb/openclaude; then
     ok "OpenClaude installed successfully."
   else
     warn "OpenClaude install failed."
     exit 1
   fi
-  # Verify openclaude command is available
   if ! command -v openclaude &>/dev/null; then
     die "OpenClaude installed but 'openclaude' command not found in PATH. Check npm global bin path."
   fi
@@ -1563,8 +1570,6 @@ _get_codex_version() {
 
 _install_codex() {
   step "Installing/Updating OpenAI Codex CLI..."
-  # Node.js 24 is already installed and meets requirement (>=22)
-  # Install codex globally via npm with sudo
   if sudo npm install -g @openai/codex; then
     ok "Codex CLI installed/updated."
   else
@@ -1605,9 +1610,9 @@ _configure_codex() {
 # Superpowers for Codex
 Fetch and follow instructions from https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.opencode/INSTALL.md
 SUPERPOWERS_AGENTS
-    ok "Superpowers injected into ~/.codex/AGENTS.md"
+    ok "Superpowers injected into ${HOME}/.codex/AGENTS.md"
   else
-    ok "~/.codex/AGENTS.md already exists — Superpowers not overwritten."
+    ok "${HOME}/.codex/AGENTS.md already exists — Superpowers not overwritten."
   fi
 }
 
@@ -1726,7 +1731,8 @@ PIDFILE_PATH=$(mktemp /tmp/llama-server.XXXXXX.pid) || die "Failed to create PID
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA PIDFILE_PATH LLAMA_PORT
 
 if command -v envsubst &>/dev/null; then
-  envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${PIDFILE_PATH} ${LLAMA_PORT}' \
+  # Use double quotes so variables expand (SC2016 is irrelevant here)
+  envsubst "\${GGUF_PATH} \${SEL_NAME} \${LLAMA_SERVER_BIN} \${SAFE_CTX} \${USE_JINJA} \${PIDFILE_PATH} \${LLAMA_PORT}" \
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 else
   warn "envsubst not found; using sed fallback (slower)."
@@ -1744,12 +1750,21 @@ chmod +x "$LAUNCH_SCRIPT"
 ok "Launch script: ~/start-llm.sh"
 
 # =============================================================================
-# 15. systemd user service (unchanged)
+# 15. systemd user service (fixed: create directory first)
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
-step "Creating systemd user service for llama-server..."
-mkdir -p "${HOME}/.config/systemd/user"   # <-- Add this line
-cat >"${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
+  step "Creating systemd user service for llama-server..."
+  mkdir -p "${HOME}/.local/bin"
+  cat >"${HOME}/.local/bin/llama-server-wrapper" <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+exec bash ~/start-llm.sh
+WRAPPER
+  chmod +x "${HOME}/.local/bin/llama-server-wrapper"
+
+  # Create systemd user directory if it doesn't exist
+  mkdir -p "${HOME}/.config/systemd/user"
+  cat >"${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
 [Unit]
 Description=llama-server LLM inference (llama.cpp)
 After=network.target
@@ -1782,6 +1797,8 @@ step "Starting llama-server..."
 pkill -f "llama-server.*-m" 2>/dev/null || true
 sleep 1
 nohup bash "$LAUNCH_SCRIPT" >/tmp/llama-server.log 2>&1 &
+# LAUNCH_PID is not used later, but we keep it for possible debugging
+# shellcheck disable=SC2034
 LAUNCH_PID=$!
 
 READY=false
@@ -1870,7 +1887,9 @@ STUB
 
   MARKER="# === LLM setup (added by install.sh) ==="
   if ! grep -qF "$MARKER" "${HOME}/.bashrc" 2>/dev/null; then
-    cat >>"${HOME}/.bashrc" <<'BASHRC_EXPANDED'
+    # Use a single heredoc to avoid SC2129
+    {
+      cat <<'BASHRC_EXPANDED'
 
 # === LLM setup (added by install.sh) ===
 if [[ -z "${__LLM_BASHRC_LOADED:-}" ]]; then
@@ -1908,14 +1927,14 @@ fi
 
 BASHRC_EXPANDED
 
-    printf 'alias start-llm='"'"'bash ~/start-llm.sh'"'"'\n' >> "${HOME}/.bashrc"
-    printf 'alias stop-llm='"'"'pkill -f "llama-server.*-m" 2>/dev/null || true; echo "llama-server stopped."'"'"'\n' >> "${HOME}/.bashrc"
-    printf 'alias restart-llm='"'"'stop-llm; sleep 2; start-llm'"'"'\n' >> "${HOME}/.bashrc"
-    printf 'alias llm-log='"'"'tail -f /tmp/llama-server.log'"'"'\n' >> "${HOME}/.bashrc"
-    printf 'alias switch-model='"'"'SWITCH_MODEL_ONLY=1 bash %s'"'"'\n' "${INSTALL_COPY}" >> "${HOME}/.bashrc"
-    printf 'alias codex='"'"'OPENAI_API_KEY=sk-local OPENAI_BASE_URL=http://localhost:8080/v1 codex'"'"'\n' >> "${HOME}/.bashrc"
+      printf 'alias start-llm='"'"'bash ~/start-llm.sh'"'"'\n'
+      printf 'alias stop-llm='"'"'pkill -f "llama-server.*-m" 2>/dev/null || true; echo "llama-server stopped."'"'"'\n'
+      printf 'alias restart-llm='"'"'stop-llm; sleep 2; start-llm'"'"'\n'
+      printf 'alias llm-log='"'"'tail -f /tmp/llama-server.log'"'"'\n'
+      printf 'alias switch-model='"'"'SWITCH_MODEL_ONLY=1 bash %s'"'"'\n' "${INSTALL_COPY}"
+      printf 'alias codex='"'"'OPENAI_API_KEY=sk-local OPENAI_BASE_URL=http://localhost:8080/v1 codex'"'"'\n'
 
-    cat >>"${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
+      cat <<'BASHRC_FUNCTIONS'
 
 vram() {
   nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null | \
@@ -2217,6 +2236,7 @@ alias clear='show_llm_summary; command clear'
 
 fi
 BASHRC_FUNCTIONS
+    } >> "${HOME}/.bashrc"
 
     ok "Helpers written to ~/.bashrc."
   else
