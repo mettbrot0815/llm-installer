@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # =============================================================================
-# install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + AutoAgent + OpenClaude + WebUI
+# install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + OpenClaude + Codex + WebUI
 # Version: production-hardened (audited revision)
 # Optional components selected via single multi‑select menu (whiptail).
-# Includes: Goose, OpenCode, AutoAgent, OpenClaude, Codex, Hermes WebUI
+# Includes: Goose, OpenCode, OpenClaude, Codex, Hermes WebUI
 #
 # Features:
 # - Smart version checking - only downloads/installs when outdated
@@ -197,7 +197,7 @@ BANNER
 else
   cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════════╗
-║ Ubuntu WSL2 · llama.cpp + Hermes + Goose + AutoAgent         ║
+║ Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode          ║
 ║ Smart downloads - only installs outdated components           ║
 ╚══════════════════════════════════════════════════════════════╝
 BANNER
@@ -505,6 +505,8 @@ MODELS=(
   "13|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
   "14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
  "15|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
+  "16|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM 18B|10.5|128K|12|10|mid|chat,code,reasoning|Merged GLM · Q4_K_M · community"
+  "17|unsloth/gemma-4-26B-A4B-it-GGUF|gemma-4-26B-A4B-it-UD-IQ4_XS.gguf|Gemma 4 26B MoE|14.0|128K|16|12|large|chat,code,reasoning|Google MoE · 4B active · IQ4_XS"
 )
 
 grade_model() {
@@ -589,10 +591,15 @@ apply_model_settings() {
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       ;;
-    *google_gemma-4* | *gemma-4*)
-      SAFE_CTX=135168
+    *google_gemma-4* | *gemma-4* | *gemma-4-26B*)
+      SAFE_CTX=131072
       USE_JINJA="--no-jinja"
-      ok "Gemma 4: 132K context, Jinja disabled"
+      ok "Gemma 4: 128K context, Jinja disabled (strict role enforcement)"
+      ;;
+    *Qwopus* | *GLM*)
+      SAFE_CTX=131072
+      USE_JINJA="--jinja"
+      ok "Qwopus-GLM: 128K context, Jinja enabled"
       ;;
     *google_gemma-3* | *gemma-3*)
       SAFE_CTX=131072
@@ -1280,10 +1287,9 @@ select_optional_components() {
   local choices
   if ! choices=$(whiptail --title "Optional Components" --checklist \
     "Select additional components to install (use SPACE to toggle, ENTER to confirm):" \
-    22 80 6 \
+    21 80 5 \
     "goose" "Goose AI Agent (Rust CLI, 30k+ stars)" OFF \
     "opencode" "OpenCode (Terminal TUI coding agent)" OFF \
-    "autoagent" "AutoAgent (Deep research multi-agent)" OFF \
     "openclaude" "OpenClaude (Claude-compatible CLI)" OFF \
     "codex" "OpenAI Codex CLI (openai/codex)" OFF \
     "webui" "Hermes WebUI (Browser interface for Hermes)" OFF \
@@ -1305,7 +1311,6 @@ select_optional_components() {
 
   INSTALL_GOOSE=false
   INSTALL_OPENCODE=false
-  INSTALL_AUTOAGENT=false
   INSTALL_OPENCLAUDE=false
   INSTALL_CODEX=false
   INSTALL_WEBUI=false
@@ -1314,7 +1319,6 @@ select_optional_components() {
     case "$item" in
       goose) INSTALL_GOOSE=true ;;
       opencode) INSTALL_OPENCODE=true ;;
-      autoagent) INSTALL_AUTOAGENT=true ;;
       openclaude) INSTALL_OPENCLAUDE=true ;;
       codex) INSTALL_CODEX=true ;;
       webui) INSTALL_WEBUI=true ;;
@@ -1326,7 +1330,6 @@ select_optional_components() {
   local count=0
   if $INSTALL_GOOSE; then echo " ✓ Goose"; count=$((count+1)); fi
   if $INSTALL_OPENCODE; then echo " ✓ OpenCode"; count=$((count+1)); fi
-  if $INSTALL_AUTOAGENT; then echo " ✓ AutoAgent"; count=$((count+1)); fi
   if $INSTALL_OPENCLAUDE; then echo " ✓ OpenClaude"; count=$((count+1)); fi
   if $INSTALL_CODEX; then echo " ✓ Codex"; count=$((count+1)); fi
   if $INSTALL_WEBUI; then echo " ✓ Hermes WebUI"; count=$((count+1)); fi
@@ -1339,7 +1342,6 @@ select_optional_components() {
 
 INSTALL_GOOSE=false
 INSTALL_OPENCODE=false
-INSTALL_AUTOAGENT=false
 INSTALL_OPENCLAUDE=false
 INSTALL_CODEX=false
 INSTALL_WEBUI=false
@@ -1354,8 +1356,6 @@ if [[ -z "$_SMO" ]]; then
     read -rp " Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
     echo -e " ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}\\n"
     read -rp " Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
-    echo -e " ${BLD}Optional: AutoAgent (HKUDS)${RST}\\n"
-    read -rp " Install AutoAgent? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_AUTOAGENT=true
     echo -e " ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}\\n"
     read -rp " Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
     echo -e " ${BLD}Optional: OpenAI Codex CLI (openai/codex)${RST}\\n"
@@ -1494,92 +1494,6 @@ if $INSTALL_OPENCODE; then
   fi
 fi
 
-# =============================================================================
-# 13c. AutoAgent - with version checking
-# =============================================================================
-AUTOAGENT_DIR="${HOME}/autoagent"
-AUTOAGENT_VENV="${AUTOAGENT_DIR}/.venv"
-
-_get_autoagent_version() {
-  if [[ -f "${AUTOAGENT_VENV}/bin/python" ]]; then
-    "${AUTOAGENT_VENV}/bin/python" -c "import autoagent; print(autoagent.__version__)" 2>/dev/null || echo ""
-  fi
-}
-
-_install_autoagent() {
-  # FIX HIGH-2: pushd/popd so caller's directory is restored on return.
-  pushd "${AUTOAGENT_DIR}" > /dev/null || return 1
-  "${AUTOAGENT_VENV}/bin/pip" install --upgrade pip setuptools wheel
-  if ! "${AUTOAGENT_VENV}/bin/pip" install -e .; then
-    popd > /dev/null
-    return 1
-  fi
-  popd > /dev/null
-  return 0
-}
-
-if $INSTALL_AUTOAGENT; then
-  step "Checking AutoAgent..."
-  CURRENT_AUTOAGENT=$(_get_autoagent_version)
-  INSTALLED_AUTOAGENT=$(_get_installed_version "autoagent")
-
-  if [[ -n "$CURRENT_AUTOAGENT" ]] && [[ "$CURRENT_AUTOAGENT" == "$INSTALLED_AUTOAGENT" ]]; then
-    skip "AutoAgent already up to date (${CURRENT_AUTOAGENT})"
-  else
-    step "Installing/Updating AutoAgent..."
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-tk python3-dev build-essential 2>/dev/null || true
-
-    if [[ ! -d "${AUTOAGENT_DIR}" ]]; then
-      git clone https://github.com/HKUDS/AutoAgent.git "${AUTOAGENT_DIR}"
-    else
-      cd -- "${AUTOAGENT_DIR}" || die "Cannot cd into ${AUTOAGENT_DIR}"
-      git fetch origin
-      # FIX HIGH-3: warn before destructive reset
-      if [[ -t 0 ]]; then
-        warn "git reset --hard will discard local changes in ${AUTOAGENT_DIR}."
-        read -rp "  Continue? [y/N]: " _reset_ok
-        [[ "$_reset_ok" =~ ^[Yy]$ ]] || { cd -- "$HOME"; warn "Skipping AutoAgent update."; }
-      else
-        warn "Non-interactive — running git reset --hard on ${AUTOAGENT_DIR}."
-      fi
-      git reset --hard origin/main
-      cd -- "$HOME" || die "Cannot cd to HOME"
-    fi
-    # Create venv with system site packages for tkinter
-    if [[ ! -d "${AUTOAGENT_VENV}" ]] || [[ ! -x "${AUTOAGENT_VENV}/bin/pip" ]]; then
-      rm -rf "${AUTOAGENT_VENV}"
-      python3 -m venv "${AUTOAGENT_VENV}" --system-site-packages
-    fi
-
-    if _install_autoagent; then
-      NEW_AUTOAGENT=$(_get_autoagent_version)
-      _set_installed_version "autoagent" "${NEW_AUTOAGENT:-latest}"
-      ok "AutoAgent installed/updated"
-    else
-      die "AutoAgent install failed"
-    fi
-
-    cat >"${HOME}/start-autoagent.sh" <<'AUTOAGENT_LAUNCHER'
-#!/usr/bin/env bash
-set -euo pipefail
-export TKINTER_AVAILABLE=False
-LLAMA_PORT="8080"
-AUTOAGENT_VENV="${HOME}/autoagent/.venv"
-AUTOAGENT_DIR="${HOME}/autoagent"
-
-if ! curl -sf http://localhost:${LLAMA_PORT}/v1/models &>/dev/null; then
-  echo "llama-server not running. Start with: start-llm"
-  exit 1
-fi
-
-source "${AUTOAGENT_VENV}/bin/activate"
-cd -- "${AUTOAGENT_DIR}"
-python -m autoagent.cli deep-research
-AUTOAGENT_LAUNCHER
-    chmod +x "${HOME}/start-autoagent.sh"
-  fi
-  cd -- "$HOME" || die "Cannot cd to HOME"
-fi
 
 # =============================================================================
 # 13d. OpenClaude - with version checking
@@ -2115,7 +2029,6 @@ BASHRC_EXPANDED
     printf 'alias restart-llm='"'"'stop-llm; sleep 2; start-llm'"'"'\n' >> "${HOME}/.bashrc"
     printf 'alias llm-log='"'"'tail -f /tmp/llama-server.log'"'"'\n' >> "${HOME}/.bashrc"
     printf 'alias switch-model='"'"'SWITCH_MODEL_ONLY=1 bash %s'"'"'\n' "${INSTALL_COPY}" >> "${HOME}/.bashrc"
-    printf 'alias autoagent='"'"'bash ~/start-autoagent.sh'"'"'\n' >> "${HOME}/.bashrc"
     printf 'alias codex='"'"'OPENAI_API_KEY=sk-local OPENAI_BASE_URL=http://localhost:8080/v1 codex'"'"'\n' >> "${HOME}/.bashrc"
     printf 'alias start-webui='"'"'bash ~/start-webui.sh'"'"'\n' >> "${HOME}/.bashrc"
 
@@ -2168,7 +2081,6 @@ show_llm_summary() {
   echo -e "${BLD}${CYN}│${RST} ${CYN}hermes${RST} Chat with Hermes Agent"
   echo -e "${BLD}${CYN}│${RST} ${CYN}goose${RST} Goose (if installed)"
   echo -e "${BLD}${CYN}│${RST} ${CYN}opencode${RST} OpenCode coding agent (if installed)"
-  echo -e "${BLD}${CYN}│${RST} ${CYN}autoagent${RST} AutoAgent deep research (if installed)"
   echo -e "${BLD}${CYN}│${RST} ${CYN}openclaude${RST} OpenClaude CLI (if installed)"
   echo -e "${BLD}${CYN}│${RST} ${CYN}codex${RST} Codex CLI (if installed)"
   echo -e "${BLD}${CYN}│${RST} ${CYN}start-llm${RST} Start llama-server"
@@ -2331,7 +2243,6 @@ if [[ -z "$_SMO" ]]; then
   echo -e " Hermes Agent → hermes\\n"
   $INSTALL_GOOSE && echo -e " Goose → goose\\n"
   $INSTALL_OPENCODE && echo -e " OpenCode → opencode (alias: oc)\\n"
-  $INSTALL_AUTOAGENT && echo -e " AutoAgent → autoagent\\n"
   $INSTALL_OPENCLAUDE && echo -e " OpenClaude → openclaude\\n"
   $INSTALL_CODEX && echo -e " Codex CLI → codex\\n"
   $INSTALL_WEBUI && echo -e " Hermes WebUI → start-webui (http://localhost:8787)\\n"
@@ -2352,7 +2263,6 @@ echo -e " ${BLD}Agents:${RST}\\n"
 echo -e " ${CYN}hermes${RST} Hermes Agent\\n"
 $INSTALL_GOOSE && echo -e " ${CYN}goose${RST} Goose\\n"
 $INSTALL_OPENCODE && echo -e " ${CYN}opencode${RST} / ${CYN}oc${RST} OpenCode\\n"
-$INSTALL_AUTOAGENT && echo -e " ${CYN}autoagent${RST} AutoAgent\\n"
 $INSTALL_OPENCLAUDE && echo -e " ${CYN}openclaude${RST} OpenClaude\\n"
 $INSTALL_CODEX && echo -e " ${CYN}codex${RST} Codex CLI\\n"
 $INSTALL_WEBUI && echo -e " ${CYN}start-webui${RST} Hermes WebUI\\n"
