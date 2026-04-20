@@ -489,23 +489,18 @@ readonly MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
 
 MODELS=(
-  "1|unsloth/Qwen3.5-0.8B-GGUF|Qwen3.5-0.8B-Q4_K_M.gguf|Qwen 3.5 0.8B|0.5|256K|2|0|tiny|chat,edge|Alibaba · instant · smoke-test"
-  "2|unsloth/Qwen3.5-2B-GGUF|Qwen3.5-2B-Q4_K_M.gguf|Qwen 3.5 2B|1.0|256K|3|0|tiny|chat,multilingual|Alibaba · ultra-fast"
-  "3|unsloth/Qwen3.5-4B-GGUF|Qwen3.5-4B-Q4_K_M.gguf|Qwen 3.5 4B|2.0|256K|4|0|small|chat,code|Alibaba · capable on CPU"
-  "4|bartowski/microsoft_Phi-4-mini-instruct-GGUF|microsoft_Phi-4-mini-instruct-Q4_K_M.gguf|Phi-4 Mini 3.8B|2.0|16K|4|0|small|reasoning,code|Microsoft · strong reasoning"
-  "5|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on RTX 3060"
-  "6|kai-os/Carnice-9b-GGUF|Carnice-9b-Q6_K.gguf|Carnice-9b (Hermes)|6.9|256K|8|6|mid|hermes,agent,tool-use|Qwen3.5-9B tuned for Hermes Agent harness"
-  "7|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction"
-  "8|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|32K|12|10|mid|code|#1 coding on 3060"
-  "9|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|32K|14|10|mid|chat,code,reasoning|Strong planning"
-  "10|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 3 · strict roles"
-  "11|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|132K|12|10|mid|chat,code|Google Gemma 4 · 132K ctx"
-  "12|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params"
-  "13|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
-  "14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
- "15|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
-  "16|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM 18B|10.5|128K|12|10|mid|chat,code,reasoning|Merged GLM · Q4_K_M · community"
-  "17|unsloth/gemma-4-26B-A4B-it-GGUF|gemma-4-26B-A4B-it-UD-IQ3_XXS.gguf|Gemma 4 26B MoE|9.4|128K|12|10|mid|chat,code,reasoning|Google MoE · 4B active · IQ3_XXS"
+  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on RTX 3060"
+  "2|kai-os/Carnice-9b-GGUF|Carnice-9b-Q6_K.gguf|Carnice-9b (Hermes)|6.9|256K|8|6|mid|hermes,agent,tool-use|Qwen3.5-9B tuned for Hermes Agent harness"
+  "3|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction"
+  "4|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|131K|12|10|mid|code|#1 coding on 3060"
+  "5|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|131K|14|10|mid|chat,code,reasoning|Strong planning"
+  "6|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 3 · strict roles"
+  "7|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 4 · 128K ctx"
+  "8|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params"
+  "9|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
+  "10|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
+  "11|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM 18B|10.5|64K|12|10|mid|chat,code,reasoning|Merged GLM · Q4_K_M · community"
+  "12|unsloth/gemma-4-26B-A4B-it-GGUF|gemma-4-26B-A4B-it-UD-IQ3_XXS.gguf|Gemma 4 26B MoE|9.4|128K|12|10|mid|chat,code,reasoning|Google MoE · 4B active · IQ3_XXS"
 )
 
 grade_model() {
@@ -594,15 +589,6 @@ apply_model_settings() {
 
   case "$gguf" in
 
-    # ── Qwen3.5 9B / 2B / 4B / 0.8B  (dense, fits fully in 12GB) ──────────
-    *Qwen3.5-0.8B* | *Qwen3.5-2B* | *Qwen3.5-4B*)
-      SAFE_CTX=262144
-      USE_JINJA="--jinja"
-      # Tiny models: smaller context saves VRAM so we can use f16 K-cache
-      CACHE_K_VAL="f16"
-      CACHE_V_VAL="f16"
-      ok "Qwen3.5 tiny: 256K ctx, Jinja on, f16 KV cache"
-      ;;
 
     *Qwen3.5-9B* | *Carnice* | *Hermes*)
       SAFE_CTX=262144
@@ -613,16 +599,6 @@ apply_model_settings() {
       ok "Qwen3.5 9B / Hermes / Carnice: 256K ctx, Jinja on, q8_0/q4_0 KV"
       ;;
 
-    # ── Phi-4 Mini 3.8B (dense, 16K native ctx) ─────────────────────────────
-    *Phi-4-mini* | *Phi-4*)
-      SAFE_CTX=16384
-      USE_JINJA="--no-jinja"
-      # Phi-4 has its own template; Jinja causes role confusion
-      EXTRA_FLAGS="--chat-template phi4"
-      CACHE_K_VAL="f16"
-      CACHE_V_VAL="f16"
-      ok "Phi-4 Mini: 16K ctx, phi4 template, f16 KV cache"
-      ;;
 
     # ── Llama 3.1 8B (dense, fits in 12GB) ──────────────────────────────────
     *Llama-3.1*)
@@ -635,12 +611,13 @@ apply_model_settings() {
 
     # ── Qwen2.5 Coder 14B / Qwen3 14B (dense, tight on 12GB) ───────────────
     *Qwen2.5-Coder-14B* | *Qwen3-14B*)
-      SAFE_CTX=32768
+      SAFE_CTX=131072
       USE_JINJA="--jinja"
-      # 14B Q4_K_M ~8-9GB weights → leaves ~3GB for KV; q4_0 saves VRAM
+      # 14B Q4_K_M ~8-9GB weights; q4_0 KV at 131K ≈ 2.5GB extra → ~11.5GB total.
+      # Fits in 12GB; use q4_0 KV to keep VRAM below the ceiling.
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Qwen 14B: 32K ctx (VRAM budget), q4_0/q4_0 KV"
+      ok "Qwen 14B: 131K ctx (native YaRN), q4_0/q4_0 KV"
       ;;
 
     # ── Gemma 3 12B (dense, strict roles) ───────────────────────────────────
@@ -655,13 +632,14 @@ apply_model_settings() {
       ;;
 
     # ── Gemma 4 12B (dense, 132K, strict roles) ─────────────────────────────
+    # --jinja required for tool calls (Hermes sends tools param → HTTP 500 without it)
     *google_gemma-4-12b* | *gemma-4-12b*)
       SAFE_CTX=131072
-      USE_JINJA="--no-jinja"
-      EXTRA_FLAGS="--chat-template gemma"
+      USE_JINJA="--jinja"
+      EXTRA_FLAGS=""
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Gemma 4 12B: 128K ctx, gemma template, q4_0/q4_0 KV"
+      ok "Gemma 4 12B: 128K ctx, Jinja on (tools support), q4_0/q4_0 KV"
       ;;
 
     # ── Qwen3 30B A3B MoE ───────────────────────────────────────────────────
@@ -680,28 +658,19 @@ apply_model_settings() {
 
     # ── DeepSeek R1 32B (dense, too large for 12GB alone) ───────────────────
     # ~17GB weights: must offload ~50% of layers to RAM.
+    # ── DeepSeek R1 32B (dense, ~17GB, partial GPU offload) ─────────────────
+    # 65536 ctx: meets Hermes 64K minimum. ~17GB weights → ~40 layers on GPU.
+    # q4_0 KV keeps overhead low for the CPU-offloaded portion.
     *DeepSeek*)
-      SAFE_CTX=32768
+      SAFE_CTX=65536
       USE_JINJA="--jinja"
-      # Offload roughly half the layers; rest stay on GPU
       NGL_VAL=40
       EXTRA_FLAGS="--threads ${CPUS}"
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "DeepSeek R1 32B: partial GPU offload (~40 layers), q4_0/q4_0 KV"
+      ok "DeepSeek R1 32B: 64K ctx, ~40 layers GPU, q4_0/q4_0 KV"
       ;;
 
-    # ── Llama 3.3 70B (way too large — CPU + partial GPU) ───────────────────
-    *Llama-3.3*)
-      SAFE_CTX=32768
-      USE_JINJA="--jinja"
-      # 39GB model: minimal GPU layers, mostly CPU
-      NGL_VAL=10
-      EXTRA_FLAGS="--threads ${CPUS}"
-      CACHE_K_VAL="q4_0"
-      CACHE_V_VAL="q4_0"
-      warn "Llama 3.3 70B: mostly CPU inference — expect ~3-5 tok/s"
-      ;;
 
     # ── Gemma 4 26B MoE IQ3_XXS (~9.4GB) ───────────────────────────────────
     # MoE with ~4B active params. Fits in 12GB but needs expert offload for
@@ -718,15 +687,17 @@ apply_model_settings() {
       ;;
 
     # ── Qwopus-GLM 18B (dense, ~10.5GB, spills slightly) ───────────────────
+    # 65536 ctx minimum: Hermes Agent refuses models below 64K context.
+    # At 10.5GB weights + q4_0 KV, 64K context fits: ~1.1GB KV overhead.
+    # ~80 layers on GPU; remainder spills to RAM with --threads for CPU side.
     *Qwopus* | *GLM*)
-      SAFE_CTX=131072
+      SAFE_CTX=65536
       USE_JINJA="--jinja"
-      # 10.5GB weights + KV → VRAM pressure; partial offload + extra threads
       NGL_VAL=80
       EXTRA_FLAGS="--threads ${CPUS}"
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Qwopus-GLM 18B: ~80 layers GPU, rest CPU, q4_0/q4_0 KV"
+      ok "Qwopus-GLM 18B: 64K ctx (Hermes min), ~80 layers GPU, q4_0/q4_0 KV"
       ;;
 
     # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
@@ -740,8 +711,9 @@ apply_model_settings() {
       ;;
 
     # ── Default fallback ─────────────────────────────────────────────────────
+    # 65536 meets Hermes Agent 64K minimum for unknown/new models.
     *)
-      SAFE_CTX=32768
+      SAFE_CTX=65536
       USE_JINJA="--jinja"
       CACHE_K_VAL="q8_0"
       CACHE_V_VAL="q4_0"
@@ -838,7 +810,7 @@ HDR
   echo " ─────────────────────────────────────────────────────────────────────────────"
   echo -e " ${GRN}S/A${RST} Runs great/well ${YLW}B/C${RST} Tight fit ${RED}F${RST} Too heavy ${CYN}↓${RST} Already on disk\\n"
   echo ""
-  echo -e " ${YLW}Tip:${RST} Model 5 (Qwen3.5-9B) = general · Model 6 (Carnice-9b) = Hermes-tuned\\n"
+  echo -e " ${YLW}Tip:${RST} Model 1 (Qwen3.5-9B) = general · Model 2 (Carnice-9b) = Hermes-tuned\\n"
   echo -e " Enter a number, or ${BLD}u${RST} to download via HuggingFace URL.\\n\\n"
 }
 
@@ -1030,15 +1002,15 @@ show_model_table
 
 while true; do
   if [[ ! -t 0 ]]; then
-    warn "Non-interactive — defaulting to model 5 (Qwen 3.5 9B)"
-    CHOICE="5"
+    warn "Non-interactive — defaulting to model 1 (Qwen 3.5 9B)"
+    CHOICE="1"
     break
   fi
 
   if [[ -n "${INSTALL_TIMEOUT:-}" ]]; then
     read -rp "$(echo -e " ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" -t "$INSTALL_TIMEOUT" CHOICE || {
-      warn "Timeout - defaulting to model 5"
-      CHOICE="5"
+      warn "Timeout - defaulting to model 1"
+      CHOICE="1"
       break
     }
   else
