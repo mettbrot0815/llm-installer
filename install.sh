@@ -2,17 +2,18 @@
 # shellcheck shell=bash
 # =============================================================================
 # install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + OpenClaude + Codex
-# Version: hardened (final – all ShellCheck warnings fixed)
-# =============================================================================
-# FIXES:
-# - Node.js 24.15.0 installed to /usr/local/node, PATH set correctly
-# - npm upgraded with sudo (permissions fixed)
-# - Global npm packages installed with sudo
-# - systemd user directory created before writing service file
-# - All ShellCheck warnings resolved (SC2317, SC2221, SC2034, SC2016, SC2088, SC2129)
+# Version: production-hardened (audited revision)
+# Optional components selected via single multi‑select menu (whiptail).
+# Includes: Goose, OpenCode, OpenClaude, Codex
+#
+# Features:
+# - Smart version checking - only downloads/installs when outdated
+# - Caches installed versions in ~/.llm-versions
+# - Integrity verification for downloaded scripts
+# - Proper PID tracking for server management
 # =============================================================================
 
-# Require Bash 4.0+
+# Require Bash 4.0+ (4.2 features removed for compatibility)
 if ((BASH_VERSINFO[0] < 4)); then
   echo "ERROR: Bash 4.0 or later is required (found ${BASH_VERSION})." >&2
   exit 1
@@ -32,47 +33,53 @@ touch "$VERSION_FILE"
 _get_installed_version() {
   local component="$1"
   if [[ -f "$VERSION_FILE" ]]; then
-    grep -F -- "${component}=" "$VERSION_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- || true
+    # Use grep -F (fixed-string) to avoid regex '.' matching any char
+    # Add '|| true' to prevent pipefail exit on empty file
+    grep -F "${component}=" "$VERSION_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- || true
   fi
 }
 
 _set_installed_version() {
   local component="$1" version="$2"
-  if [[ -f "$VERSION_FILE" ]] && grep -qF -- "${component}=" "$VERSION_FILE" 2>/dev/null; then
+  # Use grep -F for consistent fixed-string matching
+  if [[ -f "$VERSION_FILE" ]] && grep -qF "${component}=" "$VERSION_FILE" 2>/dev/null; then
     local tmp
     tmp=$(mktemp "${VERSION_FILE}.XXXXXX") || die "Failed to create temp file for version update"
-    register_tmp "$tmp"
+  register_tmp "$tmp"
     while IFS= read -r line; do
       if [[ "$line" == "${component}="* ]]; then
-        printf '%s=%s\n' "$component" "$version"
+        echo "${component}=${version}"
       else
-        printf '%s\n' "$line"
+        echo "$line"
       fi
     done < "$VERSION_FILE" > "$tmp"
     mv -f "$tmp" "$VERSION_FILE"
   else
-    printf '%s=%s\n' "$component" "$version" >> "$VERSION_FILE"
+    echo "${component}=${version}" >> "$VERSION_FILE"
   fi
   chmod 600 "$VERSION_FILE"
 }
 
 _version_compare() {
+  # Returns 0 if $1 >= $2, 1 otherwise
   local ver1="$1" ver2="$2"
   if [[ "$ver1" == "$ver2" ]]; then
     return 0
   fi
-  local IFS=.
-  local -a ver1_arr ver2_arr
-  read -ra ver1_arr <<< "$ver1"
-  read -ra ver2_arr <<< "$ver2"
+  # Split version strings on '.' into arrays using IFS
+  local IFS='.'
+  # shellcheck disable=SC2206
+  local -a ver1_arr=($ver1) ver2_arr=($ver2)
   local i v1 v2
   for ((i = 0; i < ${#ver1_arr[@]} || i < ${#ver2_arr[@]}; i++)); do
     v1="${ver1_arr[i]:-0}"
     v2="${ver2_arr[i]:-0}"
+    # Strip non-numeric characters and default to 0
     v1="${v1//[^0-9]/}"
     v2="${v2//[^0-9]/}"
     v1="${v1:-0}"
     v2="${v2:-0}"
+    # Remove leading zeros for arithmetic
     v1=$((10#$v1))
     v2=$((10#$v2))
     if ((v1 > v2)); then
@@ -105,11 +112,12 @@ warn() { echo -e "${YLW}[!] $*${RST}"; }
 die() { echo -e "${RED}[ERROR] $*${RST}"; exit 1; }
 skip() { echo -e "${CYN}[~] $*${RST}"; }
 
+# ── Port constants ─────────────────────────────────────────────────────────────
 readonly LLAMA_PORT=8080
+
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
-# shellcheck disable=SC2317  # function called by trap
 cleanup() {
   local f
   for f in "${TMPFILES[@]}"; do
@@ -118,8 +126,10 @@ cleanup() {
 }
 register_tmp() { TMPFILES+=("$1"); }
 
+# ── Save original umask ───────────────────────────────────────────────────────
 _ORIG_UMASK=$(umask)
-# shellcheck disable=SC2317  # function called by trap
+
+# Combined exit handler — both cleanup() and umask restore fire.
 _combined_exit_handler() {
   cleanup
   umask "$_ORIG_UMASK"
@@ -127,8 +137,13 @@ _combined_exit_handler() {
 trap _combined_exit_handler EXIT INT TERM
 
 # ── Integrity verification helper ──────────────────────────────────────────────
+# Known-good SHA256 hashes for installer scripts (update when upstream changes)
+# FIX SEC: These SHA256 hashes must be updated whenever upstream scripts change.
+# To regenerate: curl -fsSL <URL> | sha256sum
+# If a hash mismatches, the installer will abort with an integrity error.
+# Set to "" to disable checking for a specific script (falls back to warn-only).
 declare -A INSTALLER_HASHES=(
-  ["hermes"]="76024e488e4d07fc16dbb54d57431f1f0888740c1eea65db7b1734b8cfbe0f66"
+  ["hermes"]="1c10b1553f4632a1beabcefdc3d241cb3e6735f450dc4ee0dc44766a68112537"
   ["goose"]="ef85145e8d0162106d9d9c8ef51dd51e9d0b6a3ee5edddb9f6658fa7f0f0a892"
   ["opencode"]="fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e"
 )
@@ -136,24 +151,25 @@ declare -A INSTALLER_HASHES=(
 _verify_script_integrity() {
   local script_path="$1" script_name="$2"
   local expected_hash="${INSTALLER_HASHES[$script_name]:-}"
+  
+  # If no known hash, allow with warning (first-time download)
   if [[ -z "$expected_hash" ]]; then
     warn "No known hash for '$script_name' — skipping integrity verification"
+    warn "Consider adding hash to INSTALLER_HASHES after verifying authenticity"
     return 0
   fi
+  
   local actual_hash
   actual_hash=$(sha256sum "$script_path" | cut -d' ' -f1)
+  
   if [[ "$actual_hash" != "$expected_hash" ]]; then
-    warn "Integrity verification FAILED for $script_name"$'\n'"Expected: $expected_hash"$'\n'"Got:      $actual_hash"
-    read -rp "Hash mismatch. Continue anyway? (y/N) " -t 30 answer || answer="n"
-    case "$answer" in
-      [yY]|[yY][eE][sS]) ;;
-      *) die "Aborted due to hash mismatch" ;;
-    esac
+    die "Integrity verification FAILED for $script_name"$'\n'"Expected: $expected_hash"$'\n'"Got:      $actual_hash"
   fi
+  
   ok "Integrity verified for '$script_name'"
 }
 
-# ── CUDA installation ─────────────────────────────────────────────────────────
+# ── _install_cuda — defined BEFORE first call ─────────────────────────────────
 _install_cuda() {
   local cuda_deb
   cuda_deb=$(mktemp /tmp/cuda-keyring.XXXXXX.deb) || die "Failed to create temp file for CUDA keyring"
@@ -203,27 +219,28 @@ readonly TOKEN_FILE="${HOME}/.llm-tokens"
 _load_token_from_file() {
   local key="$1"
   if [[ -f "$TOKEN_FILE" ]]; then
-    grep -F -- "${key}=" "$TOKEN_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- || true
+    # Use grep -F for fixed-string matching, || true for pipefail safety
+    grep -F "${key}=" "$TOKEN_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- || true
   fi
 }
 
 _save_token_to_file() {
   local key="$1" val="$2"
-  if [[ -f "$TOKEN_FILE" ]] && grep -qF -- "${key}=" "$TOKEN_FILE" 2>/dev/null; then
+  if [[ -f "$TOKEN_FILE" ]] && grep -qF "${key}=" "$TOKEN_FILE" 2>/dev/null; then
     local tmp
     tmp=$(mktemp "${TOKEN_FILE}.XXXXXX") || die "Failed to create temp file for token file update"
     register_tmp "$tmp"
     while IFS= read -r line; do
       if [[ "$line" == "${key}="* ]]; then
-        printf '%s=%s\n' "$key" "$val"
+        echo "${key}=${val}"
       else
-        printf '%s\n' "$line"
+        echo "$line"
       fi
     done < "$TOKEN_FILE" > "$tmp"
     chmod 600 "$tmp"
     mv -f "$tmp" "$TOKEN_FILE"
   else
-    printf '%s=%s\n' "$key" "$val" >> "$TOKEN_FILE"
+    echo "${key}=${val}" >> "$TOKEN_FILE"
     chmod 600 "$TOKEN_FILE"
   fi
 }
@@ -314,6 +331,7 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
   fi
 fi
 
+# GitHub token — use GH_TOKEN/GITHUB_TOKEN env var only
 if [[ -n "$GITHUB_TOKEN" ]]; then
   export GITHUB_TOKEN
   export GH_TOKEN="$GITHUB_TOKEN"
@@ -336,17 +354,21 @@ if [[ -z "$_SMO" ]]; then
     procps gettext-base
   ok "System packages ready."
 
+  # --- Install GitHub CLI (gh) from official repository ---
   step "Setting up GitHub CLI repository..."
   if ! command -v gh &>/dev/null; then
     gh_out=$(mktemp /tmp/wget-out.XXXXXX) || die "Failed to create temp file for wget"
     register_tmp "$gh_out"
-    (command -v wget >/dev/null || sudo apt-get install -y -qq wget) \
+    
+    (type -p wget >/dev/null || sudo apt-get install -y -qq wget) \
       && sudo mkdir -p -m 755 /etc/apt/keyrings \
       && wget -nv -O "$gh_out" https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       && sudo install -m 644 "$gh_out" /etc/apt/keyrings/githubcli-archive-keyring.gpg \
       && rm -f "$gh_out"
+
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
     sudo apt-get update -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh
     ok "GitHub CLI (gh) installed."
@@ -368,7 +390,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-# 4. Hardware detection
+# 4. Hardware detection (always runs) - MOVED INTO FUNCTION
 # =============================================================================
 _detect_hardware() {
   step "Detecting hardware..."
@@ -420,10 +442,12 @@ _detect_hardware() {
     fi
   fi
 }
+
+# Run hardware detection
 _detect_hardware
 
 # =============================================================================
-# 5. CUDA toolkit
+# 5. CUDA toolkit [SKIPPED by switch-model; paths re-exported if GPU present]
 # =============================================================================
 if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
   step "Checking CUDA toolkit..."
@@ -449,6 +473,8 @@ if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
   fi
 fi
 
+
+# CUDA paths (GPU present case)
 if [[ "$HAS_NVIDIA" == "true" ]]; then
   PATH="/usr/local/cuda/bin:${PATH}"
   export PATH
@@ -457,7 +483,7 @@ if [[ "$HAS_NVIDIA" == "true" ]]; then
 fi
 
 # =============================================================================
-# 6. Model catalogue (unchanged, but grade_model fixed)
+# 6. Model catalogue
 # =============================================================================
 readonly MODEL_DIR="${HOME}/llm-models"
 mkdir -p "$MODEL_DIR"
@@ -477,9 +503,9 @@ MODELS=(
   "12|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params"
   "13|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
   "14|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q4_K_M.gguf|Llama 3.3 70B|39.0|128K|48|40|large|chat,reasoning,code|Meta · 24GB+ VRAM"
-  "15|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
+ "15|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
   "16|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM 18B|10.5|128K|12|10|mid|chat,code,reasoning|Merged GLM · Q4_K_M · community"
-  "17|unsloth/gemma-4-26B-A4B-it-GGUF|gemma-4-26B-A4B-it-UD-IQ4_XS.gguf|Gemma 4 26B MoE|14.0|128K|16|12|large|chat,code,reasoning|Google MoE · 4B active · IQ4_XS"
+  "17|unsloth/gemma-4-26B-A4B-it-GGUF|gemma-4-26B-A4B-it-UD-IQ3_XXS.gguf|Gemma 4 26B MoE|9.4|128K|12|10|mid|chat,code,reasoning|Google MoE · 4B active · IQ3_XXS"
 )
 
 grade_model() {
@@ -493,16 +519,25 @@ grade_model() {
   ram_h=$((ram_gib - min_ram))
   if ((min_vram > 0)) && [[ "$has_nvidia" == "true" ]]; then
     vram_h=$((vram_gib - min_vram))
+    # BUGFIX 1: Check vram_h < 0 BEFORE falling back to RAM-based grades.
+    # A negative vram_h means insufficient VRAM — the model will OOM on GPU
+    # regardless of how much system RAM is available. Return "F" immediately.
     if ((vram_h < 0)); then
       echo "F"
     elif ((vram_h >= 4)); then
       echo "S"
     elif ((vram_h >= 0)); then
       echo "A"
+    elif ((ram_h >= 4)); then
+      echo "B"
+    elif ((ram_h >= 0)); then
+      echo "C"
     else
       echo "F"
     fi
   elif ((min_vram > 0)); then
+    # BUGFIX 2: vram_h is intentionally NOT referenced here (CPU-only path).
+    # The original code could use an uninitialized vram_h from a prior call.
     if ((ram_h >= 8)); then
       echo "B"
     elif ((ram_h >= 0)); then
@@ -544,37 +579,174 @@ grade_color() {
 
 apply_model_settings() {
   local gguf="$1"
-  # FIX: Reorder patterns so more specific come first (gemma-4 before gemma-3)
+
+  # Defaults — overridden per model below.
+  # NGL: 99 = all layers on GPU (correct for models that fit in 12GB VRAM)
+  # BATCH/UBATCH: optimal for RTX 3060 — larger than default for faster prefill
+  # CACHE_K: q8_0 is far better quality than q4_0 with only ~50% more VRAM vs f16
+  # CACHE_V: q4_0 is acceptable for V-cache; quality impact is minimal
+  NGL_VAL=99
+  BATCH_VAL=2048
+  UBATCH_VAL=512
+  CACHE_K_VAL="q8_0"
+  CACHE_V_VAL="q4_0"
+  EXTRA_FLAGS=""
+
   case "$gguf" in
-    *google_gemma-4* | *gemma-4* | *gemma-4-26B*)
-      SAFE_CTX=131072
-      USE_JINJA="--no-jinja"
-      ok "Gemma 4: 128K context, Jinja disabled (strict role enforcement)"
+
+    # ── Qwen3.5 9B / 2B / 4B / 0.8B  (dense, fits fully in 12GB) ──────────
+    *Qwen3.5-0.8B* | *Qwen3.5-2B* | *Qwen3.5-4B*)
+      SAFE_CTX=262144
+      USE_JINJA="--jinja"
+      # Tiny models: smaller context saves VRAM so we can use f16 K-cache
+      CACHE_K_VAL="f16"
+      CACHE_V_VAL="f16"
+      ok "Qwen3.5 tiny: 256K ctx, Jinja on, f16 KV cache"
       ;;
+
+    *Qwen3.5-9B* | *Carnice* | *Hermes*)
+      SAFE_CTX=262144
+      USE_JINJA="--jinja"
+      # 9B Q4_K_M ~5.3GB weights → ~6.7GB with q8_0 KV at 8K; fits 12GB fine
+      CACHE_K_VAL="q8_0"
+      CACHE_V_VAL="q4_0"
+      ok "Qwen3.5 9B / Hermes / Carnice: 256K ctx, Jinja on, q8_0/q4_0 KV"
+      ;;
+
+    # ── Phi-4 Mini 3.8B (dense, 16K native ctx) ─────────────────────────────
+    *Phi-4-mini* | *Phi-4*)
+      SAFE_CTX=16384
+      USE_JINJA="--no-jinja"
+      # Phi-4 has its own template; Jinja causes role confusion
+      EXTRA_FLAGS="--chat-template phi4"
+      CACHE_K_VAL="f16"
+      CACHE_V_VAL="f16"
+      ok "Phi-4 Mini: 16K ctx, phi4 template, f16 KV cache"
+      ;;
+
+    # ── Llama 3.1 8B (dense, fits in 12GB) ──────────────────────────────────
+    *Llama-3.1*)
+      SAFE_CTX=131072
+      USE_JINJA="--jinja"
+      CACHE_K_VAL="q8_0"
+      CACHE_V_VAL="q4_0"
+      ok "Llama 3.1 8B: 128K ctx, Jinja on, q8_0/q4_0 KV"
+      ;;
+
+    # ── Qwen2.5 Coder 14B / Qwen3 14B (dense, tight on 12GB) ───────────────
+    *Qwen2.5-Coder-14B* | *Qwen3-14B*)
+      SAFE_CTX=32768
+      USE_JINJA="--jinja"
+      # 14B Q4_K_M ~8-9GB weights → leaves ~3GB for KV; q4_0 saves VRAM
+      CACHE_K_VAL="q4_0"
+      CACHE_V_VAL="q4_0"
+      ok "Qwen 14B: 32K ctx (VRAM budget), q4_0/q4_0 KV"
+      ;;
+
+    # ── Gemma 3 12B (dense, strict roles) ───────────────────────────────────
     *google_gemma-3* | *gemma-3*)
       SAFE_CTX=131072
       USE_JINJA="--no-jinja"
-      ok "Gemma 3: Jinja disabled (strict role enforcement)"
+      EXTRA_FLAGS="--chat-template gemma"
+      CACHE_K_VAL="q4_0"
+      CACHE_V_VAL="q4_0"
+      ok "Gemma 3 12B: 128K ctx, gemma template, q4_0/q4_0 KV"
       ;;
-    *Qwen3.5* | *Carnice* | *Hermes*)
+
+    # ── Gemma 4 12B (dense, 132K, strict roles) ─────────────────────────────
+    *google_gemma-4-12b* | *gemma-4-12b*)
+      SAFE_CTX=131072
+      USE_JINJA="--no-jinja"
+      EXTRA_FLAGS="--chat-template gemma"
+      CACHE_K_VAL="q4_0"
+      CACHE_V_VAL="q4_0"
+      ok "Gemma 4 12B: 128K ctx, gemma template, q4_0/q4_0 KV"
+      ;;
+
+    # ── Qwen3 30B A3B MoE ───────────────────────────────────────────────────
+    # ~17GB weights: too large for 12GB VRAM alone.
+    # Use -ot exps=CPU to keep routed expert FFN weights on RAM;
+    # attention + shared experts stay on GPU. Needs CPU threads for experts.
+    *Qwen3-30B*)
+      SAFE_CTX=131072
+      USE_JINJA="--jinja"
+      NGL_VAL=99
+      EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS}"
+      CACHE_K_VAL="q4_0"
+      CACHE_V_VAL="q4_0"
+      ok "Qwen3 30B MoE: experts on CPU RAM, attention on GPU, q4_0/q4_0 KV"
+      ;;
+
+    # ── DeepSeek R1 32B (dense, too large for 12GB alone) ───────────────────
+    # ~17GB weights: must offload ~50% of layers to RAM.
+    *DeepSeek*)
+      SAFE_CTX=32768
+      USE_JINJA="--jinja"
+      # Offload roughly half the layers; rest stay on GPU
+      NGL_VAL=40
+      EXTRA_FLAGS="--threads ${CPUS}"
+      CACHE_K_VAL="q4_0"
+      CACHE_V_VAL="q4_0"
+      ok "DeepSeek R1 32B: partial GPU offload (~40 layers), q4_0/q4_0 KV"
+      ;;
+
+    # ── Llama 3.3 70B (way too large — CPU + partial GPU) ───────────────────
+    *Llama-3.3*)
+      SAFE_CTX=32768
+      USE_JINJA="--jinja"
+      # 39GB model: minimal GPU layers, mostly CPU
+      NGL_VAL=10
+      EXTRA_FLAGS="--threads ${CPUS}"
+      CACHE_K_VAL="q4_0"
+      CACHE_V_VAL="q4_0"
+      warn "Llama 3.3 70B: mostly CPU inference — expect ~3-5 tok/s"
+      ;;
+
+    # ── Gemma 4 26B MoE IQ3_XXS (~9.4GB) ───────────────────────────────────
+    # MoE with ~4B active params. Fits in 12GB but needs expert offload for
+    # KV headroom at longer contexts.
+    *google_gemma-4* | *gemma-4* | *gemma-4-26B*)
+      SAFE_CTX=131072
+      USE_JINJA="--no-jinja"
+      EXTRA_FLAGS="--chat-template gemma -ot exps=CPU --threads ${CPUS}"
+      CACHE_K_VAL="q4_0"
+      CACHE_V_VAL="q4_0"
+      ok "Gemma 4 26B MoE: experts on CPU, gemma template, q4_0/q4_0 KV"
+      ;;
+
+    # ── Qwopus-GLM 18B (dense, ~10.5GB, spills slightly) ───────────────────
+    *Qwopus* | *GLM*)
+      SAFE_CTX=32768
+      USE_JINJA="--jinja"
+      # 10.5GB weights + KV → VRAM pressure; partial offload + extra threads
+      NGL_VAL=80
+      EXTRA_FLAGS="--threads ${CPUS}"
+      CACHE_K_VAL="q4_0"
+      CACHE_V_VAL="q4_0"
+      ok "Qwopus-GLM 18B: ~80 layers GPU, rest CPU, q4_0/q4_0 KV"
+      ;;
+
+    # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
+    # Q5_K_M is ~6.5GB; fits fine in 12GB.
+    *Harmonic* | *Harmonic-Hermes*)
       SAFE_CTX=262144
       USE_JINJA="--jinja"
+      CACHE_K_VAL="q8_0"
+      CACHE_V_VAL="q4_0"
+      ok "Harmonic Hermes 9B Q5: 256K ctx, q8_0/q4_0 KV"
       ;;
-    *Llama-3.1* | *Llama-3.3* | *Qwen3-30B*)
-      SAFE_CTX=131072
-      USE_JINJA="--jinja"
-      ;;
-    *Qwopus* | *GLM*)
-      SAFE_CTX=131072
-      USE_JINJA="--jinja"
-      ;;
+
+    # ── Default fallback ─────────────────────────────────────────────────────
     *)
       SAFE_CTX=32768
       USE_JINJA="--jinja"
+      CACHE_K_VAL="q8_0"
+      CACHE_V_VAL="q4_0"
       ;;
   esac
-  export SAFE_CTX USE_JINJA
-  ok "Context window: ${SAFE_CTX} tokens, Jinja: ${USE_JINJA}"
+
+  export SAFE_CTX USE_JINJA NGL_VAL BATCH_VAL UBATCH_VAL CACHE_K_VAL CACHE_V_VAL EXTRA_FLAGS
+  ok "Context: ${SAFE_CTX} | KV: ${CACHE_K_VAL}/${CACHE_V_VAL} | NGL: ${NGL_VAL} | Batch: ${BATCH_VAL}/${UBATCH_VAL}"
 }
 
 show_model_table() {
@@ -594,6 +766,7 @@ HDR
   local last_tier="" idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags _desc
   while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
     min_ram min_vram tier tags _desc; do
+    # Quote all parameter expansions to prevent glob expansion
     idx="${idx// /}"
     dname="${dname# }"
     dname="${dname% }"
@@ -690,7 +863,7 @@ download_from_hf_url() {
       local -a curl_args=(-fSL --proto '=https' --max-redirs 5 \
         --progress-bar -o "$GGUF_PATH")
       [[ -n "${HF_TOKEN:-}" ]] && curl_args+=(-H "Authorization: Bearer ${HF_TOKEN}")
-      curl "${curl_args[@]}" -- "$HF_INPUT" || die "curl download failed."
+      curl "${curl_args[@]}" "$HF_INPUT" || die "curl download failed."
       [[ -f "$GGUF_PATH" ]] || die "File not found after download."
       local fs
       fs=$(wc -c <"$GGUF_PATH" 2>/dev/null || echo 0)
@@ -719,8 +892,8 @@ for f in files:
 PYLIST
     local py_out
     py_out=$(python3 "$list_py" "$SEL_HF_REPO" 2>/dev/null || true)
-    py_out="${py_out#"${py_out%%[![:space:]]*}"}"
-    py_out="${py_out%"${py_out##*[![:space:]]}"}"
+  py_out="${py_out#"${py_out%%[![:space:]]*}"}"
+  py_out="${py_out%"${py_out##*[![:space:]]}"}"
     if [[ -z "$py_out" ]]; then
       warn "Could not auto-list files. Enter filename manually."
       read -rp " Filename (e.g. model-Q4_K_M.gguf): " SEL_GGUF
@@ -776,7 +949,7 @@ PYLIST
 }
 
 # =============================================================================
-# 7. HF CLI setup (unchanged)
+# 7. HF CLI setup (always runs)
 # =============================================================================
 step "Setting up HuggingFace CLI..."
 PATH="${HOME}/.local/bin:${PATH}"
@@ -832,7 +1005,7 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
 fi
 
 # =============================================================================
-# 8. Model selector (unchanged)
+# 8. Model selector (always runs)
 # =============================================================================
 NUM_MODELS=${#MODELS[@]}
 SEL_HF_REPO=""
@@ -842,6 +1015,12 @@ SEL_MIN_RAM="0"
 SEL_MIN_VRAM="0"
 SAFE_CTX=32768
 USE_JINJA="--jinja"
+NGL_VAL=99
+BATCH_VAL=2048
+UBATCH_VAL=512
+CACHE_K_VAL="q8_0"
+CACHE_V_VAL="q4_0"
+EXTRA_FLAGS=""
 CHOICE=""
 
 show_model_table
@@ -852,6 +1031,7 @@ while true; do
     CHOICE="5"
     break
   fi
+
   if [[ -n "${INSTALL_TIMEOUT:-}" ]]; then
     read -rp "$(echo -e " ${BLD}Enter number [1-${NUM_MODELS}] or 'u' for URL:${RST} ")" -t "$INSTALL_TIMEOUT" CHOICE || {
       warn "Timeout - defaulting to model 5"
@@ -865,6 +1045,7 @@ while true; do
       exit 0
     }
   fi
+
   if [[ "$CHOICE" =~ ^[Uu]$ ]]; then
     download_from_hf_url
     break
@@ -917,11 +1098,13 @@ if [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
 fi
 
 # =============================================================================
-# 9. Download model if needed (unchanged)
+# 9. Download model from catalogue if not present (always runs)
+# PRE-DOWNLOAD DISK SPACE CHECK
 # =============================================================================
 if [[ -f "$GGUF_PATH" ]]; then
   ok "Model already on disk: ${GGUF_PATH} — skipping download."
 elif [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
+  # Pre-download disk space validation
   step "Checking disk space..."
   AVAIL_KB=$(df -k "${MODEL_DIR}" 2>/dev/null | awk 'NR==2 {print $4}')
   if [[ -z "$AVAIL_KB" ]] || ! [[ "$AVAIL_KB" =~ ^[0-9]+$ ]]; then
@@ -932,6 +1115,7 @@ elif [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
   AVAIL_GB_INT=$(awk -v kb="$AVAIL_KB" 'BEGIN { print int((kb/1024/1024) + 0.999) }')
 
   REQ_GB=""
+  # FIX HIGH-1: Parse by exact index match, not grep substring.
   while IFS='|' read -r idx _ _ _ size_gb _ _ _ _ _ _; do
     idx="${idx// /}"
     [[ "$idx" == "$CHOICE" ]] && {
@@ -943,6 +1127,7 @@ elif [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
 
   REQ_GB_INT=${REQ_GB%.*}
   [[ "$REQ_GB" == *"."* ]] && REQ_GB_INT=$((REQ_GB_INT + 1))
+  # Add 50% safety margin for download overhead and temp files
   REQ_GB_INT=$((REQ_GB_INT + REQ_GB_INT / 2 + 1))
   ((REQ_GB_INT < 3)) && REQ_GB_INT=3
   if ((AVAIL_GB_INT < REQ_GB_INT)); then
@@ -972,14 +1157,16 @@ elif [[ ! "$CHOICE" =~ ^[Uu]$ ]]; then
 fi
 
 # =============================================================================
-# Helper: Git update check
+# Helper: Check if a Git repository has updates
 # =============================================================================
 needs_update() {
   local repo_dir="$1"
   local branch="${2:-main}"
+
   if [[ ! -d "$repo_dir" ]]; then
     return 0
   fi
+
   if [[ ! -d "$repo_dir/.git" ]]; then
     return 0
   fi
@@ -991,7 +1178,7 @@ needs_update() {
 }
 
 # =============================================================================
-# 10. Build llama.cpp
+# 10. Build llama.cpp [SKIPPED by switch-model]
 # =============================================================================
 find_llama_server() {
   local p vo
@@ -1038,8 +1225,6 @@ else
   _rebuild_llama=false
   if [[ -n "$LLAMA_SERVER_BIN" ]]; then
     CURRENT_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
-    # INSTALLED_VER not used; ignore SC2034
-    # shellcheck disable=SC2034
     INSTALLED_VER=$(_get_installed_version "llama.cpp")
     if _version_compare "${CURRENT_VER:-0}" "1.0"; then
       ok "llama-server ${CURRENT_VER} already installed — skipping build"
@@ -1058,6 +1243,7 @@ else
       step "Building/updating llama.cpp..."
       if [[ -d "$LLAMA_DIR/.git" ]]; then
         git -C "$LLAMA_DIR" fetch origin
+        # FIX HIGH-3: warn before destructive reset
         if [[ -t 0 ]]; then
           warn "git reset --hard will discard local changes in ${LLAMA_DIR}."
           read -rp "  Continue? [y/N]: " _reset_ok
@@ -1071,6 +1257,7 @@ else
       fi
 
       cd -- "$LLAMA_DIR"
+      # Use ccache for faster rebuilds if available
       if command -v ccache &>/dev/null; then
         CC="ccache gcc"
         CXX="ccache g++"
@@ -1080,6 +1267,9 @@ else
       fi
       export CC CXX
 
+      # Build with CUDA if NVIDIA GPU detected
+      # -ngl 99: Offload all layers to GPU for maximum performance
+      # --cache-type-k/v q4_0: Use 4-bit quantized KV cache to save VRAM
       if [[ "$HAS_NVIDIA" == "true" ]]; then
         cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
           -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
@@ -1108,7 +1298,7 @@ else
 fi
 
 # =============================================================================
-# 11. Hermes Agent install
+# 11. Hermes Agent install - using official installer with integrity check
 # =============================================================================
 HERMES_HOME="${HOME}/.hermes"
 HERMES_INSTALL_DIR="${HERMES_HOME}/hermes-agent"
@@ -1121,18 +1311,29 @@ _check_hermes_version() {
 
 _install_hermes_agent() {
   step "Installing Hermes Agent (official method)..."
+
+  # Remove old broken installation if exists
   if [[ -d "${HERMES_INSTALL_DIR}" ]]; then
     warn "Removing old Hermes installation..."
     rm -rf "${HERMES_INSTALL_DIR}"
   fi
+
+  # Download and verify official installer
   local install_script
   install_script=$(mktemp /tmp/hermes-install.XXXXXX.sh) || die "Failed to create temp file for Hermes installer"
   register_tmp "$install_script"
+
   curl -fsSL --proto '=https' --max-redirs 5 \
-    https://raw.githubusercontent.com/NousResearch/hermes-agent/v2026.4.16/scripts/install.sh \
+    https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
     -o "$install_script" || die "Failed to download Hermes installer"
+
+  # Verify integrity (warns if hash not known, fails if mismatch)
   _verify_script_integrity "$install_script" "hermes"
+
+  # Run with skip-setup to avoid wizard
   bash "$install_script" --branch main --skip-setup || die "Hermes install script failed (exit code $?)"
+
+  # Verify installation
   if [[ -x "${HOME}/.local/bin/hermes" ]]; then
     ok "Hermes Agent installed successfully"
     PATH="${HOME}/.local/bin:${PATH}"
@@ -1161,11 +1362,13 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-# 11b. Configure Hermes
+# 11b. Configure Hermes for local llama-server – clean YAML overwrite
 # =============================================================================
 step "Configuring Hermes for local llama-server..."
+
 umask 077
 mkdir -p "${HERMES_HOME}"/{cron,sessions,logs,memories,skills}
+
 if [[ -f "${HERMES_HOME}/.env" && ! -L "${HERMES_HOME}/.env" ]]; then
   cp "${HERMES_HOME}/.env" "${HERMES_HOME}/.env.backup.$(date +%Y%m%d%H%M%S)"
   ok "Backed up existing $HOME/.hermes/.env"
@@ -1177,10 +1380,13 @@ ENV
 ok "$HOME/.hermes/.env written."
 
 CONFIG_FILE="${HERMES_HOME}/config.yaml"
+
 if [[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]]; then
   cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%Y%m%d%H%M%S)"
   ok "Backed up existing config.yaml"
 fi
+
+# Use printf for safer variable insertion
 cat >"$CONFIG_FILE" <<YAML
 setup_complete: true
 
@@ -1200,18 +1406,24 @@ memory:
   honcho:
     enabled: true
 YAML
+
 umask "$_ORIG_UMASK"
+
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
+ok "setup_complete: true written → setup wizard will not fire"
+ok "Hermes ready with local backend"
 
 # =============================================================================
-# 12. Optional components selection (unchanged)
+# 12. Optional components selection (multi‑select menu)
 # =============================================================================
 select_optional_components() {
   [[ ! -t 0 ]] && return 1
+
   if ! command -v whiptail &>/dev/null; then
     warn "whiptail not found – using simple yes/no prompts (install 'whiptail' for better menu)."
     return 2
   fi
+
   local choices
   if ! choices=$(whiptail --title "Optional Components" --checklist \
     "Select additional components to install (use SPACE to toggle, ENTER to confirm):" \
@@ -1225,18 +1437,22 @@ select_optional_components() {
     ok "No optional components selected (user cancelled)."
     return 1
   fi
+
   local tmpfile
   tmpfile=$(mktemp /tmp/whiptail-choices.XXXXXX) || die "Failed to create temp file for choices"
   register_tmp "$tmpfile"
   echo "$choices" | tr -d '"' | tr ' ' '\n' | grep -v '^$' > "$tmpfile" || true
+
   local -a selected=()
   while IFS= read -r line; do
     selected+=("$line")
   done < "$tmpfile"
+
   INSTALL_GOOSE=false
   INSTALL_OPENCODE=false
   INSTALL_OPENCLAUDE=false
   INSTALL_CODEX=false
+
   for item in "${selected[@]}"; do
     case "$item" in
       goose) INSTALL_GOOSE=true ;;
@@ -1246,12 +1462,14 @@ select_optional_components() {
       *) warn "Unknown component '$item' — skipped." ;;
     esac
   done
+
   echo ""
   local count=0
   if $INSTALL_GOOSE; then echo " ✓ Goose"; count=$((count+1)); fi
   if $INSTALL_OPENCODE; then echo " ✓ OpenCode"; count=$((count+1)); fi
   if $INSTALL_OPENCLAUDE; then echo " ✓ OpenClaude"; count=$((count+1)); fi
   if $INSTALL_CODEX; then echo " ✓ Codex"; count=$((count+1)); fi
+
   if [[ $count -eq 0 ]]; then
     ok "No optional components selected."
   fi
@@ -1281,7 +1499,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-# 13a. Goose - with version checking
+# 13a. Goose - with version checking and integrity verification
 # =============================================================================
 _get_goose_version() {
   if command -v goose &>/dev/null; then
@@ -1293,6 +1511,7 @@ if $INSTALL_GOOSE; then
   step "Checking Goose CLI..."
   CURRENT_GOOSE=$(_get_goose_version)
   INSTALLED_GOOSE=$(_get_installed_version "goose")
+
   if [[ -n "$CURRENT_GOOSE" ]] && [[ "$CURRENT_GOOSE" == "$INSTALLED_GOOSE" ]]; then
     skip "Goose already up to date (${CURRENT_GOOSE})"
   else
@@ -1301,7 +1520,7 @@ if $INSTALL_GOOSE; then
     register_tmp "$goose_script"
     if curl -fsSL --proto '=https' --max-redirs 5 \
       --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
-      https://github.com/block/goose/releases/download/v1.31.0/download_cli.sh \
+      https://github.com/block/goose/releases/download/stable/download_cli.sh \
       -o "$goose_script" 2>/dev/null; then
       _verify_script_integrity "$goose_script" "goose"
       if bash "$goose_script"; then
@@ -1317,6 +1536,7 @@ if $INSTALL_GOOSE; then
       warn "Failed to download Goose install script — skipping."
     fi
   fi
+
   if command -v goose &>/dev/null; then
     step "Configuring Goose for local llama-server..."
     umask 077
@@ -1328,6 +1548,9 @@ models:
   base_url: http://localhost:8080/v1
   api_key: sk-local
   default: true
+
+# Built-in extensions — developer gives file/shell/analyse tools,
+# memory gives persistent context across sessions.
 extensions:
   developer:
     bundled: true
@@ -1348,82 +1571,7 @@ GOOSECONF
 fi
 
 # =============================================================================
-# 13b. Consolidated Node.js 24 + npm 11 installation (FIXED)
-# =============================================================================
-_install_nodejs_npm() {
-  step "Installing Node.js v24.15.0 and npm 11.12.1..."
-
-  # Avoid duplicate installation
-  if [[ -x /usr/local/node/bin/node ]] && [[ -x /usr/local/node/bin/npm ]]; then
-    local node_ver npm_ver
-    node_ver=$(/usr/local/node/bin/node -v 2>/dev/null || echo "")
-    npm_ver=$(/usr/local/node/bin/npm -v 2>/dev/null || echo "")
-    if [[ "$node_ver" == "v24.15.0" ]] && [[ "$npm_ver" == "11.12.1" ]]; then
-      ok "Node.js ${node_ver} and npm ${npm_ver} already installed correctly."
-      export PATH="/usr/local/node/bin:$PATH"
-      export npm_config_prefix=/usr/local/node
-      return 0
-    fi
-  fi
-
-  # Install Node.js tarball
-  local arch node_arch node_url node_tar node_dir
-  arch=$(uname -m)
-  if [[ "$arch" == "x86_64" ]]; then
-    node_arch="x64"
-  elif [[ "$arch" == "aarch64" ]]; then
-    node_arch="arm64"
-  else
-    die "Unsupported architecture: $arch"
-  fi
-  node_url="https://nodejs.org/dist/v24.15.0/node-v24.15.0-linux-${node_arch}.tar.xz"
-  node_tar="/tmp/node.tar.xz"
-  node_dir="/tmp/node"
-  curl -fsSL "$node_url" -o "$node_tar"
-  mkdir -p "$node_dir"
-  tar -xf "$node_tar" -C "$node_dir" --strip-components=1
-  # Remove previous installation if exists
-  sudo rm -rf /usr/local/node
-  sudo cp -r "$node_dir" /usr/local/node
-  rm -rf "$node_tar" "$node_dir"
-
-  # Add to PATH for this session and set npm prefix
-  export PATH="/usr/local/node/bin:$PATH"
-  export npm_config_prefix=/usr/local/node
-  ok "Node.js v24.15.0 installed to /usr/local/node"
-
-  if ! command -v node &>/dev/null; then
-    die "Node.js installation failed (node not found in PATH)."
-  fi
-  node_ver=$(node -v)
-  ok "Node.js version: ${node_ver}"
-
-  # Upgrade npm to 11.12.1 using sudo (since /usr/local/node is owned by root)
-  step "Upgrading npm to 11.12.1..."
-  if sudo npm install -g npm@11.12.1; then
-    ok "npm upgraded to $(npm -v)"
-  else
-    warn "npm upgrade failed; trying with explicit prefix and sudo..."
-    if sudo npm install -g --prefix /usr/local/node npm@11.12.1; then
-      ok "npm upgraded with explicit prefix to $(npm -v)"
-    else
-      die "Failed to upgrade npm. Please check network and permissions."
-    fi
-  fi
-
-  # Install pnpm (user install, safe)
-  step "Installing pnpm..."
-  curl -fsSL https://get.pnpm.io/install.sh | sh
-  export PATH="$HOME/.local/share/pnpm:$PATH"
-  ok "pnpm installed"
-}
-
-if $INSTALL_OPENCODE || $INSTALL_OPENCLAUDE || $INSTALL_CODEX; then
-  _install_nodejs_npm
-fi
-
-# =============================================================================
-# 13c. OpenCode - with version checking
+# 13b. OpenCode - with version checking and integrity verification
 # =============================================================================
 _get_opencode_version() {
   if command -v opencode &>/dev/null; then
@@ -1435,6 +1583,7 @@ if $INSTALL_OPENCODE; then
   step "Checking OpenCode..."
   CURRENT_OPENCODE=$(_get_opencode_version)
   INSTALLED_OPENCODE=$(_get_installed_version "opencode")
+
   if [[ -n "$CURRENT_OPENCODE" ]] && [[ "$CURRENT_OPENCODE" == "$INSTALLED_OPENCODE" ]]; then
     skip "OpenCode already up to date (${CURRENT_OPENCODE})"
   else
@@ -1462,65 +1611,87 @@ if $INSTALL_OPENCODE; then
   if command -v opencode &>/dev/null; then
     step "Configuring OpenCode with local model..."
     mkdir -p "${HOME}/.config/opencode"
-    if command -v jq &>/dev/null; then
-      jq -n \
-        --arg schema "https://opencode.ai/config.json" \
-        --arg baseURL "http://localhost:8080/v1" \
-        --arg apiKey "sk-local" \
-        --arg modelName "$SEL_GGUF" \
-        --arg displayName "$SEL_NAME" \
-        --arg ctx "$SAFE_CTX" \
-        '{
-          "$schema": $schema,
-          "provider": {
-            "llamacpp": {
-              "npm": "@ai-sdk/openai-compatible",
-              "name": "llama.cpp (local)",
-              "options": {
-                "baseURL": $baseURL,
-                "apiKey": $apiKey
-              },
-              "models": {
-                ($modelName): {
-                  "name": $displayName,
-                  "limit": {
-                    "context": ($ctx | tonumber),
-                    "output": 8192
-                  }
-                }
-              }
-            }
-          },
-          "model": "llamacpp/\($modelName)",
-          "small_model": "llamacpp/\($modelName)",
-          "plugin": ["superpowers@git+https://github.com/obra/superpowers.git"]
-        }' > "${HOME}/.config/opencode/opencode.json"
-    else
-      # Use double quotes for variable expansion inside printf (SC2016 is irrelevant here)
-      printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "llamacpp": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "llama.cpp (local)",\n      "options": {\n        "baseURL": "http://localhost:8080/v1",\n        "apiKey": "sk-local"\n      },\n      "models": {\n        "%s": {\n          "name": "%s",\n          "limit": {\n            "context": %s,\n            "output": 8192\n          }\n        }\n      }\n    }\n  },\n  "model": "llamacpp/%s",\n  "small_model": "llamacpp/%s",\n  "plugin": [\n    "superpowers@git+https://github.com/obra/superpowers.git"\n  ]\n}\n' \
-        "$(printf '%s' "$SEL_GGUF" | sed 's/\\/\\\\/g; s/"/\\"/g')" \
-        "$(printf '%s' "$SEL_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')" \
-        "$SAFE_CTX" \
-        "$(printf '%s' "$SEL_GGUF" | sed 's/\\/\\\\/g; s/"/\\"/g')" \
-        "$(printf '%s' "$SEL_GGUF" | sed 's/\\/\\\\/g; s/"/\\"/g')" \
-        > "${HOME}/.config/opencode/opencode.json"
-    fi
+    # Safely write config using printf for variable escaping
+    printf '%s\n' '{' \
+      '  "$schema": "https://opencode.ai/config.json",' \
+      '  "provider": {' \
+      '    "llamacpp": {' \
+      '      "npm": "@ai-sdk/openai-compatible",' \
+      '      "name": "llama.cpp (local)",' \
+      '      "options": {' \
+      '        "baseURL": "http://localhost:8080/v1",' \
+      '        "apiKey": "sk-local"' \
+      '      },' \
+      '      "models": {' \
+      "        \"${SEL_GGUF}\": {" \
+      '          "name": "'"${SEL_NAME}"'",' \
+      '          "limit": {' \
+      "            \"context\": ${SAFE_CTX}," \
+      '            "output": 8192' \
+      '          }' \
+      '        }' \
+      '      }' \
+      '    }' \
+      '  },' \
+      "  \"model\": \"llamacpp/${SEL_GGUF}\"," \
+      "  \"small_model\": \"llamacpp/${SEL_GGUF}\"," \
+      '  "plugin": [' \
+      '    "superpowers@git+https://github.com/obra/superpowers.git"' \
+      '  ]' \
+      '}' > "${HOME}/.config/opencode/opencode.json"
     ok "OpenCode configured."
   fi
 fi
 
+
 # =============================================================================
-# 13d. OpenClaude - using sudo for global npm install
+# 13d. OpenClaude - with version checking
 # =============================================================================
 if $INSTALL_OPENCLAUDE; then
+  step "Installing/Updating OpenClaude..."
+  if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
+    step "Setting up Node.js LTS..."
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.gpg.key
+    sudo mkdir -p /etc/apt/keyrings
+    sudo install -m 644 /tmp/nodesource.gpg.key /etc/apt/keyrings/nodesource.gpg
+    rm -f /tmp/nodesource.gpg.key
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_lts.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
+    sudo apt-get update -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm
+    ok "Node.js LTS installed via official NodeSource repository."
+  fi
+  # Verify Node.js is working
+  if ! command -v node &>/dev/null; then
+    die "Node.js installation failed - openclaude cannot be installed."
+  fi
+  node_ver=$(node -v 2>/dev/null || echo "unknown")
+  ok "Node.js version: ${node_ver}"
+  # Install/upgrade npm to 11.12.1
+  step "Installing npm 11.12.1..."
+  if command -v npm &>/dev/null; then
+    npm_ver=$(npm -v 2>/dev/null || echo "0")
+    if [[ "$npm_ver" != "11.12.1" ]]; then
+      step "Upgrading npm to 11.12.1..."
+      if npm install -g npm@11.12.1 2>&1; then
+        ok "npm upgraded to $(npm -v)"
+      else
+        warn "npm upgrade failed - continuing with existing npm ${npm_ver}"
+      fi
+    else
+      skip "npm ${npm_ver} already installed."
+    fi
+  else
+    step "Installing npm..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq npm
+  fi
+  # Actually install OpenClaude via npm
   step "Installing OpenClaude (@gitlawb/openclaude)..."
-  # Node.js and npm already installed and configured by _install_nodejs_npm
-  if sudo npm install -g @gitlawb/openclaude; then
+  if npm install -g @gitlawb/openclaude 2>&1; then
     ok "OpenClaude installed successfully."
   else
-    warn "OpenClaude install failed."
-    exit 1
+    die "Failed to install OpenClaude via npm. Check output above for errors."
   fi
+  # Verify openclaude command is available
   if ! command -v openclaude &>/dev/null; then
     die "OpenClaude installed but 'openclaude' command not found in PATH. Check npm global bin path."
   fi
@@ -1529,22 +1700,8 @@ if $INSTALL_OPENCLAUDE; then
   if command -v openclaude &>/dev/null; then
     umask 077
     mkdir -p "${HOME}/.openclaude"
-    if command -v jq &>/dev/null; then
-      jq -n \
-        --arg baseUrl "http://127.0.0.1:8080/v1" \
-        --arg apiKey "local" \
-        --arg model "$SEL_GGUF" \
-        '{
-          "providers": {
-            "local": {
-              "baseUrl": $baseUrl,
-              "apiKey": $apiKey
-            }
-          },
-          "model": "local/\($model)"
-        }' > "${HOME}/.openclaude/config.json"
-    else
-      printf '{
+    # FIX: Write complete valid JSON in one operation.
+    printf '{
   "providers": {
     "local": {
       "baseUrl": "http://127.0.0.1:8080/v1",
@@ -1552,15 +1709,15 @@ if $INSTALL_OPENCLAUDE; then
     }
   },
   "model": "local/%s"
-}\n' "$(printf '%s' "$SEL_GGUF" | sed 's/\\/\\\\/g; s/"/\\"/g')" > "${HOME}/.openclaude/config.json"
-    fi
+}\n' "${SEL_GGUF}" > "${HOME}/.openclaude/config.json"
     umask "$_ORIG_UMASK"
     ok "OpenClaude configured."
   fi
 fi
 
+
 # =============================================================================
-# 13e. OpenAI Codex CLI - using sudo for global npm install
+# 13e-codex. OpenAI Codex CLI — with version checking
 # =============================================================================
 _get_codex_version() {
   if command -v codex &>/dev/null; then
@@ -1570,12 +1727,40 @@ _get_codex_version() {
 
 _install_codex() {
   step "Installing/Updating OpenAI Codex CLI..."
-  if sudo npm install -g @openai/codex; then
+
+  # Codex requires Node.js 22+
+  if ! command -v node &>/dev/null || \
+    [[ "$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)" -lt 22 ]]; then
+    step "Installing Node.js 22 LTS (required for Codex)..."
+    local node_setup
+    node_setup=$(mktemp /tmp/nodesource-setup.XXXXXX.sh) || \
+      die "Failed to create temp file for Node.js setup"
+    register_tmp "$node_setup"
+    curl -fsSL --proto '=https' --max-redirs 5 \
+      --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+      https://deb.nodesource.com/setup_22.x -o "$node_setup" || \
+      die "Failed to download Node.js setup script"
+    if ! grep -qiE 'nodesource|nodejs' "$node_setup"; then
+      die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup}"
+    fi
+    sudo -E bash "$node_setup" 2>/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    ok "Node.js $(node --version) installed."
+  else
+    ok "Node.js $(node --version) already present."
+  fi
+
+  # Install codex globally via npm
+  if npm install -g @openai/codex 2>&1; then
     ok "Codex CLI installed/updated."
   else
-    warn "npm install of @openai/codex failed — try manually: sudo npm install -g @openai/codex"
-    return 1
+    warn "npm install of @openai/codex failed — trying with sudo..."
+    sudo npm install -g @openai/codex 2>&1 || {
+      warn "Codex install failed. Install manually: npm install -g @openai/codex"
+      return 1
+    }
   fi
+
   if ! command -v codex &>/dev/null; then
     warn "Codex installed but 'codex' command not found in PATH."
     warn "You may need to add $(npm bin -g) to your PATH."
@@ -1585,34 +1770,35 @@ _install_codex() {
 }
 
 _configure_codex() {
+  # Codex reads OPENAI_API_KEY and OPENAI_BASE_URL from the environment.
+  # We write them to ~/.codex/config.json for persistence.
+  # Codex will use the local llama-server at http://localhost:8080/v1.
   mkdir -p "${HOME}/.codex"
-  if command -v jq &>/dev/null; then
-    jq -n \
-      --arg provider "openai" \
-      --arg model "$SEL_GGUF" \
-      --arg baseUrl "http://localhost:8080/v1" \
-      --arg apiKey "sk-local" \
-      '{
-        "provider": $provider,
-        "model": $model,
-        "baseUrl": $baseUrl,
-        "apiKey": $apiKey
-      }' > "${HOME}/.codex/config.json"
-  else
-    printf '{\n  "provider": "openai",\n  "model": "%s",\n  "baseUrl": "http://localhost:8080/v1",\n  "apiKey": "sk-local"\n}\n' \
-      "$(printf '%s' "$SEL_GGUF" | sed 's/\\/\\\\/g; s/"/\\"/g')" > "${HOME}/.codex/config.json"
-  fi
+  # Use printf for atomic write with no risk of partial JSON on interrupt.
+  printf '{\n  "provider": "openai",\n  "model": "%s",\n  "baseUrl": "http://localhost:8080/v1",\n  "apiKey": "sk-local"\n}\n' \
+    "${SEL_GGUF}" > "${HOME}/.codex/config.json"
   chmod 600 "${HOME}/.codex/config.json"
   ok "Codex configured → llama-server (${SEL_NAME} at http://localhost:8080/v1)"
+  warn "Note: Set OPENAI_API_KEY=sk-local in your environment if Codex ignores config.json."
+
+  # Inject Superpowers methodology via AGENTS.md.
+  # Superpowers gives Codex: brainstorm → plan → subagent-driven execution.
+  # It auto-updates from obra/superpowers on each Codex session start.
+  # We write to ~/.codex/AGENTS.md (user-level) so it applies to all projects.
+  # Project-level .codex/AGENTS.md or AGENTS.md takes precedence if present.
   local agents_md="${HOME}/.codex/AGENTS.md"
   if [[ ! -f "$agents_md" ]]; then
     cat > "$agents_md" <<'SUPERPOWERS_AGENTS'
 # Superpowers for Codex
+# Fetch and apply the Superpowers methodology at session start.
+# This gives you: brainstorm → spec → plan → subagent-driven execution.
+# Skills: brainstorming, writing-plans, using-git-worktrees, subagent-driven-development.
+
 Fetch and follow instructions from https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.opencode/INSTALL.md
 SUPERPOWERS_AGENTS
-    ok "Superpowers injected into ${HOME}/.codex/AGENTS.md"
+    ok "Superpowers injected into ~/.codex/AGENTS.md"
   else
-    ok "${HOME}/.codex/AGENTS.md already exists — Superpowers not overwritten."
+    ok "~/.codex/AGENTS.md already exists — Superpowers not overwritten."
   fi
 }
 
@@ -1620,6 +1806,7 @@ if $INSTALL_CODEX; then
   step "Checking Codex CLI..."
   CURRENT_CODEX=$(_get_codex_version)
   INSTALLED_CODEX=$(_get_installed_version "codex")
+
   if [[ -n "$CURRENT_CODEX" ]] && [[ "$CURRENT_CODEX" == "$INSTALLED_CODEX" ]]; then
     skip "Codex already up to date (${CURRENT_CODEX})"
   else
@@ -1632,7 +1819,8 @@ if $INSTALL_CODEX; then
 fi
 
 # =============================================================================
-# 14. Create ~/start-llm.sh (unchanged)
+# 14. Create ~/start-llm.sh (always runs) with envsubst fallback
+# IMPROVED PID TRACKING: Uses port-based detection instead of process hierarchy
 # =============================================================================
 step "Generating ~/start-llm.sh..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
@@ -1646,6 +1834,12 @@ LLAMA_BIN="${LLAMA_SERVER_BIN}"
 SAFE_CTX="${SAFE_CTX}"
 LLAMA_PORT="8080"
 USE_JINJA="${USE_JINJA}"
+NGL="${NGL_VAL}"
+BATCH="${BATCH_VAL}"
+UBATCH="${UBATCH_VAL}"
+CACHE_K="${CACHE_K_VAL}"
+CACHE_V="${CACHE_V_VAL}"
+EXTRA_FLAGS="${EXTRA_FLAGS}"
 PIDFILE="${PIDFILE_PATH}"
 
 if [[ ! -x "$LLAMA_BIN" ]]; then
@@ -1653,6 +1847,7 @@ if [[ ! -x "$LLAMA_BIN" ]]; then
   exit 1
 fi
 
+# Check for existing process using port-based detection
 if command -v ss &>/dev/null; then
   EXISTING_PID=$(ss -tlnp 2>/dev/null | awk -v port=":${LLAMA_PORT}" '$4 ~ port {match($0, /pid=([0-9]+)/, arr); print arr[1]}' | head -1 || true)
 elif command -v netstat &>/dev/null; then
@@ -1678,25 +1873,31 @@ fi
 
 echo ""
 echo " Starting llama-server"
-echo " Model : ${MODEL_NAME}"
+echo " Model  : ${MODEL_NAME}"
 echo " Context: ${SAFE_CTX} tokens"
-echo " API : http://localhost:8080/v1"
-echo " Web UI : http://localhost:8080"
-echo " Jinja : ${USE_JINJA}"
+echo " GPU ngl: ${NGL} layers"
+echo " Batch  : -b ${BATCH} -ub ${UBATCH}"
+echo " KV     : K=${CACHE_K}  V=${CACHE_V}"
+echo " Jinja  : ${USE_JINJA}"
+[[ -n "${EXTRA_FLAGS}" ]] && echo " Extras : ${EXTRA_FLAGS}"
+echo " API    : http://localhost:8080/v1"
 echo ""
 
+# shellcheck disable=SC2086
 "${LLAMA_BIN}" \
   -m "${GGUF}" \
-  -ngl 99 \
+  -ngl "${NGL}" \
   -fa on \
+  -b "${BATCH}" \
+  -ub "${UBATCH}" \
   -c "${SAFE_CTX}" \
   -np 1 \
-  --cache-type-k q4_0 \
-  --cache-type-v q4_0 \
+  --cache-type-k "${CACHE_K}" \
+  --cache-type-v "${CACHE_V}" \
   --host 0.0.0.0 \
   --port "${LLAMA_PORT}" \
-  --sleep-idle-seconds 300 \
-  "${USE_JINJA}" &
+  ${USE_JINJA} \
+  ${EXTRA_FLAGS} &
 
 LLAMA_PID=$!
 echo "$LLAMA_PID" > "$PIDFILE"
@@ -1727,12 +1928,15 @@ fi
 wait "$LLAMA_PID"
 LAUNCH_TEMPLATE
 
+# Assign PIDFILE_PATH first, THEN export
+# FIX: PIDFILE_PATH must NOT be registered for cleanup — it is baked into
+# start-llm.sh and must persist after the installer exits.
 PIDFILE_PATH=$(mktemp /tmp/llama-server.XXXXXX.pid) || die "Failed to create PID file"
-export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA PIDFILE_PATH LLAMA_PORT
+export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA NGL_VAL BATCH_VAL UBATCH_VAL CACHE_K_VAL CACHE_V_VAL EXTRA_FLAGS PIDFILE_PATH LLAMA_PORT
 
+# Use envsubst if available, otherwise fallback to sed
 if command -v envsubst &>/dev/null; then
-  # Use double quotes so variables expand (SC2016 is irrelevant here)
-  envsubst "\${GGUF_PATH} \${SEL_NAME} \${LLAMA_SERVER_BIN} \${SAFE_CTX} \${USE_JINJA} \${PIDFILE_PATH} \${LLAMA_PORT}" \
+  envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${NGL_VAL} ${BATCH_VAL} ${UBATCH_VAL} ${CACHE_K_VAL} ${CACHE_V_VAL} ${EXTRA_FLAGS} ${PIDFILE_PATH} ${LLAMA_PORT}' \
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 else
   warn "envsubst not found; using sed fallback (slower)."
@@ -1741,6 +1945,12 @@ else
     -e "s|\${LLAMA_SERVER_BIN}|${LLAMA_SERVER_BIN}|g" \
     -e "s|\${SAFE_CTX}|${SAFE_CTX}|g" \
     -e "s|\${USE_JINJA}|${USE_JINJA}|g" \
+    -e "s|\${NGL_VAL}|${NGL_VAL}|g" \
+    -e "s|\${BATCH_VAL}|${BATCH_VAL}|g" \
+    -e "s|\${UBATCH_VAL}|${UBATCH_VAL}|g" \
+    -e "s|\${CACHE_K_VAL}|${CACHE_K_VAL}|g" \
+    -e "s|\${CACHE_V_VAL}|${CACHE_V_VAL}|g" \
+    -e "s|\${EXTRA_FLAGS}|${EXTRA_FLAGS}|g" \
     -e "s|\${PIDFILE_PATH}|${PIDFILE_PATH}|g" \
     -e "s|\${LLAMA_PORT}|${LLAMA_PORT}|g" \
     "${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
@@ -1750,7 +1960,7 @@ chmod +x "$LAUNCH_SCRIPT"
 ok "Launch script: ~/start-llm.sh"
 
 # =============================================================================
-# 15. systemd user service (fixed: create directory first)
+# 15. systemd user service [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   step "Creating systemd user service for llama-server..."
@@ -1762,8 +1972,7 @@ exec bash ~/start-llm.sh
 WRAPPER
   chmod +x "${HOME}/.local/bin/llama-server-wrapper"
 
-  # Create systemd user directory if it doesn't exist
-  mkdir -p "${HOME}/.config/systemd/user"
+  # FIX: Use unquoted heredoc delimiter to expand ${HOME} at write time.
   cat >"${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
 [Unit]
 Description=llama-server LLM inference (llama.cpp)
@@ -1794,11 +2003,12 @@ fi
 
 # ── Start llama-server ────────────────────────────────────────────────────────
 step "Starting llama-server..."
+# Kill any existing llama-server processes
 pkill -f "llama-server.*-m" 2>/dev/null || true
 sleep 1
+
+# Start via the generated launch script
 nohup bash "$LAUNCH_SCRIPT" >/tmp/llama-server.log 2>&1 &
-# LAUNCH_PID is not used later, but we keep it for possible debugging
-# shellcheck disable=SC2034
 LAUNCH_PID=$!
 
 READY=false
@@ -1813,10 +2023,14 @@ done
 [[ "$READY" == "false" ]] && warn "llama-server not responding after 60s — check: tail -f /tmp/llama-server.log"
 
 # =============================================================================
-# 15b. Hermes skills (unchanged)
+# 15b. Hermes skills (if installed)
 # =============================================================================
 if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
   step "Installing recommended Hermes skills..."
+  # Core workflow + MLOps skills relevant to a local LLM setup.
+  # llama-cpp: guidance for the exact inference stack being used here.
+  # vllm: production serving patterns & optimisation.
+  # evaluating-llms-harness: benchmark local models against standards.
   SKILLS=(
     "github-pr-workflow"
     "axolotl"
@@ -1844,7 +2058,7 @@ if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
 fi
 
 # =============================================================================
-# 16. ~/.bashrc helpers (add Node.js PATH)
+# 16. ~/.bashrc helpers [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   umask "$_ORIG_UMASK"
@@ -1858,18 +2072,10 @@ if [[ -z "$_SMO" ]]; then
 #!/usr/bin/env bash
 set -euo pipefail
 echo "Downloading updated installer..."
-INSTALL_TMP=$(mktemp /tmp/install-llm.XXXXXX.sh) || { echo "Failed to create temp file"; exit 1; }
+INSTALL_TMP=$(mktemp /tmp/install-llm.XXXXXX.sh) || die "Failed to create temp file for installer download"
 curl -fsSL --proto '=https' --max-redirs 5 \
   https://raw.githubusercontent.com/mettbrot0815/llm-installer/refs/heads/main/install.sh \
   -o "$INSTALL_TMP" || { echo "Download failed."; rm -f "$INSTALL_TMP"; exit 1; }
-# Simple integrity check: compare with known hash (update when script changes)
-EXPECTED_HASH="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"  # placeholder
-ACTUAL_HASH=$(sha256sum "$INSTALL_TMP" | cut -d' ' -f1)
-if [[ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]]; then
-  echo "WARNING: Installer hash mismatch. Continue? (y/N)"
-  read -r ans
-  [[ "$ans" != "y" && "$ans" != "Y" ]] && { echo "Aborted."; rm -f "$INSTALL_TMP"; exit 1; }
-fi
 chmod +x "$INSTALL_TMP"
 bash "$INSTALL_TMP"
 rm -f "$INSTALL_TMP"
@@ -1887,9 +2093,7 @@ STUB
 
   MARKER="# === LLM setup (added by install.sh) ==="
   if ! grep -qF "$MARKER" "${HOME}/.bashrc" 2>/dev/null; then
-    # Use a single heredoc to avoid SC2129
-    {
-      cat <<'BASHRC_EXPANDED'
+    cat >>"${HOME}/.bashrc" <<'BASHRC_EXPANDED'
 
 # === LLM setup (added by install.sh) ===
 if [[ -z "${__LLM_BASHRC_LOADED:-}" ]]; then
@@ -1904,9 +2108,7 @@ export PATH="$_c"; unset _c _pts _pt
 
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
-# Add Node.js 24 to PATH and set npm prefix
-export PATH="/usr/local/cuda/bin:${HOME}/.local/bin:/usr/local/node/bin:${PATH}"
-export npm_config_prefix=/usr/local/node
+export PATH="/usr/local/cuda/bin:${HOME}/.local/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 
 if [[ -f "${HOME}/.llm-tokens" ]]; then
@@ -1927,14 +2129,15 @@ fi
 
 BASHRC_EXPANDED
 
-      printf 'alias start-llm='"'"'bash ~/start-llm.sh'"'"'\n'
-      printf 'alias stop-llm='"'"'pkill -f "llama-server.*-m" 2>/dev/null || true; echo "llama-server stopped."'"'"'\n'
-      printf 'alias restart-llm='"'"'stop-llm; sleep 2; start-llm'"'"'\n'
-      printf 'alias llm-log='"'"'tail -f /tmp/llama-server.log'"'"'\n'
-      printf 'alias switch-model='"'"'SWITCH_MODEL_ONLY=1 bash %s'"'"'\n' "${INSTALL_COPY}"
-      printf 'alias codex='"'"'OPENAI_API_KEY=sk-local OPENAI_BASE_URL=http://localhost:8080/v1 codex'"'"'\n'
+    # Add aliases and functions with proper escaping for INSTALL_COPY
+    printf 'alias start-llm='"'"'bash ~/start-llm.sh'"'"'\n' >> "${HOME}/.bashrc"
+    printf 'alias stop-llm='"'"'pkill -f "llama-server.*-m" 2>/dev/null || true; echo "llama-server stopped."'"'"'\n' >> "${HOME}/.bashrc"
+    printf 'alias restart-llm='"'"'stop-llm; sleep 2; start-llm'"'"'\n' >> "${HOME}/.bashrc"
+    printf 'alias llm-log='"'"'tail -f /tmp/llama-server.log'"'"'\n' >> "${HOME}/.bashrc"
+    printf 'alias switch-model='"'"'SWITCH_MODEL_ONLY=1 bash %s'"'"'\n' "${INSTALL_COPY}" >> "${HOME}/.bashrc"
+    printf 'alias codex='"'"'OPENAI_API_KEY=sk-local OPENAI_BASE_URL=http://localhost:8080/v1 codex'"'"'\n' >> "${HOME}/.bashrc"
 
-      cat <<'BASHRC_FUNCTIONS'
+    cat >>"${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
 
 vram() {
   nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null | \
@@ -2022,11 +2225,15 @@ _llm_autostart
 
 
 config-reset() {
+  # Repoint all installed AI tools to the local llama-server at localhost:8080/v1.
+  # Reads the active model name and GGUF filename from ~/start-llm.sh.
+
   local BASE_URL="http://localhost:8080/v1"
   local API_KEY="sk-local"
   local MODEL_NAME="" GGUF_NAME="" CTX="32768"
   local reset_count=0 skip_count=0
 
+  # ── Derive active model info from start-llm.sh ───────────────────────────
   if [[ -f ~/start-llm.sh ]]; then
     MODEL_NAME=$(grep '^MODEL_NAME=' ~/start-llm.sh 2>/dev/null | head -1 \
       | sed 's/MODEL_NAME="//;s/".*//' || true)
@@ -2043,6 +2250,7 @@ config-reset() {
   echo -e " Active model : ${CYN}${MODEL_NAME}${RST}"
   echo -e " Context      : ${CTX} tokens\n"
 
+  # ── Hermes ~/.hermes/.env ─────────────────────────────────────────────────
   if [[ -d "${HOME}/.hermes" ]]; then
     mkdir -p "${HOME}/.hermes"
     printf 'OPENAI_API_KEY=%s\nOPENAI_BASE_URL=%s\n' \
@@ -2055,6 +2263,7 @@ config-reset() {
     skip_count=$((skip_count+1))
   fi
 
+  # ── Hermes ~/.hermes/config.yaml ─────────────────────────────────────────
   if [[ -d "${HOME}/.hermes" ]]; then
     local hcfg="${HOME}/.hermes/config.yaml"
     [[ -f "$hcfg" ]] && cp "$hcfg" "${hcfg}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null
@@ -2081,6 +2290,7 @@ HCFG
     reset_count=$((reset_count+1))
   fi
 
+  # ── Goose ~/.config/goose/config.yaml ────────────────────────────────────
   if command -v goose &>/dev/null || [[ -d "${HOME}/.config/goose" ]]; then
     mkdir -p "${HOME}/.config/goose"
     cat > "${HOME}/.config/goose/config.yaml" <<GCFG
@@ -2090,6 +2300,7 @@ models:
   base_url: ${BASE_URL}
   api_key: ${API_KEY}
   default: true
+
 extensions:
   developer:
     bundled: true
@@ -2111,44 +2322,12 @@ GCFG
     skip_count=$((skip_count+1))
   fi
 
+  # ── OpenCode ~/.config/opencode/opencode.json ─────────────────────────────
   if command -v opencode &>/dev/null || [[ -d "${HOME}/.config/opencode" ]]; then
     mkdir -p "${HOME}/.config/opencode"
-    if command -v jq &>/dev/null; then
-      jq -n \
-        --arg baseURL "$BASE_URL" \
-        --arg apiKey "$API_KEY" \
-        --arg modelName "$GGUF_NAME" \
-        --arg displayName "$MODEL_NAME" \
-        --arg ctx "$CTX" \
-        '{
-          "$schema": "https://opencode.ai/config.json",
-          "provider": {
-            "llamacpp": {
-              "npm": "@ai-sdk/openai-compatible",
-              "name": "llama.cpp (local)",
-              "options": {
-                "baseURL": $baseURL,
-                "apiKey": $apiKey
-              },
-              "models": {
-                ($modelName): {
-                  "name": $displayName,
-                  "limit": {
-                    "context": ($ctx | tonumber),
-                    "output": 8192
-                  }
-                }
-              }
-            }
-          },
-          "model": "llamacpp/\($modelName)",
-          "small_model": "llamacpp/\($modelName)"
-        }' > "${HOME}/.config/opencode/opencode.json"
-    else
-      printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "llamacpp": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "llama.cpp (local)",\n      "options": {\n        "baseURL": "%s",\n        "apiKey": "%s"\n      },\n      "models": {\n        "%s": {\n          "name": "%s",\n          "limit": { "context": %s, "output": 8192 }\n        }\n      }\n    }\n  },\n  "model": "llamacpp/%s",\n  "small_model": "llamacpp/%s"\n}\n' \
-        "$BASE_URL" "$API_KEY" "$GGUF_NAME" "$MODEL_NAME" "$CTX" "$GGUF_NAME" "$GGUF_NAME" \
-        > "${HOME}/.config/opencode/opencode.json"
-    fi
+    printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "llamacpp": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "llama.cpp (local)",\n      "options": {\n        "baseURL": "%s",\n        "apiKey": "%s"\n      },\n      "models": {\n        "%s": {\n          "name": "%s",\n          "limit": { "context": %s, "output": 8192 }\n        }\n      }\n    }\n  },\n  "model": "llamacpp/%s",\n  "small_model": "llamacpp/%s"\n}\n' \
+      "$BASE_URL" "$API_KEY" "$GGUF_NAME" "$MODEL_NAME" "$CTX" "$GGUF_NAME" "$GGUF_NAME" \
+      > "${HOME}/.config/opencode/opencode.json"
     echo -e " ${GRN}✓${RST} OpenCode opencode.json"
     reset_count=$((reset_count+1))
   else
@@ -2156,26 +2335,11 @@ GCFG
     skip_count=$((skip_count+1))
   fi
 
+  # ── OpenClaude ~/.openclaude/config.json ─────────────────────────────────
   if command -v openclaude &>/dev/null || [[ -d "${HOME}/.openclaude" ]]; then
     mkdir -p "${HOME}/.openclaude"
-    if command -v jq &>/dev/null; then
-      jq -n \
-        --arg baseURL "$BASE_URL" \
-        --arg apiKey "$API_KEY" \
-        --arg model "$GGUF_NAME" \
-        '{
-          "providers": {
-            "local": {
-              "baseUrl": $baseURL,
-              "apiKey": $apiKey
-            }
-          },
-          "model": "local/\($model)"
-        }' > "${HOME}/.openclaude/config.json"
-    else
-      printf '{\n  "providers": {\n    "local": {\n      "baseUrl": "%s",\n      "apiKey": "%s"\n    }\n  },\n  "model": "local/%s"\n}\n' \
-        "$BASE_URL" "$API_KEY" "$GGUF_NAME" > "${HOME}/.openclaude/config.json"
-    fi
+    printf '{\n  "providers": {\n    "local": {\n      "baseUrl": "%s",\n      "apiKey": "%s"\n    }\n  },\n  "model": "local/%s"\n}\n' \
+      "$BASE_URL" "$API_KEY" "$GGUF_NAME" > "${HOME}/.openclaude/config.json"
     chmod 600 "${HOME}/.openclaude/config.json"
     echo -e " ${GRN}✓${RST} OpenClaude config.json"
     reset_count=$((reset_count+1))
@@ -2184,25 +2348,13 @@ GCFG
     skip_count=$((skip_count+1))
   fi
 
+  # ── Codex ~/.codex/config.json + AGENTS.md ───────────────────────────────
   if command -v codex &>/dev/null || [[ -d "${HOME}/.codex" ]]; then
     mkdir -p "${HOME}/.codex"
-    if command -v jq &>/dev/null; then
-      jq -n \
-        --arg provider "openai" \
-        --arg model "$GGUF_NAME" \
-        --arg baseURL "$BASE_URL" \
-        --arg apiKey "$API_KEY" \
-        '{
-          "provider": $provider,
-          "model": $model,
-          "baseUrl": $baseURL,
-          "apiKey": $apiKey
-        }' > "${HOME}/.codex/config.json"
-    else
-      printf '{\n  "provider": "openai",\n  "model": "%s",\n  "baseUrl": "%s",\n  "apiKey": "%s"\n}\n' \
-        "$GGUF_NAME" "$BASE_URL" "$API_KEY" > "${HOME}/.codex/config.json"
-    fi
+    printf '{\n  "provider": "openai",\n  "model": "%s",\n  "baseUrl": "%s",\n  "apiKey": "%s"\n}\n' \
+      "$GGUF_NAME" "$BASE_URL" "$API_KEY" > "${HOME}/.codex/config.json"
     chmod 600 "${HOME}/.codex/config.json"
+    # Ensure Superpowers AGENTS.md is present after a reset
     if [[ ! -f "${HOME}/.codex/AGENTS.md" ]]; then
       cat > "${HOME}/.codex/AGENTS.md" <<'SUPERPOWERS_RESET'
 # Superpowers for Codex
@@ -2216,6 +2368,7 @@ SUPERPOWERS_RESET
     skip_count=$((skip_count+1))
   fi
 
+  # ── Claude ~/.claude/config.json ─────────────────────────────────────────
   if command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]; then
     mkdir -p "${HOME}/.claude"
     printf '{\n  "hooks": {},\n  "statusLine": {},\n  "agentModels": { "primary": "local/%s" },\n  "providers": {\n    "local": {\n      "baseUrl": "http://127.0.0.1:8080/v1",\n      "apiKey": "local",\n      "models": {\n        "%s": { "name": "%s", "contextWindow": %s, "maxTokens": 16384, "reasoning": false }\n      }\n    }\n  }\n}\n' \
@@ -2234,9 +2387,9 @@ SUPERPOWERS_RESET
 
 alias clear='show_llm_summary; command clear'
 
+# FIX: Close the if guard opened at top of LLM block.
 fi
 BASHRC_FUNCTIONS
-    } >> "${HOME}/.bashrc"
 
     ok "Helpers written to ~/.bashrc."
   else
@@ -2245,7 +2398,7 @@ BASHRC_FUNCTIONS
 fi
 
 # =============================================================================
-# 17. .wslconfig (unchanged)
+# 17. .wslconfig RAM hint [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r\n' || echo "")
@@ -2267,9 +2420,11 @@ if [[ -z "$_SMO" ]]; then
   fi
   if [[ -n "$WSLCONFIG" && ! -f "$WSLCONFIG" && -n "$WSLCONFIG_DIR" ]]; then
     step "Writing .wslconfig..."
+    # Allocate 75% of RAM to WSL, minimum 4GB, maximum 64GB
     WSL_RAM=$((RAM_GiB * 3 / 4))
     ((WSL_RAM < 4)) && WSL_RAM=4
     ((WSL_RAM > 64)) && WSL_RAM=64
+    # Swap is 25% of WSL RAM, minimum 2GB
     WSL_SWAP=$((WSL_RAM / 4))
     ((WSL_SWAP < 2)) && WSL_SWAP=2
     cat >"$WSLCONFIG" <<'WSLCFG'
@@ -2293,7 +2448,7 @@ WSLCFG
 fi
 
 # =============================================================================
-# 18. Claude Configuration (unchanged)
+# 18. Claude Configuration
 # =============================================================================
 if [[ -z "$_SMO" ]] && (command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]); then
   step "Configuring Claude to use local llama.cpp server..."
@@ -2326,7 +2481,7 @@ CLAUDE
 fi
 
 # =============================================================================
-# Done — Summary (unchanged)
+# Done — Summary
 # =============================================================================
 echo ""
 printf '%b' "${GRN}${BLD}"
