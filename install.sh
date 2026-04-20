@@ -719,7 +719,7 @@ apply_model_settings() {
 
     # ── Qwopus-GLM 18B (dense, ~10.5GB, spills slightly) ───────────────────
     *Qwopus* | *GLM*)
-      SAFE_CTX=32768
+      SAFE_CTX=131072
       USE_JINJA="--jinja"
       # 10.5GB weights + KV → VRAM pressure; partial offload + extra threads
       NGL_VAL=80
