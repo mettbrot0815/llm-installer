@@ -644,13 +644,14 @@ apply_model_settings() {
       ;;
 
     # ── Gemma 3 12B (dense, strict roles) ───────────────────────────────────
+    # --jinja required for tool calls (Hermes sends tools param → HTTP 500 without it)
     *google_gemma-3* | *gemma-3*)
       SAFE_CTX=131072
-      USE_JINJA="--no-jinja"
-      EXTRA_FLAGS="--chat-template gemma"
+      USE_JINJA="--jinja"
+      EXTRA_FLAGS=""
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Gemma 3 12B: 128K ctx, gemma template, q4_0/q4_0 KV"
+      ok "Gemma 3 12B: 128K ctx, Jinja on (tools support), q4_0/q4_0 KV"
       ;;
 
     # ── Gemma 4 12B (dense, 132K, strict roles) ─────────────────────────────
@@ -705,13 +706,15 @@ apply_model_settings() {
     # ── Gemma 4 26B MoE IQ3_XXS (~9.4GB) ───────────────────────────────────
     # MoE with ~4B active params. Fits in 12GB but needs expert offload for
     # KV headroom at longer contexts.
+    # --jinja is REQUIRED: Hermes sends a tools param which llama-server
+    # rejects with HTTP 500 if Jinja is disabled. Gemma 4 supports Jinja.
     *google_gemma-4* | *gemma-4* | *gemma-4-26B*)
       SAFE_CTX=131072
-      USE_JINJA="--no-jinja"
-      EXTRA_FLAGS="--chat-template gemma -ot exps=CPU --threads ${CPUS}"
+      USE_JINJA="--jinja"
+      EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS}"
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Gemma 4 26B MoE: experts on CPU, gemma template, q4_0/q4_0 KV"
+      ok "Gemma 4 26B MoE: Jinja on (tools support), experts on CPU, q4_0/q4_0 KV"
       ;;
 
     # ── Qwopus-GLM 18B (dense, ~10.5GB, spills slightly) ───────────────────
