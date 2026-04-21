@@ -1576,15 +1576,19 @@ if $INSTALL_OPENCLAUDE; then
   fi
   node_ver=$(node -v 2>/dev/null || echo "unknown")
   ok "Node.js version: ${node_ver}"
-  # Install/upgrade npm to latest
-  step "Installing npm..."
+  # Check npm version - don't upgrade if already recent
+  step "Checking npm..."
   if command -v npm &>/dev/null; then
     npm_ver=$(npm -v 2>/dev/null || echo "0")
-    step "Upgrading npm..."
-    if npm install -g npm 2>&1; then
-      ok "npm upgraded to $(npm -v)"
+    if [[ "$npm_ver" == "10."* ]] || [[ "$npm_ver" == "11."* ]]; then
+      skip "npm ${npm_ver} is recent enough"
     else
-      warn "npm upgrade failed - continuing with existing npm ${npm_ver}"
+      step "Upgrading npm..."
+      if npm install -g npm 2>&1; then
+        ok "npm upgraded to $(npm -v)"
+      else
+        warn "npm upgrade failed - continuing with existing npm ${npm_ver}"
+      fi
     fi
   else
     step "Installing npm..."
@@ -1600,9 +1604,16 @@ if $INSTALL_OPENCLAUDE; then
       die "Failed to install OpenClaude via npm. Check output above for errors."
     }
   fi
+  # Update PATH for global npm installs
+  NPM_BIN_PATH=$(npm bin -g 2>/dev/null || echo "")
+  if [[ -n "$NPM_BIN_PATH" ]]; then
+    PATH="${NPM_BIN_PATH}:${PATH}"
+    export PATH
+  fi
   # Verify openclaude command is available
   if ! command -v openclaude &>/dev/null; then
-    die "OpenClaude installed but 'openclaude' command not found in PATH. You may need to add $(npm bin -g) to your PATH."
+    warn "OpenClaude installed but 'openclaude' command not found in PATH."
+    warn "You may need to add the following to your PATH: $(npm bin -g 2>/dev/null || echo '~/.npm-global/bin')"
   fi
   openclaude_ver=$(openclaude --version 2>/dev/null || echo "unknown")
   ok "OpenClaude version: ${openclaude_ver}"
