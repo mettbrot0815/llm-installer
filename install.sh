@@ -1624,16 +1624,22 @@ fi
 # =============================================================================
 if $INSTALL_OPENCLAUDE; then
   step "Installing/Updating OpenClaude..."
-  if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
-    step "Setting up Node.js LTS..."
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.gpg.key
-    sudo mkdir -p /etc/apt/keyrings
-    sudo install -m 644 /tmp/nodesource.gpg.key /etc/apt/keyrings/nodesource.gpg
-    rm -f /tmp/nodesource.gpg.key
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_lts.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm
-    ok "Node.js LTS installed via official NodeSource repository."
+  if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 22 ]]; then
+    step "Installing Node.js 22 LTS (required for OpenClaude)..."
+    local node_setup
+    node_setup=$(mktemp /tmp/nodesource-setup.XXXXXX.sh) || \
+      die "Failed to create temp file for Node.js setup"
+    register_tmp "$node_setup"
+    curl -fsSL --proto '=https' --max-redirs 5 \
+      --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+      https://deb.nodesource.com/setup_22.x -o "$node_setup" || \
+      die "Failed to download Node.js setup script"
+    if ! grep -qiE 'nodesource|nodejs' "$node_setup"; then
+      die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup}"
+    fi
+    sudo -E bash "$node_setup" 2>/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    ok "Node.js 22 LTS installed."
   fi
   # Verify Node.js is working
   if ! command -v node &>/dev/null; then
@@ -1641,19 +1647,15 @@ if $INSTALL_OPENCLAUDE; then
   fi
   node_ver=$(node -v 2>/dev/null || echo "unknown")
   ok "Node.js version: ${node_ver}"
-  # Install/upgrade npm to 11.12.1
-  step "Installing npm 11.12.1..."
+  # Install/upgrade npm to latest
+  step "Installing npm..."
   if command -v npm &>/dev/null; then
     npm_ver=$(npm -v 2>/dev/null || echo "0")
-    if [[ "$npm_ver" != "11.12.1" ]]; then
-      step "Upgrading npm to 11.12.1..."
-      if npm install -g npm@11.12.1 2>&1; then
-        ok "npm upgraded to $(npm -v)"
-      else
-        warn "npm upgrade failed - continuing with existing npm ${npm_ver}"
-      fi
+    step "Upgrading npm..."
+    if npm install -g npm 2>&1; then
+      ok "npm upgraded to $(npm -v)"
     else
-      skip "npm ${npm_ver} already installed."
+      warn "npm upgrade failed - continuing with existing npm ${npm_ver}"
     fi
   else
     step "Installing npm..."
@@ -1664,11 +1666,14 @@ if $INSTALL_OPENCLAUDE; then
   if npm install -g @gitlawb/openclaude 2>&1; then
     ok "OpenClaude installed successfully."
   else
-    die "Failed to install OpenClaude via npm. Check output above for errors."
+    warn "npm install of @gitlawb/openclaude failed — trying with sudo..."
+    sudo npm install -g @gitlawb/openclaude 2>&1 || {
+      die "Failed to install OpenClaude via npm. Check output above for errors."
+    }
   fi
   # Verify openclaude command is available
   if ! command -v openclaude &>/dev/null; then
-    die "OpenClaude installed but 'openclaude' command not found in PATH. Check npm global bin path."
+    die "OpenClaude installed but 'openclaude' command not found in PATH. You may need to add $(npm bin -g) to your PATH."
   fi
   openclaude_ver=$(openclaude --version 2>/dev/null || echo "unknown")
   ok "OpenClaude version: ${openclaude_ver}"
