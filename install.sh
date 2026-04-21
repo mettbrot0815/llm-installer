@@ -589,13 +589,32 @@ apply_model_settings() {
   case "$gguf" in
 
 
-    *Qwen3.5-9B* | *Carnice* | *Hermes*)
+    *Carnice*)
       SAFE_CTX=262144
       USE_JINJA="--jinja"
       # 9B Q4_K_M ~5.3GB weights → ~6.7GB with q8_0 KV at 8K; fits 12GB fine
       CACHE_K_VAL="q8_0"
       CACHE_V_VAL="q4_0"
-      ok "Qwen3.5 9B / Hermes / Carnice: 256K ctx, Jinja on, q8_0/q4_0 KV"
+      ok "Carnice: 256K ctx, Jinja on, q8_0/q4_0 KV"
+      ;;
+
+    # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
+    # Q5_K_M is ~6.5GB; fits fine in 12GB.
+    *Harmonic-Hermes*)
+      SAFE_CTX=262144
+      USE_JINJA="--jinja"
+      CACHE_K_VAL="q8_0"
+      CACHE_V_VAL="q4_0"
+      ok "Harmonic Hermes 9B Q5: 256K ctx, q8_0/q4_0 KV"
+      ;;
+
+    *Qwen3.5-9B* | *Hermes*)
+      SAFE_CTX=262144
+      USE_JINJA="--jinja"
+      # 9B Q4_K_M ~5.3GB weights → ~6.7GB with q8_0 KV at 8K; fits 12GB fine
+      CACHE_K_VAL="q8_0"
+      CACHE_V_VAL="q4_0"
+      ok "Qwen3.5 9B / Hermes: 256K ctx, Jinja on, q8_0/q4_0 KV"
       ;;
 
 
@@ -632,7 +651,7 @@ apply_model_settings() {
 
     # ── Gemma 4 12B (dense, 132K, strict roles) ─────────────────────────────
     # --jinja required for tool calls (Hermes sends tools param → HTTP 500 without it)
-    *google_gemma-4-12b* | *gemma-4-12b*)
+    *google_gemma-4-12b*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       EXTRA_FLAGS=""
@@ -676,7 +695,7 @@ apply_model_settings() {
     # KV headroom at longer contexts.
     # --jinja is REQUIRED: Hermes sends a tools param which llama-server
     # rejects with HTTP 500 if Jinja is disabled. Gemma 4 supports Jinja.
-    *google_gemma-4* | *gemma-4* | *gemma-4-26B*)
+    *gemma-4-26B*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS}"
@@ -697,16 +716,6 @@ apply_model_settings() {
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
       ok "Qwopus-GLM 18B: 64K ctx (Hermes min), ~80 layers GPU, q4_0/q4_0 KV"
-      ;;
-
-    # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
-    # Q5_K_M is ~6.5GB; fits fine in 12GB.
-    *Harmonic* | *Harmonic-Hermes*)
-      SAFE_CTX=262144
-      USE_JINJA="--jinja"
-      CACHE_K_VAL="q8_0"
-      CACHE_V_VAL="q4_0"
-      ok "Harmonic Hermes 9B Q5: 256K ctx, q8_0/q4_0 KV"
       ;;
 
     # ── Default fallback ─────────────────────────────────────────────────────
@@ -1199,7 +1208,6 @@ else
   _rebuild_llama=false
   if [[ -n "$LLAMA_SERVER_BIN" ]]; then
     CURRENT_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
-    INSTALLED_VER=$(_get_installed_version "llama.cpp")
     if _version_compare "${CURRENT_VER:-0}" "1.0"; then
       ok "llama-server ${CURRENT_VER} already installed — skipping build"
     else
@@ -1548,7 +1556,6 @@ if $INSTALL_OPENCLAUDE; then
   step "Installing/Updating OpenClaude..."
   if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 22 ]]; then
     step "Installing Node.js 22 LTS (required for OpenClaude)..."
-    local node_setup
     node_setup=$(mktemp /tmp/nodesource-setup.XXXXXX.sh) || \
       die "Failed to create temp file for Node.js setup"
     register_tmp "$node_setup"
@@ -1700,7 +1707,7 @@ Fetch and follow instructions from https://raw.githubusercontent.com/obra/superp
 SUPERPOWERS_AGENTS
     ok "Superpowers injected into ~/.codex/AGENTS.md"
   else
-    ok "~/.codex/AGENTS.md already exists — Superpowers not overwritten."
+    ok "${HOME}/.codex/AGENTS.md already exists — Superpowers not overwritten."
   fi
 }
 
@@ -1911,7 +1918,6 @@ sleep 1
 
 # Start via the generated launch script
 nohup bash "$LAUNCH_SCRIPT" >/tmp/llama-server.log 2>&1 &
-LAUNCH_PID=$!
 
 READY=false
 for _ in {1..60}; do
