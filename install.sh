@@ -1704,8 +1704,8 @@ if $INSTALL_OPENCLAUDE; then
     }
   fi
   # Update PATH for global npm installs
-  NPM_BIN_PATH=$(npm bin -g 2>/dev/null || echo "")
-  if [[ -n "$NPM_BIN_PATH" ]]; then
+  NPM_BIN_PATH=$(npm prefix -g 2>/dev/null || echo "")/bin
+  if [[ -n "$NPM_BIN_PATH" && -d "$NPM_BIN_PATH" ]]; then
     PATH="${NPM_BIN_PATH}:${PATH}"
     export PATH
   fi
@@ -2126,7 +2126,7 @@ export PATH="$_c"; unset _c _pts _pt
 
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
-export PATH="/usr/local/cuda/bin:${HOME}/.local/bin:${PATH}"
+export PATH="/usr/local/cuda/bin:${HOME}/.local/bin:$(npm prefix -g 2>/dev/null || echo /usr/local)/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 
 if [[ -f "${HOME}/.llm-tokens" ]]; then
