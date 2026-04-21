@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # =============================================================================
-# install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + OpenClaude + Codex
+# install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenClaude + Codex
 # Version: production-hardened (audited revision)
 # Optional components selected via single multi‑select menu (whiptail).
-# Includes: Goose, OpenCode, OpenClaude, Codex
+# Includes: Goose, OpenClaude, Codex
 #
 # Features:
 # - Smart version checking - only downloads/installs when outdated
@@ -91,13 +91,19 @@ _version_compare() {
   return 0
 }
 
-# ── Strip Windows /mnt/* from PATH ────────────────────────────────────────────
+# ── Strip Windows /mnt/* from PATH and prefer system Node.js ─────────────────
 _clean_path=""
 IFS=':' read -ra _path_parts <<<"$PATH"
 for _p in "${_path_parts[@]}"; do
   [[ "$_p" == /mnt/* ]] && continue
   _clean_path="${_clean_path:+${_clean_path}:}${_p}"
 done
+# Prefer system Node.js over Hermes' if both exist
+if command -v /usr/bin/node &>/dev/null; then
+  _clean_path="/usr/bin:/usr/local/bin:${_clean_path}"
+else
+  _clean_path="/usr/local/bin:/usr/bin:${_clean_path}"
+fi
 PATH="$_clean_path"
 export PATH
 unset _clean_path _path_parts _p
@@ -143,7 +149,7 @@ trap _combined_exit_handler EXIT INT TERM
 # If a hash mismatches, the installer will abort with an integrity error.
 # Set to "" to disable checking for a specific script (falls back to warn-only).
 declare -A INSTALLER_HASHES=(
-  ["hermes"]="1c10b1553f4632a1beabcefdc3d241cb3e6735f450dc4ee0dc44766a68112537"
+  ["hermes"]="251c1b97dda5db092d152d34afa315612fe27329e821c5414130f2a7e0c011e2"
   ["goose"]="ef85145e8d0162106d9d9c8ef51dd51e9d0b6a3ee5edddb9f6658fa7f0f0a892"
   ["opencode"]="fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e"
 )
@@ -196,7 +202,7 @@ BANNER
 else
   cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════════╗
-║ Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + Codex  ║
+║ Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenClaude + Codex ║
 ║ Smart downloads - only installs outdated components           ║
 ╚══════════════════════════════════════════════════════════════╝
 BANNER
@@ -340,7 +346,32 @@ elif [[ -n "$GH_TOKEN" ]]; then
 fi
 
 # =============================================================================
-# 3. System packages [SKIPPED by switch-model]
+# 3. System Node.js (for agents requiring it)
+# =============================================================================
+if [[ -z "$_SMO" ]]; then
+  step "Checking system Node.js..."
+  if ! command -v node &>/dev/null || [[ $(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1) -lt 22 ]]; then
+    step "Installing Node.js 22 LTS (required for some agents)..."
+    local node_setup_sys
+    node_setup_sys=$(mktemp /tmp/nodesource-setup-sys.XXXXXX.sh) || die "Failed to create temp file for system Node.js setup"
+    register_tmp "$node_setup_sys"
+    curl -fsSL --proto '=https' --max-redirs 5 \
+      --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+      https://deb.nodesource.com/setup_22.x -o "$node_setup_sys" || \
+      die "Failed to download Node.js setup script"
+    if ! grep -qiE 'nodesource|nodejs' "$node_setup_sys"; then
+      die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup_sys}"
+    fi
+    sudo -E bash "$node_setup_sys" 2>/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    ok "System Node.js 22 LTS installed."
+  else
+    ok "System Node.js $(node --version) is sufficient."
+  fi
+fi
+
+# =============================================================================
+# 5. System packages [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   step "Updating system packages..."
@@ -390,7 +421,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-# 4. Hardware detection (always runs) - MOVED INTO FUNCTION
+# 6. Hardware detection (always runs) - MOVED INTO FUNCTION
 # =============================================================================
 _detect_hardware() {
   step "Detecting hardware..."
@@ -590,13 +621,32 @@ apply_model_settings() {
   case "$gguf" in
 
 
-    *Qwen3.5-9B* | *Carnice* | *Hermes*)
+    *Carnice*)
       SAFE_CTX=262144
       USE_JINJA="--jinja"
       # 9B Q4_K_M ~5.3GB weights → ~6.7GB with q8_0 KV at 8K; fits 12GB fine
       CACHE_K_VAL="q8_0"
       CACHE_V_VAL="q4_0"
-      ok "Qwen3.5 9B / Hermes / Carnice: 256K ctx, Jinja on, q8_0/q4_0 KV"
+      ok "Carnice: 256K ctx, Jinja on, q8_0/q4_0 KV"
+      ;;
+
+    # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
+    # Q5_K_M is ~6.5GB; fits fine in 12GB.
+    *Harmonic-Hermes*)
+      SAFE_CTX=262144
+      USE_JINJA="--jinja"
+      CACHE_K_VAL="q8_0"
+      CACHE_V_VAL="q4_0"
+      ok "Harmonic Hermes 9B Q5: 256K ctx, q8_0/q4_0 KV"
+      ;;
+
+    *Qwen3.5-9B* | *Hermes*)
+      SAFE_CTX=262144
+      USE_JINJA="--jinja"
+      # 9B Q4_K_M ~5.3GB weights → ~6.7GB with q8_0 KV at 8K; fits 12GB fine
+      CACHE_K_VAL="q8_0"
+      CACHE_V_VAL="q4_0"
+      ok "Qwen3.5 9B / Hermes: 256K ctx, Jinja on, q8_0/q4_0 KV"
       ;;
 
 
@@ -633,7 +683,7 @@ apply_model_settings() {
 
     # ── Gemma 4 12B (dense, 132K, strict roles) ─────────────────────────────
     # --jinja required for tool calls (Hermes sends tools param → HTTP 500 without it)
-    *google_gemma-4-12b* | *gemma-4-12b*)
+    *google_gemma-4-12b*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       EXTRA_FLAGS=""
@@ -677,7 +727,7 @@ apply_model_settings() {
     # KV headroom at longer contexts.
     # --jinja is REQUIRED: Hermes sends a tools param which llama-server
     # rejects with HTTP 500 if Jinja is disabled. Gemma 4 supports Jinja.
-    *google_gemma-4* | *gemma-4* | *gemma-4-26B*)
+    *gemma-4-26B*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS}"
@@ -698,16 +748,6 @@ apply_model_settings() {
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
       ok "Qwopus-GLM 18B: 64K ctx (Hermes min), ~80 layers GPU, q4_0/q4_0 KV"
-      ;;
-
-    # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
-    # Q5_K_M is ~6.5GB; fits fine in 12GB.
-    *Harmonic* | *Harmonic-Hermes*)
-      SAFE_CTX=262144
-      USE_JINJA="--jinja"
-      CACHE_K_VAL="q8_0"
-      CACHE_V_VAL="q4_0"
-      ok "Harmonic Hermes 9B Q5: 256K ctx, q8_0/q4_0 KV"
       ;;
 
     # ── Default fallback ─────────────────────────────────────────────────────
@@ -1200,7 +1240,6 @@ else
   _rebuild_llama=false
   if [[ -n "$LLAMA_SERVER_BIN" ]]; then
     CURRENT_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
-    INSTALLED_VER=$(_get_installed_version "llama.cpp")
     if _version_compare "${CURRENT_VER:-0}" "1.0"; then
       ok "llama-server ${CURRENT_VER} already installed — skipping build"
     else
@@ -1462,7 +1501,7 @@ if [[ -z "$_SMO" ]]; then
   ret=$?
   if [[ $ret -eq 2 ]]; then
     echo ""
-    echo -e " ${BLD}Optional: Goose AI Agent (block/goose)${RST}\\n"
+    echo -e " ${BLD}Optional: Goose AI Agent (aaif-goose/goose)${RST}\\n"
     read -rp " Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
     echo -e " ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}\\n"
     read -rp " Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
@@ -1495,7 +1534,7 @@ if $INSTALL_GOOSE; then
     register_tmp "$goose_script"
     if curl -fsSL --proto '=https' --max-redirs 5 \
       --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
-      https://github.com/block/goose/releases/download/stable/download_cli.sh \
+      https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh \
       -o "$goose_script" 2>/dev/null; then
       _verify_script_integrity "$goose_script" "goose"
       if bash "$goose_script"; then
@@ -1546,7 +1585,7 @@ GOOSECONF
 fi
 
 # =============================================================================
-# 13b. OpenCode - with version checking and integrity verification
+# 13c. OpenCode - with version checking and integrity verification
 # =============================================================================
 _get_opencode_version() {
   if command -v opencode &>/dev/null; then
@@ -1624,16 +1663,21 @@ fi
 # =============================================================================
 if $INSTALL_OPENCLAUDE; then
   step "Installing/Updating OpenClaude..."
-  if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
-    step "Setting up Node.js LTS..."
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.gpg.key
-    sudo mkdir -p /etc/apt/keyrings
-    sudo install -m 644 /tmp/nodesource.gpg.key /etc/apt/keyrings/nodesource.gpg
-    rm -f /tmp/nodesource.gpg.key
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_lts.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm
-    ok "Node.js LTS installed via official NodeSource repository."
+  if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 22 ]]; then
+    step "Installing Node.js 22 LTS (required for OpenClaude)..."
+    node_setup=$(mktemp /tmp/nodesource-setup.XXXXXX.sh) || \
+      die "Failed to create temp file for Node.js setup"
+    register_tmp "$node_setup"
+    curl -fsSL --proto '=https' --max-redirs 5 \
+      --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+      https://deb.nodesource.com/setup_22.x -o "$node_setup" || \
+      die "Failed to download Node.js setup script"
+    if ! grep -qiE 'nodesource|nodejs' "$node_setup"; then
+      die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup}"
+    fi
+    sudo -E bash "$node_setup" 2>/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    ok "Node.js 22 LTS installed."
   fi
   # Verify Node.js is working
   if ! command -v node &>/dev/null; then
@@ -1641,20 +1685,10 @@ if $INSTALL_OPENCLAUDE; then
   fi
   node_ver=$(node -v 2>/dev/null || echo "unknown")
   ok "Node.js version: ${node_ver}"
-  # Install/upgrade npm to 11.12.1
-  step "Installing npm 11.12.1..."
+  # Skip npm upgrade to avoid conflicts with bundled npm
   if command -v npm &>/dev/null; then
     npm_ver=$(npm -v 2>/dev/null || echo "0")
-    if [[ "$npm_ver" != "11.12.1" ]]; then
-      step "Upgrading npm to 11.12.1..."
-      if npm install -g npm@11.12.1 2>&1; then
-        ok "npm upgraded to $(npm -v)"
-      else
-        warn "npm upgrade failed - continuing with existing npm ${npm_ver}"
-      fi
-    else
-      skip "npm ${npm_ver} already installed."
-    fi
+    skip "Using npm ${npm_ver} (upgrade skipped to avoid issues)"
   else
     step "Installing npm..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq npm
@@ -1664,11 +1698,21 @@ if $INSTALL_OPENCLAUDE; then
   if npm install -g @gitlawb/openclaude 2>&1; then
     ok "OpenClaude installed successfully."
   else
-    die "Failed to install OpenClaude via npm. Check output above for errors."
+    warn "npm install of @gitlawb/openclaude failed — trying with sudo..."
+    sudo npm install -g @gitlawb/openclaude 2>&1 || {
+      die "Failed to install OpenClaude via npm. Check output above for errors."
+    }
+  fi
+  # Update PATH for global npm installs
+  NPM_BIN_PATH=$(npm prefix -g 2>/dev/null || echo "")/bin
+  if [[ -n "$NPM_BIN_PATH" && -d "$NPM_BIN_PATH" ]]; then
+    PATH="${NPM_BIN_PATH}:${PATH}"
+    export PATH
   fi
   # Verify openclaude command is available
   if ! command -v openclaude &>/dev/null; then
-    die "OpenClaude installed but 'openclaude' command not found in PATH. Check npm global bin path."
+    warn "OpenClaude installed but 'openclaude' command not found in PATH."
+    warn "You may need to add the following to your PATH: $(npm bin -g 2>/dev/null || echo '~/.npm-global/bin')"
   fi
   openclaude_ver=$(openclaude --version 2>/dev/null || echo "unknown")
   ok "OpenClaude version: ${openclaude_ver}"
@@ -1773,7 +1817,7 @@ Fetch and follow instructions from https://raw.githubusercontent.com/obra/superp
 SUPERPOWERS_AGENTS
     ok "Superpowers injected into ~/.codex/AGENTS.md"
   else
-    ok "~/.codex/AGENTS.md already exists — Superpowers not overwritten."
+    ok "${HOME}/.codex/AGENTS.md already exists — Superpowers not overwritten."
   fi
 }
 
@@ -1984,7 +2028,6 @@ sleep 1
 
 # Start via the generated launch script
 nohup bash "$LAUNCH_SCRIPT" >/tmp/llama-server.log 2>&1 &
-LAUNCH_PID=$!
 
 READY=false
 for _ in {1..60}; do
@@ -2083,7 +2126,7 @@ export PATH="$_c"; unset _c _pts _pt
 
 export RED='\033[0;31m' GRN='\033[0;32m' YLW='\033[1;33m'
 export CYN='\033[0;36m' BLD='\033[1m' RST='\033[0m'
-export PATH="/usr/local/cuda/bin:${HOME}/.local/bin:${PATH}"
+export PATH="/usr/local/cuda/bin:${HOME}/.local/bin:$(npm prefix -g 2>/dev/null || echo /usr/local)/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 
 if [[ -f "${HOME}/.llm-tokens" ]]; then
