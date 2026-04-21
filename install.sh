@@ -145,6 +145,7 @@ trap _combined_exit_handler EXIT INT TERM
 declare -A INSTALLER_HASHES=(
   ["hermes"]="251c1b97dda5db092d152d34afa315612fe27329e821c5414130f2a7e0c011e2"
   ["goose"]="ef85145e8d0162106d9d9c8ef51dd51e9d0b6a3ee5edddb9f6658fa7f0f0a892"
+  ["opencode"]="fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e"
 )
 
 _verify_script_integrity() {
@@ -1409,8 +1410,9 @@ select_optional_components() {
   local choices
   if ! choices=$(whiptail --title "Optional Components" --checklist \
     "Select additional components to install (use SPACE to toggle, ENTER to confirm):" \
-    20 80 3 \
+    20 80 4 \
     "goose" "Goose AI Agent (Rust CLI, 30k+ stars)" OFF \
+    "opencode" "OpenCode (Terminal TUI coding agent)" OFF \
     "openclaude" "OpenClaude (Claude-compatible CLI)" OFF \
     "codex" "OpenAI Codex CLI (openai/codex)" OFF \
     3>&1 1>&2 2>&3); then
@@ -1430,12 +1432,14 @@ select_optional_components() {
   done < "$tmpfile"
 
   INSTALL_GOOSE=false
+  INSTALL_OPENCODE=false
   INSTALL_OPENCLAUDE=false
   INSTALL_CODEX=false
 
   for item in "${selected[@]}"; do
     case "$item" in
       goose) INSTALL_GOOSE=true ;;
+      opencode) INSTALL_OPENCODE=true ;;
       openclaude) INSTALL_OPENCLAUDE=true ;;
       codex) INSTALL_CODEX=true ;;
       *) warn "Unknown component '$item' — skipped." ;;
@@ -1445,6 +1449,7 @@ select_optional_components() {
   echo ""
   local count=0
   if $INSTALL_GOOSE; then echo " ✓ Goose"; count=$((count+1)); fi
+  if $INSTALL_OPENCODE; then echo " ✓ OpenCode"; count=$((count+1)); fi
   if $INSTALL_OPENCLAUDE; then echo " ✓ OpenClaude"; count=$((count+1)); fi
   if $INSTALL_CODEX; then echo " ✓ Codex"; count=$((count+1)); fi
 
@@ -1455,6 +1460,7 @@ select_optional_components() {
 }
 
 INSTALL_GOOSE=false
+INSTALL_OPENCODE=false
 INSTALL_OPENCLAUDE=false
 INSTALL_CODEX=false
 
@@ -1466,6 +1472,8 @@ if [[ -z "$_SMO" ]]; then
     echo ""
     echo -e " ${BLD}Optional: Goose AI Agent (aaif-goose/goose)${RST}\\n"
     read -rp " Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
+    echo -e " ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}\\n"
+    read -rp " Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
     echo -e " ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}\\n"
     read -rp " Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
     echo -e " ${BLD}Optional: OpenAI Codex CLI (openai/codex)${RST}\\n"
@@ -1546,7 +1554,77 @@ GOOSECONF
 fi
 
 # =============================================================================
+# 13c. OpenCode - with version checking and integrity verification
+# =============================================================================
+_get_opencode_version() {
+  if command -v opencode &>/dev/null; then
+    opencode --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
+  fi
+}
 
+if $INSTALL_OPENCODE; then
+  step "Checking OpenCode..."
+  CURRENT_OPENCODE=$(_get_opencode_version)
+  INSTALLED_OPENCODE=$(_get_installed_version "opencode")
+
+  if [[ -n "$CURRENT_OPENCODE" ]] && [[ "$CURRENT_OPENCODE" == "$INSTALLED_OPENCODE" ]]; then
+    skip "OpenCode already up to date (${CURRENT_OPENCODE})"
+  else
+    step "Installing/Updating OpenCode..."
+    opencode_installer=$(mktemp /tmp/opencode-install.XXXXXX.sh) || die "Failed to create temp file for OpenCode installer"
+    register_tmp "$opencode_installer"
+    if curl -fsSL --proto '=https' --max-redirs 5 \
+      --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+      https://opencode.ai/install -o "$opencode_installer" 2>/dev/null; then
+      _verify_script_integrity "$opencode_installer" "opencode"
+      if XDG_BIN_DIR="${HOME}/.local/bin" bash "$opencode_installer" 2>/dev/null; then
+        PATH="${HOME}/.local/bin:${PATH}"
+        export PATH
+        NEW_OPENCODE=$(_get_opencode_version)
+        _set_installed_version "opencode" "${NEW_OPENCODE:-latest}"
+        ok "OpenCode installed/updated"
+      else
+        warn "OpenCode install script failed."
+      fi
+    else
+      warn "OpenCode install script download failed — skipping."
+    fi
+  fi
+
+  if command -v opencode &>/dev/null; then
+    step "Configuring OpenCode with local model..."
+    mkdir -p "${HOME}/.config/opencode"
+    # Safely write config using printf for variable escaping
+    printf '%s\n' '{' \
+      '  "$schema": "https://opencode.ai/config.json",' \
+      '  "provider": {' \
+      '    "llamacpp": {' \
+      '      "npm": "@ai-sdk/openai-compatible",' \
+      '      "name": "llama.cpp (local)",' \
+      '      "options": {' \
+      '        "baseURL": "http://localhost:8080/v1",' \
+      '        "apiKey": "sk-local"' \
+      '      },' \
+      '      "models": {' \
+      "        \"${SEL_GGUF}\": {" \
+      '          "name": "'"${SEL_NAME}"'",' \
+      '          "limit": {' \
+      "            \"context\": ${SAFE_CTX}," \
+      '            "output": 8192' \
+      '          }' \
+      '        }' \
+      '      }' \
+      '    }' \
+      '  },' \
+      "  \"model\": \"llamacpp/${SEL_GGUF}\"," \
+      "  \"small_model\": \"llamacpp/${SEL_GGUF}\"," \
+      '  "plugin": [' \
+      '    "superpowers@git+https://github.com/obra/superpowers.git"' \
+      '  ]' \
+      '}' > "${HOME}/.config/opencode/opencode.json"
+    ok "OpenCode configured."
+  fi
+fi
 
 
 # =============================================================================
