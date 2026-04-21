@@ -91,13 +91,19 @@ _version_compare() {
   return 0
 }
 
-# ── Strip Windows /mnt/* from PATH ────────────────────────────────────────────
+# ── Strip Windows /mnt/* from PATH and prefer system Node.js ─────────────────
 _clean_path=""
 IFS=':' read -ra _path_parts <<<"$PATH"
 for _p in "${_path_parts[@]}"; do
   [[ "$_p" == /mnt/* ]] && continue
   _clean_path="${_clean_path:+${_clean_path}:}${_p}"
 done
+# Prefer system Node.js over Hermes' if both exist
+if command -v /usr/bin/node &>/dev/null; then
+  _clean_path="/usr/bin:/usr/local/bin:${_clean_path}"
+else
+  _clean_path="/usr/local/bin:/usr/bin:${_clean_path}"
+fi
 PATH="$_clean_path"
 export PATH
 unset _clean_path _path_parts _p
@@ -340,7 +346,32 @@ elif [[ -n "$GH_TOKEN" ]]; then
 fi
 
 # =============================================================================
-# 3. System packages [SKIPPED by switch-model]
+# 3. System Node.js (for agents requiring it)
+# =============================================================================
+if [[ -z "$_SMO" ]]; then
+  step "Checking system Node.js..."
+  if ! command -v node &>/dev/null || [[ $(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1) -lt 22 ]]; then
+    step "Installing Node.js 22 LTS (required for some agents)..."
+    local node_setup_sys
+    node_setup_sys=$(mktemp /tmp/nodesource-setup-sys.XXXXXX.sh) || die "Failed to create temp file for system Node.js setup"
+    register_tmp "$node_setup_sys"
+    curl -fsSL --proto '=https' --max-redirs 5 \
+      --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+      https://deb.nodesource.com/setup_22.x -o "$node_setup_sys" || \
+      die "Failed to download Node.js setup script"
+    if ! grep -qiE 'nodesource|nodejs' "$node_setup_sys"; then
+      die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup_sys}"
+    fi
+    sudo -E bash "$node_setup_sys" 2>/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    ok "System Node.js 22 LTS installed."
+  else
+    ok "System Node.js $(node --version) is sufficient."
+  fi
+fi
+
+# =============================================================================
+# 5. System packages [SKIPPED by switch-model]
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   step "Updating system packages..."
@@ -390,7 +421,7 @@ if [[ -z "$_SMO" ]]; then
 fi
 
 # =============================================================================
-# 4. Hardware detection (always runs) - MOVED INTO FUNCTION
+# 6. Hardware detection (always runs) - MOVED INTO FUNCTION
 # =============================================================================
 _detect_hardware() {
   step "Detecting hardware..."
@@ -1654,20 +1685,10 @@ if $INSTALL_OPENCLAUDE; then
   fi
   node_ver=$(node -v 2>/dev/null || echo "unknown")
   ok "Node.js version: ${node_ver}"
-  # Check npm version - don't upgrade if already recent
-  step "Checking npm..."
+  # Skip npm upgrade to avoid conflicts with bundled npm
   if command -v npm &>/dev/null; then
     npm_ver=$(npm -v 2>/dev/null || echo "0")
-    if [[ "$npm_ver" == "10."* ]] || [[ "$npm_ver" == "11."* ]]; then
-      skip "npm ${npm_ver} is recent enough"
-    else
-      step "Upgrading npm..."
-      if npm install -g npm 2>&1; then
-        ok "npm upgraded to $(npm -v)"
-      else
-        warn "npm upgrade failed - continuing with existing npm ${npm_ver}"
-      fi
-    fi
+    skip "Using npm ${npm_ver} (upgrade skipped to avoid issues)"
   else
     step "Installing npm..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq npm
