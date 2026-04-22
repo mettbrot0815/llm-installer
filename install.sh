@@ -184,9 +184,9 @@ _install_cuda() {
     --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 \
     https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb \
     -o "$cuda_deb" || die "Failed to download CUDA keyring"
-  sudo dpkg -i "$cuda_deb" || die "Failed to install CUDA keyring"
-  sudo apt-get update -qq || die "Failed to update apt cache"
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6 || die "Failed to install cuda-toolkit-12-6"
+  dpkg -i "$cuda_deb" || die "Failed to install CUDA keyring"
+  apt-get update -qq || die "Failed to update apt cache"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6 || die "Failed to install cuda-toolkit-12-6"
   _set_installed_version "cuda" "12.6"
   ok "CUDA toolkit 12.6 installed."
 }
@@ -361,8 +361,8 @@ if [[ -z "$_SMO" ]]; then
     if ! grep -qiE 'nodesource|nodejs' "$node_setup_sys"; then
       die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup_sys}"
     fi
-    sudo -E bash "$node_setup_sys" 2>/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    -E bash "$node_setup_sys" 2>/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     ok "System Node.js 22 LTS installed."
   else
     ok "System Node.js $(node --version) is sufficient."
@@ -374,9 +374,9 @@ fi
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   step "Updating system packages..."
-  sudo apt-get update -qq
-  sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     build-essential cmake git ccache \
     libcurl4-openssl-dev software-properties-common \
     python3 python3-pip python3-venv \
@@ -390,17 +390,17 @@ if [[ -z "$_SMO" ]]; then
     gh_out=$(mktemp /tmp/wget-out.XXXXXX) || die "Failed to create temp file for wget"
     register_tmp "$gh_out"
     
-    (type -p wget >/dev/null || sudo apt-get install -y -qq wget) \
-      && sudo mkdir -p -m 755 /etc/apt/keyrings \
+    (type -p wget >/dev/null || apt-get install -y -qq wget) \
+      && mkdir -p -m 755 /etc/apt/keyrings \
       && wget -nv -O "$gh_out" https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      && sudo install -m 644 "$gh_out" /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+      && install -m 644 "$gh_out" /etc/apt/keyrings/githubcli-archive-keyring.gpg \
       && rm -f "$gh_out"
 
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+      | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
 
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh
     ok "GitHub CLI (gh) installed."
   else
     ok "GitHub CLI (gh) already installed."
@@ -410,11 +410,11 @@ if [[ -z "$_SMO" ]]; then
   if python3 --version 2>&1 | grep -qE '3\.(1[0-9]|[2-9][0-9])'; then
     ok "Python 3.10+ found: $(python3 --version)"
   else
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
       python3.11 python3.11-venv
-    sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
     ok "Python 3.11 installed and set as default"
   fi
 fi
@@ -1285,8 +1285,8 @@ else
         cmake -B build -DGGML_CCACHE=ON
       fi
       cmake --build build --config Release -j"$(nproc)"
-      if sudo -n true 2>/dev/null; then
-        sudo cmake --install build || warn "System install failed — using build directory."
+      if -n true 2>/dev/null; then
+        cmake --install build || warn "System install failed — using build directory."
       else
         warn "Sudo requires password; skipping system install. Using build directory."
       fi
@@ -1672,8 +1672,8 @@ if $INSTALL_OPENCLAUDE; then
     if ! grep -qiE 'nodesource|nodejs' "$node_setup"; then
       die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup}"
     fi
-    sudo -E bash "$node_setup" 2>/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    -E bash "$node_setup" 2>/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     ok "Node.js 22 LTS installed."
   fi
   # Verify Node.js is working
@@ -1688,7 +1688,7 @@ if $INSTALL_OPENCLAUDE; then
     skip "Using npm ${npm_ver} (upgrade skipped to avoid issues)"
   else
     step "Installing npm..."
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq npm
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq npm
   fi
   # Actually install OpenClaude via npm
   step "Installing OpenClaude (@gitlawb/openclaude)..."
@@ -1696,7 +1696,7 @@ if $INSTALL_OPENCLAUDE; then
     ok "OpenClaude installed successfully."
   else
     warn "npm install of @gitlawb/openclaude failed — trying with sudo..."
-    sudo npm install -g @gitlawb/openclaude 2>&1 || {
+    npm install -g @gitlawb/openclaude 2>&1 || {
       die "Failed to install OpenClaude via npm. Check output above for errors."
     }
   fi
@@ -1761,8 +1761,8 @@ if $INSTALL_CODEX; then
         if ! grep -qiE 'nodesource|nodejs' "$node_setup"; then
           die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup}"
         fi
-        sudo -E bash "$node_setup" 2>/dev/null
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+        -E bash "$node_setup" 2>/dev/null
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
         ok "Node.js $(node --version) installed."
       else
         ok "Node.js $(node --version) already present."
@@ -1773,7 +1773,7 @@ if $INSTALL_CODEX; then
         ok "Codex CLI installed/updated."
       else
         warn "npm install of @openai/codex failed — trying with sudo..."
-        sudo npm install -g @openai/codex 2>&1 || {
+        npm install -g @openai/codex 2>&1 || {
           warn "Codex install failed. Install manually: npm install -g @openai/codex"
           return 1
         }
@@ -1977,7 +1977,7 @@ SERVICE
   if systemctl --user is-system-running &>/dev/null; then
     systemctl --user enable llama-server.service 2>/dev/null || true
     ok "llama-server systemd service enabled."
-    echo " Persistent auto-start: sudo loginctl enable-linger $USER"
+    echo " Persistent auto-start: loginctl enable-linger $USER"
   else
     warn "systemd --user unavailable — use 'start-llm' to start manually."
   fi
