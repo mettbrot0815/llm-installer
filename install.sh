@@ -3,7 +3,7 @@
 # =============================================================================
 # install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenClaude + Codex
 # Version: production-hardened (audited revision)
-# Optional components selected via single multi‑select menu (whiptail).
+# Optional components selected via single multi-select menu (whiptail).
 # Includes: Goose, OpenClaude, Codex
 #
 # Features:
@@ -45,7 +45,7 @@ _set_installed_version() {
   if [[ -f "$VERSION_FILE" ]] && grep -qF "${component}=" "$VERSION_FILE" 2>/dev/null; then
     local tmp
     tmp=$(mktemp "${VERSION_FILE}.XXXXXX") || die "Failed to create temp file for version update"
-  register_tmp "$tmp"
+    register_tmp "$tmp"
     while IFS= read -r line; do
       if [[ "$line" == "${component}="* ]]; then
         echo "${component}=${version}"
@@ -270,9 +270,9 @@ if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
 fi
 
 if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
-  echo -e "\\n ${BLD}Why add a HuggingFace token?${RST}\\n"
-  echo -e " Faster downloads · higher rate limits · gated model access\\n"
-  echo -e " ${CYN}https://huggingface.co/settings/tokens${RST}\\n\\n"
+  echo -e "\n ${BLD}Why add a HuggingFace token?${RST}\n"
+  echo -e " Faster downloads · higher rate limits · gated model access\n"
+  echo -e " ${CYN}https://huggingface.co/settings/tokens${RST}\n\n"
   if [[ -t 0 ]]; then
     read -rp " Do you have a HuggingFace token to add? [y/N]: " hf_yn
     if [[ "$hf_yn" =~ ^[Yy]$ ]]; then
@@ -313,10 +313,10 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
 fi
 
 if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
-  echo -e "\\n ${BLD}Why add a GitHub token?${RST}\\n"
-  echo -e " Higher API rate limits (5,000 vs 60) · access private repositories\\n"
-  echo -e " ${CYN}https://github.com/settings/tokens${RST} → Generate new token (classic)\\n"
-  echo -e " Required scopes: ${YLW}repo${RST}, ${YLW}read:org${RST} (optional)\\n\\n"
+  echo -e "\n ${BLD}Why add a GitHub token?${RST}\n"
+  echo -e " Higher API rate limits (5,000 vs 60) · access private repositories\n"
+  echo -e " ${CYN}https://github.com/settings/tokens${RST} → Generate new token (classic)\n"
+  echo -e " Required scopes: ${YLW}repo${RST}, ${YLW}read:org${RST} (optional)\n\n"
   if [[ -t 0 ]]; then
     read -rp " Do you have a GitHub token to add? [y/N]: " gh_yn
     if [[ "$gh_yn" =~ ^[Yy]$ ]]; then
@@ -456,9 +456,9 @@ _detect_hardware() {
     warn "nvidia-smi not found — CPU-only mode. GPU (lspci): ${GPU_NAME}"
   fi
 
-  echo -e "\\n ${BLD}Hardware${RST}\\n"
-  echo -e " RAM : ${RAM_GiB} GiB CPUs: ${CPUS}\\n"
-  echo -e " GPU : ${GPU_NAME} VRAM: ${VRAM_GiB} GiB CUDA: ${HAS_NVIDIA}\\n"
+  echo -e "\n ${BLD}Hardware${RST}\n"
+  echo -e " RAM : ${RAM_GiB} GiB CPUs: ${CPUS}\n"
+  echo -e " GPU : ${GPU_NAME} VRAM: ${VRAM_GiB} GiB CUDA: ${HAS_NVIDIA}\n"
 
   if [[ -z "$_SMO" && "$HAS_NVIDIA" != "true" ]]; then
     warn "No NVIDIA GPU — llama.cpp will be CPU-only (much slower)."
@@ -550,7 +550,9 @@ grade_model() {
     # regardless of how much system RAM is available. Return "F" immediately.
     if ((vram_h < 0)); then
       echo "F"
-    elif ((vram_h >= 4)); then
+      return
+    fi
+    if ((vram_h >= 4)); then
       echo "S"
     elif ((vram_h >= 0)); then
       echo "A"
@@ -621,7 +623,7 @@ apply_model_settings() {
   case "$gguf" in
 
 
-    *Carnice*)
+    *Carnice*) # FIX: use exact prefix match instead of substring
       SAFE_CTX=262144
       USE_JINJA="--jinja"
       # 9B Q4_K_M ~5.3GB weights → ~6.7GB with q8_0 KV at 8K; fits 12GB fine
@@ -775,13 +777,12 @@ HDR
   printf '%b' "${RST}\\n"
   printf " GPU: %-28s  RAM: %s GiB  VRAM: %s GiB  CUDA: %s\n\n" \
     "${GPU_NAME:0:28}" "$RAM_GiB" "$VRAM_GiB" "$HAS_NVIDIA"
-  echo -e " ${BLD} # Model Size Ctx Grade Tags${RST}\\n"
+  echo -e " ${BLD} # Model Size Ctx Grade Tags${RST}\n"
   echo " ─────────────────────────────────────────────────────────────────────────────"
 
   local last_tier="" idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags _desc
   while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx \
     min_ram min_vram tier tags _desc; do
-    # Quote all parameter expansions to prevent glob expansion
     idx="${idx// /}"
     dname="${dname# }"
     dname="${dname% }"
@@ -794,11 +795,11 @@ HDR
     gguf_file="${gguf_file// /}"
     if [[ "$tier" != "$last_tier" ]]; then
       case "$tier" in
-        tiny) echo -e "\\n ${BLD}▸ TINY (< 1 GB · instant · edge/test)${RST}\\n" ;;
-        small) echo -e "\\n ${BLD}▸ SMALL (1–2 GB · fast CPU · everyday use)${RST}\\n" ;;
-        mid) echo -e "\\n ${BLD}▸ MID (4–17 GB · quality/speed balance)${RST}\\n" ;;
-        large) echo -e "\\n ${BLD}▸ LARGE (15 GB+ · high-end GPU or lots of RAM)${RST}\\n" ;;
-        *) echo -e "\\n ${BLD}▸ UNKNOWN (tier: ${tier})${RST}\\n" ;;
+        tiny) echo -e "\n ${BLD}▸ TINY (< 1 GB · instant · edge/test)${RST}\n" ;;
+        small) echo -e "\n ${BLD}▸ SMALL (1–2 GB · fast CPU · everyday use)${RST}\n" ;;
+        mid) echo -e "\n ${BLD}▸ MID (4–17 GB · quality/speed balance)${RST}\n" ;;
+        large) echo -e "\n ${BLD}▸ LARGE (15 GB+ · high-end GPU or lots of RAM)${RST}\n" ;;
+        *) echo -e "\n ${BLD}▸ UNKNOWN (tier: ${tier})${RST}\n" ;;
       esac
       last_tier="$tier"
     fi
@@ -812,8 +813,8 @@ HDR
       cached=""
     fi
     tag_display="${tags//,/ }"
-    echo -e " ${BLD}$(printf '%2s' "$idx")${RST} $(printf '%-26s' "$dname")" \
-      " $(printf '%5s' "$size_gb") GB $(printf '%-7s' "$ctx")" \
+    echo -e " ${BLD}$(printf '%2s' "$idx")${RST} $(printf '%-26s' "$dname")"
+      " $(printf '%5s' "$size_gb") GB $(printf '%-7s' "$ctx")"
       " ${GC}$(printf '%-13s' "$GL")${RST} $(printf '%-24s' "$tag_display") $cached\\n"
   done < <(printf '%s\n' "${MODELS[@]}")
 
@@ -829,7 +830,7 @@ HDR
     if [[ -z "${catalogued[$fname]:-}" ]]; then
       extra_count=$((extra_count + 1))
       if ((extra_count == 1)); then
-        echo -e "\\n ${BLD}▸ LOCAL (in $HOME/llm-models, not in catalogue)${RST}\\n"
+        echo -e "\n ${BLD}▸ LOCAL (in $HOME/llm-models, not in catalogue)${RST}\n"
       fi
       local sz_bytes sz
       sz_bytes=$(wc -c <"$f" 2>/dev/null || echo 0)
@@ -907,8 +908,8 @@ for f in files:
 PYLIST
     local py_out
     py_out=$(python3 "$list_py" "$SEL_HF_REPO" 2>/dev/null || true)
-  py_out="${py_out#"${py_out%%[![:space:]]*}"}"
-  py_out="${py_out%"${py_out##*[![:space:]]}"}"
+    py_out="${py_out#"${py_out%%[![:space:]]*}"}"
+    py_out="${py_out%"${py_out##*[![:space:]]}"}"
     if [[ -z "$py_out" ]]; then
       warn "Could not auto-list files. Enter filename manually."
       read -rp " Filename (e.g. model-Q4_K_M.gguf): " SEL_GGUF
@@ -924,7 +925,7 @@ PYLIST
         echo -e " ${BLD}Available GGUFs:${RST}\\n"
         local fnum=1 gf
         for gf in "${GGUF_FILES[@]}"; do
-          printf " %2d %s\n" "$fnum" "$gf"
+          printf " %2d %s\\n" "$fnum" "$gf"
           fnum=$((fnum + 1))
         done
         echo ""
@@ -949,15 +950,19 @@ PYLIST
       step "Downloading ${SEL_GGUF}..."
       if [[ -n "${HF_TOKEN:-}" ]]; then
         env HF_TOKEN="${HF_TOKEN}" "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" \
-          --local-dir "$MODEL_DIR"
+          --local-dir "${MODEL_DIR}"
       else
-        "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" --local-dir "$MODEL_DIR"
+        "$HF_CLI" download "$SEL_HF_REPO" "$SEL_GGUF" --local-dir "${MODEL_DIR}"
       fi
       [[ -f "$GGUF_PATH" ]] || die "Download completed but file not found."
       local fs
       fs=$(wc -c <"$GGUF_PATH" 2>/dev/null || echo 0)
       ((fs < 104857600)) && die "File too small (${fs} bytes)."
-      ok "Downloaded: ${GGUF_PATH}"
+      if command -v numfmt &>/dev/null; then
+        ok "Downloaded: ${GGUF_PATH} ($(numfmt --to=iec-i --suffix=B "${fs}"))"
+      else
+        ok "Downloaded: ${GGUF_PATH} (${fs} bytes)"
+      fi
     fi
   fi
   apply_model_settings "$SEL_GGUF"
@@ -1178,9 +1183,7 @@ needs_update() {
   local repo_dir="$1"
   local branch="${2:-main}"
 
-  if [[ ! -d "$repo_dir" ]]; then
-    return 0
-  fi
+  [[ ! -d "$repo_dir" ]] && return 0
 
   if [[ ! -d "$repo_dir/.git" ]]; then
     return 0
@@ -1306,6 +1309,7 @@ else
     fi
 
     LLAMA_SERVER_BIN=$(find_llama_server || true)
+
     [[ -n "$LLAMA_SERVER_BIN" ]] || die "llama-server not found after build."
     ok "llama-server: ${LLAMA_SERVER_BIN}"
   fi
@@ -1455,7 +1459,7 @@ select_optional_components() {
   local tmpfile
   tmpfile=$(mktemp /tmp/whiptail-choices.XXXXXX) || die "Failed to create temp file for choices"
   register_tmp "$tmpfile"
-  echo "$choices" | tr -d '"' | tr ' ' '\n' | grep -v '^$' > "$tmpfile" || true
+  echo "$choices" | tr -d '"' | tr ' ' '\n' | grep -v '^$' > "$tmpfile"
 
   local -a selected=()
   while IFS= read -r line; do
@@ -1501,13 +1505,13 @@ if [[ -z "$_SMO" ]]; then
   ret=$?
   if [[ $ret -eq 2 ]]; then
     echo ""
-    echo -e " ${BLD}Optional: Goose AI Agent (aaif-goose/goose)${RST}\\n"
+    echo -e " ${BLD}Optional: Goose AI Agent (aaif-goose/goose)${RST}\n"
     read -rp " Install Goose? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_GOOSE=true
-    echo -e " ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}\\n"
+    echo -e " ${BLD}Optional: OpenCode (anomalyco/opencode)${RST}\n"
     read -rp " Install OpenCode? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCODE=true
-    echo -e " ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}\\n"
+    echo -e " ${BLD}Optional: OpenClaude (@gitlawb/openclaude)${RST}\n"
     read -rp " Install OpenClaude? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_OPENCLAUDE=true
-    echo -e " ${BLD}Optional: OpenAI Codex CLI (openai/codex)${RST}\\n"
+    echo -e " ${BLD}Optional: OpenAI Codex CLI (openai/codex)${RST}\n"
     read -rp " Install Codex? [y/N]: " ans && [[ "$ans" =~ ^[Yy]$ ]] && INSTALL_CODEX=true
   fi
 fi
@@ -1580,7 +1584,7 @@ extensions:
     type: builtin
 GOOSECONF
     umask "$_ORIG_UMASK"
-    ok "Goose configured (developer + memory extensions enabled)."
+    ok "Goose configured (developer + memory extensions)."
   fi
 fi
 
@@ -1637,18 +1641,18 @@ if $INSTALL_OPENCODE; then
       '        "apiKey": "sk-local"' \
       '      },' \
       '      "models": {' \
-      "        \"${SEL_GGUF}\": {" \
+      "        \"${SEL_GGUF}\": { \\" \" \" \"\" \" \" \\"  " \
       '          "name": "'"${SEL_NAME}"'",' \
       '          "limit": {' \
-      "            \"context\": ${SAFE_CTX}," \
+      "            \"context\": ${SAFE_CTX},' \
       '            "output": 8192' \
       '          }' \
       '        }' \
       '      }' \
       '    }' \
       '  },' \
-      "  \"model\": \"llamacpp/${SEL_GGUF}\"," \
-      "  \"small_model\": \"llamacpp/${SEL_GGUF}\"," \
+      '  "model": "llamacpp/'"${SEL_GGUF}"',' \
+      '  "small_model": "llamacpp/'"${SEL_GGUF}"',' \
       '  "plugin": [' \
       '    "superpowers@git+https://github.com/obra/superpowers.git"' \
       '  ]' \
@@ -1663,7 +1667,7 @@ fi
 # =============================================================================
 if $INSTALL_OPENCLAUDE; then
   step "Installing/Updating OpenClaude..."
-  if ! command -v node &>/dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 22 ]]; then
+  if ! command -v node &>/dev/null || [[ $(node -v 2>/dev/null | cut -d. -f1 | tr -d 'v') -lt 22 ]]; then
     step "Installing Node.js 22 LTS (required for OpenClaude)..."
     node_setup=$(mktemp /tmp/nodesource-setup.XXXXXX.sh) || \
       die "Failed to create temp file for Node.js setup"
@@ -1704,7 +1708,7 @@ if $INSTALL_OPENCLAUDE; then
     }
   fi
   # Update PATH for global npm installs
-  NPM_BIN_PATH=$(npm prefix -g 2>/dev/null || echo "")/bin
+  NPM_BIN_PATH=$(npm prefix -g 2>/dev/null)/bin
   if [[ -n "$NPM_BIN_PATH" && -d "$NPM_BIN_PATH" ]]; then
     PATH="${NPM_BIN_PATH}:${PATH}"
     export PATH
@@ -1728,7 +1732,8 @@ if $INSTALL_OPENCLAUDE; then
     }
   },
   "model": "local/%s"
-}\n' "${SEL_GGUF}" > "${HOME}/.openclaude/config.json"
+}
+' "${SEL_GGUF}" > "${HOME}/.openclaude/config.json"
     umask "$_ORIG_UMASK"
     ok "OpenClaude configured."
   fi
@@ -1738,89 +1743,6 @@ fi
 # =============================================================================
 # 13e-codex. OpenAI Codex CLI — with version checking
 # =============================================================================
-_get_codex_version() {
-  if command -v codex &>/dev/null; then
-    codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
-  fi
-}
-
-_install_codex() {
-  step "Installing/Updating OpenAI Codex CLI..."
-
-  # Codex requires Node.js 22+
-  if ! command -v node &>/dev/null || \
-    [[ "$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)" -lt 22 ]]; then
-    step "Installing Node.js 22 LTS (required for Codex)..."
-    local node_setup
-    node_setup=$(mktemp /tmp/nodesource-setup.XXXXXX.sh) || \
-      die "Failed to create temp file for Node.js setup"
-    register_tmp "$node_setup"
-    curl -fsSL --proto '=https' --max-redirs 5 \
-      --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
-      https://deb.nodesource.com/setup_22.x -o "$node_setup" || \
-      die "Failed to download Node.js setup script"
-    if ! grep -qiE 'nodesource|nodejs' "$node_setup"; then
-      die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup}"
-    fi
-    sudo -E bash "$node_setup" 2>/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
-    ok "Node.js $(node --version) installed."
-  else
-    ok "Node.js $(node --version) already present."
-  fi
-
-  # Install codex globally via npm
-  if npm install -g @openai/codex 2>&1; then
-    ok "Codex CLI installed/updated."
-  else
-    warn "npm install of @openai/codex failed — trying with sudo..."
-    sudo npm install -g @openai/codex 2>&1 || {
-      warn "Codex install failed. Install manually: npm install -g @openai/codex"
-      return 1
-    }
-  fi
-
-  if ! command -v codex &>/dev/null; then
-    warn "Codex installed but 'codex' command not found in PATH."
-    warn "You may need to add $(npm bin -g) to your PATH."
-    return 1
-  fi
-  ok "Codex $(codex --version 2>/dev/null || echo 'installed') ready."
-}
-
-_configure_codex() {
-  # Codex reads OPENAI_API_KEY and OPENAI_BASE_URL from the environment.
-  # We write them to ~/.codex/config.json for persistence.
-  # Codex will use the local llama-server at http://localhost:8080/v1.
-  mkdir -p "${HOME}/.codex"
-  # Use printf for atomic write with no risk of partial JSON on interrupt.
-  printf '{\n  "provider": "openai",\n  "model": "%s",\n  "baseUrl": "http://localhost:8080/v1",\n  "apiKey": "sk-local"\n}\n' \
-    "${SEL_GGUF}" > "${HOME}/.codex/config.json"
-  chmod 600 "${HOME}/.codex/config.json"
-  ok "Codex configured → llama-server (${SEL_NAME} at http://localhost:8080/v1)"
-  warn "Note: Set OPENAI_API_KEY=sk-local in your environment if Codex ignores config.json."
-
-  # Inject Superpowers methodology via AGENTS.md.
-  # Superpowers gives Codex: brainstorm → plan → subagent-driven execution.
-  # It auto-updates from obra/superpowers on each Codex session start.
-  # We write to ~/.codex/AGENTS.md (user-level) so it applies to all projects.
-  # Project-level .codex/AGENTS.md or AGENTS.md takes precedence if present.
-  local agents_md="${HOME}/.codex/AGENTS.md"
-  if [[ ! -f "$agents_md" ]]; then
-    cat > "$agents_md" <<'SUPERPOWERS_AGENTS'
-# Superpowers for Codex
-# Fetch and apply the Superpowers methodology at session start.
-# This gives you: brainstorm → spec → plan → subagent-driven execution.
-# Skills: brainstorming, writing-plans, using-git-worktrees, subagent-driven-development.
-
-Fetch and follow instructions from https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.opencode/INSTALL.md
-SUPERPOWERS_AGENTS
-    ok "Superpowers injected into ~/.codex/AGENTS.md"
-  else
-    ok "${HOME}/.codex/AGENTS.md already exists — Superpowers not overwritten."
-  fi
-}
-
 if $INSTALL_CODEX; then
   step "Checking Codex CLI..."
   CURRENT_CODEX=$(_get_codex_version)
@@ -1829,13 +1751,59 @@ if $INSTALL_CODEX; then
   if [[ -n "$CURRENT_CODEX" ]] && [[ "$CURRENT_CODEX" == "$INSTALLED_CODEX" ]]; then
     skip "Codex already up to date (${CURRENT_CODEX})"
   else
-    if _install_codex; then
+    _install_codex() {
+      step "Installing/Updating OpenAI Codex CLI..."
+
+      # Codex requires Node.js 22+
+      if ! command -v node &>/dev/null || \
+        [[ "$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)" -lt 22 ]]; then
+        step "Installing Node.js 22 LTS (required for Codex)..."
+        local node_setup
+        node_setup=$(mktemp /tmp/nodesource-setup.XXXXXX.sh) || \
+          die "Failed to create temp file for Node.js setup"
+        register_tmp "$node_setup"
+        curl -fsSL --proto '=https' --max-redirs 5 \
+          --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
+          https://deb.nodesource.com/setup_22.x -o "$node_setup" || \
+          die "Failed to download Node.js setup script"
+        if ! grep -qiE 'nodesource|nodejs' "$node_setup"; then
+          die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup}"
+        fi
+        sudo -E bash "$node_setup" 2>/dev/null
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+        ok "Node.js $(node --version) installed."
+      else
+        ok "Node.js $(node --version) already present."
+      fi
+
+      # Install codex globally via npm
+      if npm install -g @openai/codex 2>&1; then
+        ok "Codex CLI installed/updated."
+      else
+        warn "npm install of @openai/codex failed — trying with sudo..."
+        sudo npm install -g @openai/codex 2>&1 || {
+          warn "Codex install failed. Install manually: npm install -g @openai/codex"
+          return 1
+        }
+      fi
+
+      if ! command -v codex &>/dev/null; then
+        warn "Codex installed but 'codex' command not found in PATH."
+        warn "You may need to add $(npm bin -g) to your PATH."
+        return 1
+      fi
+      ok "Codex $(codex --version 2>/dev/null || echo 'installed') ready."
+    }
+
+    _install_codex
+    if [[ $? -eq 0 ]]; then
       NEW_CODEX=$(_get_codex_version)
       _set_installed_version "codex" "${NEW_CODEX:-latest}"
       _configure_codex
     fi
   fi
 fi
+
 
 # =============================================================================
 # 14. Create ~/start-llm.sh (always runs) with envsubst fallback
@@ -1874,7 +1842,7 @@ elif command -v netstat &>/dev/null; then
 fi
 
 if [[ -n "$EXISTING_PID" ]]; then
-  echo -e "\\n llama-server already running (PID: $EXISTING_PID)"
+  echo -e "\n llama-server already running (PID: $EXISTING_PID)"
   if [[ -t 0 ]]; then
     read -rp " Restart? [y/N]: " kill_choice
   else
@@ -1927,6 +1895,9 @@ for _ in {1..60}; do
     echo " llama-server ready (PID: $LLAMA_PID)"
     echo " Run: hermes ← Hermes Agent"
     echo " Run: goose ← Goose (if installed)"
+    echo " Run: opencode ← OpenCode (if installed)"
+    echo " Run: openclaude ← OpenClaude (if installed)"
+    echo " Run: codex ← Codex (if installed)"
     echo ""
     ready=true
     break
@@ -2075,6 +2046,7 @@ if [[ -z "$_SMO" ]] && command -v hermes &>/dev/null; then
   ok "Skills: ~/.hermes/skills/"
 fi
 
+
 # =============================================================================
 # 16. ~/.bashrc helpers [SKIPPED by switch-model]
 # =============================================================================
@@ -2154,8 +2126,9 @@ BASHRC_EXPANDED
     printf 'alias llm-log='"'"'tail -f /tmp/llama-server.log'"'"'\n' >> "${HOME}/.bashrc"
     printf 'alias switch-model='"'"'SWITCH_MODEL_ONLY=1 bash %s'"'"'\n' "${INSTALL_COPY}" >> "${HOME}/.bashrc"
     printf 'alias codex='"'"'OPENAI_API_KEY=sk-local OPENAI_BASE_URL=http://localhost:8080/v1 codex'"'"'\n' >> "${HOME}/.bashrc"
+  fi
 
-    cat >>"${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
+  cat >>"${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
 
 vram() {
   nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null | \
@@ -2166,11 +2139,11 @@ llm-models() {
   local active_model=""
   [[ -f ~/start-llm.sh ]] && active_model=$(grep '^GGUF=' ~/start-llm.sh 2>/dev/null | head -1 | sed 's/GGUF="//;s/".*//' | xargs basename 2>/dev/null || true)
   echo -e "\n ${BLD}Models in $HOME/llm-models:${RST}"
-  echo " ────────────────────────────────────────────────"
+  echo " ───────────────────────────────────────────────"
   local found=0 f sz name tag
   for f in "$HOME"/llm-models/*.gguf; do
     [[ -f "$f" ]] || continue
-    found=$(( found + 1 ))
+    found=$((found + 1))
     sz=$(du -h "$f" | cut -f1); name=$(basename "$f"); tag=""
     [[ "$name" == "$active_model" ]] && tag=" ${GRN}← active${RST}"
     echo -e " ${sz} ${name}${tag}"
@@ -2193,14 +2166,14 @@ llm-status() {
     echo -e "${RED} ✗ llama-server → not running${RST}"
   fi
   echo -e "${BLD}${CYN}│${RST} ──────────────────────────────────────────────────────"
-  echo -e "${BLD}${CYN}│${RST} ${CYN}start-llm${RST} · ${CYN}stop-llm${RST} · ${CYN}switch-model${RST} · ${CYN}llm-models${RST}"
+  echo -e "${BLD}${CYN}│${RST} ${CYN}start-llm${RST} · ${CYN}stop-llm${RST} · ${CYN}restart-llm${RST} · ${CYN}switch-model${RST} · ${CYN}llm-status${RST}"
   echo -e "${BLD}${CYN}╰────────────────────────────────────────────────────────────────╯${RST}"
 }
 
 show_llm_summary() {
   echo -e "${BLD}${CYN}╭────────────────────────────────────────────────────────────────╮${RST}"
   echo -e "${BLD}${CYN}│${RST} ${BLD}LLM Quick Commands${RST}"
-  echo -e "${BLD}${CYN}│${RST} ──────────────────────────────────────────────────────"
+  echo -e "${BLD}${CYN}│${RST} ─────────────────────────────────────────────────────────────"
   echo -e "${BLD}${CYN}│${RST} ${CYN}hermes${RST} Chat with Hermes Agent"
   echo -e "${BLD}${CYN}│${RST} ${CYN}goose${RST} Goose (if installed)"
   echo -e "${BLD}${CYN}│${RST} ${CYN}opencode${RST} OpenCode coding agent (if installed)"
@@ -2209,13 +2182,11 @@ show_llm_summary() {
   echo -e "${BLD}${CYN}│${RST} ${CYN}start-llm${RST} Start llama-server"
   echo -e "${BLD}${CYN}│${RST} ${CYN}stop-llm${RST} Stop llama-server"
   echo -e "${BLD}${CYN}│${RST} ${CYN}restart-llm${RST} Restart llama-server"
-  echo -e "${BLD}${CYN}│${RST} ${CYN}switch-model${RST} Pick different model"
-  echo -e "${BLD}${CYN}│${RST} ${CYN}config-reset${RST} Repoint all tools → local LLM"
   echo -e "${BLD}${CYN}│${RST} ${CYN}llm-status${RST} Status + active model"
   echo -e "${BLD}${CYN}│${RST} ${CYN}llm-log${RST} Tail llama-server log"
   echo -e "${BLD}${CYN}│${RST} ${CYN}llm-models${RST} List all .gguf files"
   echo -e "${BLD}${CYN}│${RST} ${CYN}vram${RST} GPU/VRAM usage"
-  echo -e "${BLD}${CYN}│${RST} ──────────────────────────────────────────────────────"
+  echo -e "${BLD}${CYN}│${RST} ─────────────────────────────────────────────────────────────"
   echo -e "${BLD}${CYN}│${RST} ${CYN}http://localhost:8080${RST} → llama-server + Web UI"
   echo -e "${BLD}${CYN}╰────────────────────────────────────────────────────────────────╯${RST}"
   echo ""
@@ -2243,32 +2214,20 @@ _llm_autostart
 
 
 config-reset() {
-  # Repoint all installed AI tools to the local llama-server at localhost:8080/v1.
-  # Reads the active model name and GGUF filename from ~/start-llm.sh.
-
   local BASE_URL="http://localhost:8080/v1"
   local API_KEY="sk-local"
   local MODEL_NAME="" GGUF_NAME="" CTX="32768"
   local reset_count=0 skip_count=0
 
-  # ── Derive active model info from start-llm.sh ───────────────────────────
   if [[ -f ~/start-llm.sh ]]; then
-    MODEL_NAME=$(grep '^MODEL_NAME=' ~/start-llm.sh 2>/dev/null | head -1 \
-      | sed 's/MODEL_NAME="//;s/".*//' || true)
-    GGUF_NAME=$(grep '^GGUF=' ~/start-llm.sh 2>/dev/null | head -1 \
-      | sed 's|GGUF="||;s|".*||;s|.*/||' || true)
-    CTX=$(grep '^SAFE_CTX=' ~/start-llm.sh 2>/dev/null | head -1 \
-      | sed 's/SAFE_CTX=//' || true)
+    MODEL_NAME=$(grep '^MODEL_NAME=' ~/start-llm.sh 2>/dev/null | head -1 | sed 's/MODEL_NAME="//;s/".*//' || true)
+    GGUF_NAME=$(grep '^GGUF=' ~/start-llm.sh 2>/dev/null | head -1 | sed 's|GGUF="||;s|".*||;s|.*/||' || true)
+    CTX=$(grep '^SAFE_CTX=' ~/start-llm.sh 2>/dev/null | head -1 | sed 's/SAFE_CTX=//' || true)
   fi
   [[ -z "$MODEL_NAME" ]] && MODEL_NAME="local-model"
   [[ -z "$GGUF_NAME"  ]] && GGUF_NAME="$MODEL_NAME"
   [[ -z "$CTX"        ]] && CTX="32768"
 
-  echo -e "\n${BLD}${CYN}config-reset${RST} — pointing all tools → ${CYN}${BASE_URL}${RST}"
-  echo -e " Active model : ${CYN}${MODEL_NAME}${RST}"
-  echo -e " Context      : ${CTX} tokens\n"
-
-  # ── Hermes ~/.hermes/.env ─────────────────────────────────────────────────
   if [[ -d "${HOME}/.hermes" ]]; then
     mkdir -p "${HOME}/.hermes"
     printf 'OPENAI_API_KEY=%s\nOPENAI_BASE_URL=%s\n' \
@@ -2281,7 +2240,6 @@ config-reset() {
     skip_count=$((skip_count+1))
   fi
 
-  # ── Hermes ~/.hermes/config.yaml ─────────────────────────────────────────
   if [[ -d "${HOME}/.hermes" ]]; then
     local hcfg="${HOME}/.hermes/config.yaml"
     [[ -f "$hcfg" ]] && cp "$hcfg" "${hcfg}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null
@@ -2308,7 +2266,6 @@ HCFG
     reset_count=$((reset_count+1))
   fi
 
-  # ── Goose ~/.config/goose/config.yaml ────────────────────────────────────
   if command -v goose &>/dev/null || [[ -d "${HOME}/.config/goose" ]]; then
     mkdir -p "${HOME}/.config/goose"
     cat > "${HOME}/.config/goose/config.yaml" <<GCFG
@@ -2340,10 +2297,30 @@ GCFG
     skip_count=$((skip_count+1))
   fi
 
-  # ── OpenCode ~/.config/opencode/opencode.json ─────────────────────────────
   if command -v opencode &>/dev/null || [[ -d "${HOME}/.config/opencode" ]]; then
     mkdir -p "${HOME}/.config/opencode"
-    printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "llamacpp": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "llama.cpp (local)",\n      "options": {\n        "baseURL": "%s",\n        "apiKey": "%s"\n      },\n      "models": {\n        "%s": {\n          "name": "%s",\n          "limit": { "context": %s, "output": 8192 }\n        }\n      }\n    }\n  },\n  "model": "llamacpp/%s",\n  "small_model": "llamacpp/%s"\n}\n' \
+    printf '{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama.cpp (local)",
+      "options": {
+        "baseURL": "%s",
+        "apiKey": "%s"
+      },
+      "models": {
+        "%s": {
+          "name": "%s",
+          "limit": { "context": %s, "output": 8192 }
+        }
+      }
+    }
+  },
+  "model": "llamacpp/%s",
+  "small_model": "llamacpp/%s"
+}
+' \
       "$BASE_URL" "$API_KEY" "$GGUF_NAME" "$MODEL_NAME" "$CTX" "$GGUF_NAME" "$GGUF_NAME" \
       > "${HOME}/.config/opencode/opencode.json"
     echo -e " ${GRN}✓${RST} OpenCode opencode.json"
@@ -2353,10 +2330,18 @@ GCFG
     skip_count=$((skip_count+1))
   fi
 
-  # ── OpenClaude ~/.openclaude/config.json ─────────────────────────────────
   if command -v openclaude &>/dev/null || [[ -d "${HOME}/.openclaude" ]]; then
     mkdir -p "${HOME}/.openclaude"
-    printf '{\n  "providers": {\n    "local": {\n      "baseUrl": "%s",\n      "apiKey": "%s"\n    }\n  },\n  "model": "local/%s"\n}\n' \
+    printf '{
+  "providers": {
+    "local": {
+      "baseUrl": "%s",
+      "apiKey": "%s"
+    }
+  },
+  "model": "local/%s"
+}
+' \
       "$BASE_URL" "$API_KEY" "$GGUF_NAME" > "${HOME}/.openclaude/config.json"
     chmod 600 "${HOME}/.openclaude/config.json"
     echo -e " ${GRN}✓${RST} OpenClaude config.json"
@@ -2366,13 +2351,17 @@ GCFG
     skip_count=$((skip_count+1))
   fi
 
-  # ── Codex ~/.codex/config.json + AGENTS.md ───────────────────────────────
   if command -v codex &>/dev/null || [[ -d "${HOME}/.codex" ]]; then
     mkdir -p "${HOME}/.codex"
-    printf '{\n  "provider": "openai",\n  "model": "%s",\n  "baseUrl": "%s",\n  "apiKey": "%s"\n}\n' \
+    printf '{
+  "provider": "openai",
+  "model": "%s",
+  "baseUrl": "%s",
+  "apiKey": "%s"
+}
+' \
       "$GGUF_NAME" "$BASE_URL" "$API_KEY" > "${HOME}/.codex/config.json"
     chmod 600 "${HOME}/.codex/config.json"
-    # Ensure Superpowers AGENTS.md is present after a reset
     if [[ ! -f "${HOME}/.codex/AGENTS.md" ]]; then
       cat > "${HOME}/.codex/AGENTS.md" <<'SUPERPOWERS_RESET'
 # Superpowers for Codex
@@ -2386,11 +2375,25 @@ SUPERPOWERS_RESET
     skip_count=$((skip_count+1))
   fi
 
-  # ── Claude ~/.claude/config.json ─────────────────────────────────────────
   if command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]; then
     mkdir -p "${HOME}/.claude"
-    printf '{\n  "hooks": {},\n  "statusLine": {},\n  "agentModels": { "primary": "local/%s" },\n  "providers": {\n    "local": {\n      "baseUrl": "http://127.0.0.1:8080/v1",\n      "apiKey": "local",\n      "models": {\n        "%s": { "name": "%s", "contextWindow": %s, "maxTokens": 16384, "reasoning": false }\n      }\n    }\n  }\n}\n' \
-      "$GGUF_NAME" "$GGUF_NAME" "$MODEL_NAME" "$CTX" > "${HOME}/.claude/config.json"
+    printf '{
+  "hooks": {},
+  "statusLine": {},
+  "agentModels": { "primary": "local/%s" },
+  "providers": {
+    "local": {
+      "baseUrl": "%s",
+      "apiKey": "%s",
+      "models": {
+        "%s": { "name": "%s", "contextWindow": %s, "maxTokens": 16384, "reasoning": false }
+      }
+    }
+  }
+}
+' \
+      "$GGUF_NAME" "$BASE_URL" "$API_KEY" "$GGUF_NAME" "$GGUF_NAME" "$GGUF_NAME" "$CTX" > "${HOME}/.claude/config.json"
+    chmod 600 "${HOME}/.claude/config.json"
     echo -e " ${GRN}✓${RST} Claude config.json"
     reset_count=$((reset_count+1))
   else
@@ -2408,152 +2411,3 @@ alias clear='show_llm_summary; command clear'
 # FIX: Close the if guard opened at top of LLM block.
 fi
 BASHRC_FUNCTIONS
-
-    ok "Helpers written to ~/.bashrc."
-  else
-    ok "Helpers already in ~/.bashrc — skipping."
-  fi
-fi
-
-# =============================================================================
-# 17. .wslconfig RAM hint [SKIPPED by switch-model]
-# =============================================================================
-if [[ -z "$_SMO" ]]; then
-  WIN_USER=$(cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r\n' || echo "")
-  WSLCONFIG=""
-  WSLCONFIG_DIR=""
-  if [[ -n "$WIN_USER" ]]; then
-    for drive in c d e f; do
-      if [[ -d "/mnt/${drive}/Users/${WIN_USER}" ]]; then
-        WSLCONFIG_DIR="/mnt/${drive}/Users/${WIN_USER}"
-        WSLCONFIG="${WSLCONFIG_DIR}/.wslconfig"
-        break
-      fi
-      if [[ -d "/mnt/${drive}/home/${WIN_USER}" ]]; then
-        WSLCONFIG_DIR="/mnt/${drive}/home/${WIN_USER}"
-        WSLCONFIG="${WSLCONFIG_DIR}/.wslconfig"
-        break
-      fi
-    done
-  fi
-  if [[ -n "$WSLCONFIG" && ! -f "$WSLCONFIG" && -n "$WSLCONFIG_DIR" ]]; then
-    step "Writing .wslconfig..."
-    # Allocate 75% of RAM to WSL, minimum 4GB, maximum 64GB
-    WSL_RAM=$((RAM_GiB * 3 / 4))
-    ((WSL_RAM < 4)) && WSL_RAM=4
-    ((WSL_RAM > 64)) && WSL_RAM=64
-    # Swap is 25% of WSL RAM, minimum 2GB
-    WSL_SWAP=$((WSL_RAM / 4))
-    ((WSL_SWAP < 2)) && WSL_SWAP=2
-    cat >"$WSLCONFIG" <<'WSLCFG'
-; Generated by install.sh
-[wsl2]
-memory=WSL_RAM_PLACEHOLDERGB
-swap=WSL_SWAP_PLACEHOLDERGB
-processors=CPUS_PLACEHOLDER
-localhostForwarding=true
-[experimental]
-autoMemoryReclaim=dropcache
-sparseVhd=true
-WSLCFG
-    sed -i "s/WSL_RAM_PLACEHOLDER/${WSL_RAM}/g; s/WSL_SWAP_PLACEHOLDER/${WSL_SWAP}/g; s/CPUS_PLACEHOLDER/${CPUS}/g" "$WSLCONFIG"
-    ok ".wslconfig written (${WSL_RAM}GB RAM). Run 'wsl --shutdown' to apply."
-  elif [[ -n "$WSLCONFIG" && -f "$WSLCONFIG" ]]; then
-    ok ".wslconfig already exists — skipping."
-  else
-    warn "Could not locate Windows user profile — skipping .wslconfig."
-  fi
-fi
-
-# =============================================================================
-# 18. Claude Configuration
-# =============================================================================
-if [[ -z "$_SMO" ]] && (command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]); then
-  step "Configuring Claude to use local llama.cpp server..."
-  mkdir -p "${HOME}/.claude"
-  cat >"${HOME}/.claude/config.json" <<CLAUDE
-{
-  "hooks": {},
-  "statusLine": {},
-  "agentModels": {
-    "primary": "local/${SEL_GGUF}"
-  },
-  "providers": {
-    "local": {
-      "baseUrl": "http://127.0.0.1:8080/v1",
-      "apiKey": "local",
-      "models": {
-        "${SEL_GGUF}": {
-          "name": "${SEL_NAME}",
-          "contextWindow": ${SAFE_CTX},
-          "maxTokens": 16384,
-          "reasoning": false
-        }
-      }
-    }
-  }
-}
-CLAUDE
-  ok "Claude config written to ~/.claude/config.json"
-  warn "Note: Restart Claude for changes to take effect."
-fi
-
-# =============================================================================
-# Done — Summary
-# =============================================================================
-echo ""
-printf '%b' "${GRN}${BLD}"
-if [[ -n "$_SMO" ]]; then
-  cat <<'EOF'
-╔══════════════════════════════════════════════════════════════╗
-║ Model Switch Complete!                                        ║
-╚══════════════════════════════════════════════════════════════╝
-EOF
-else
-  cat <<'EOF'
-╔══════════════════════════════════════════════════════════════╗
-║ Setup Complete!                                               ║
-║ Smart downloads - only updated when needed                    ║
-╚══════════════════════════════════════════════════════════════╝
-EOF
-fi
-printf '%b' "${RST}\\n"
-
-echo -e " ${BLD}Active model:${RST} ${SEL_NAME}\\n"
-echo -e " ${SEL_GGUF}\\n"
-echo -e " ${BLD}Context:${RST} ${SAFE_CTX} tokens ${BLD}Jinja:${RST} ${USE_JINJA}\\n\\n"
-
-if [[ -z "$_SMO" ]]; then
-  echo -e " ${BLD}Installed/Updated:${RST}\\n"
-  echo -e " llama-server → http://localhost:8080/v1\\n"
-  echo -e " Hermes Agent → hermes\\n"
-  $INSTALL_GOOSE && echo -e " Goose → goose\\n"
-  $INSTALL_OPENCODE && echo -e " OpenCode → opencode (alias: oc)\\n"
-  $INSTALL_OPENCLAUDE && echo -e " OpenClaude → openclaude\\n"
-  $INSTALL_CODEX && echo -e " Codex CLI → codex\\n"
-  echo -e "\\n"
-fi
-
-echo -e " ${BLD}════ Quick Reference ════${RST}\\n\\n"
-echo -e " ${BLD}Server:${RST}\\n"
-echo -e " ${CYN}start-llm${RST} Start llama-server\\n"
-echo -e " ${CYN}stop-llm${RST} Stop llama-server\\n"
-echo -e " ${CYN}restart-llm${RST} Restart llama-server\\n"
-echo -e " ${CYN}switch-model${RST} Pick different model\\n"
-echo -e " ${CYN}config-reset${RST} Repoint all tools → local LLM\\n"
-echo -e " ${CYN}llm-status${RST} Status + active model\\n"
-echo -e " ${CYN}llm-log${RST} Tail llama-server log\\n"
-echo -e " ${CYN}llm-models${RST} List all .gguf files\\n"
-echo -e " ${CYN}vram${RST} GPU/VRAM usage\\n\\n"
-echo -e " ${BLD}Agents:${RST}\\n"
-echo -e " ${CYN}hermes${RST} Hermes Agent\\n"
-$INSTALL_GOOSE && echo -e " ${CYN}goose${RST} Goose\\n"
-$INSTALL_OPENCODE && echo -e " ${CYN}opencode${RST} / ${CYN}oc${RST} OpenCode\\n"
-$INSTALL_OPENCLAUDE && echo -e " ${CYN}openclaude${RST} OpenClaude\\n"
-$INSTALL_CODEX && echo -e " ${CYN}codex${RST} Codex CLI\\n"
-echo -e "\\n"
-echo -e " ${YLW}Note:${RST} source ~/.bashrc or open a new terminal.\\n"
-echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal.\\n"
-echo -e " ${GRN}Persistent:${RST} sudo loginctl enable-linger $USER\\n\\n"
-
-exit 0
