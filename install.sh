@@ -143,7 +143,7 @@ trap _combined_exit_handler EXIT INT TERM
 # If a hash mismatches, the installer will abort with an integrity error.
 # Set to "" to disable checking for a specific script (falls back to warn-only).
 declare -A INSTALLER_HASHES=(
-  ["hermes"]="1c10b1553f4632a1beabcefdc3d241cb3e6735f450dc4ee0dc44766a68112537"
+  ["hermes"]="251c1b97dda5db092d152d34afa315612fe27329e821c5414130f2a7e0c011e2"
   ["goose"]="ef85145e8d0162106d9d9c8ef51dd51e9d0b6a3ee5edddb9f6658fa7f0f0a892"
   ["opencode"]="fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e"
 )
@@ -656,20 +656,18 @@ apply_model_settings() {
       ok "Qwen3 30B MoE: experts on CPU RAM, attention on GPU, q4_0/q4_0 KV"
       ;;
 
-    # ── DeepSeek R1 32B (dense, too large for 12GB alone) ───────────────────
-# ── DeepSeek R1 32B (dense, ~17GB, partial GPU offload) ─────────────────
-# 32768 ctx: official max. ~17GB weights → ~35 layers on GPU for 12GB VRAM.
-# q4_0 KV keeps overhead low. --reasoning-format enables thinking extraction.
-*DeepSeek*)
-SAFE_CTX=32768
-USE_JINJA="--jinja"
-NGL_VAL=35
-EXTRA_FLAGS="--threads ${CPUS} --reasoning-format deepseek --reasoning-budget 8192"
-CACHE_K_VAL="q4_0"
-CACHE_V_VAL="q4_0"
-ok "DeepSeek R1 32B: 32K ctx, ~35 layers GPU, reasoning enabled"
-;;
-
+    # ── DeepSeek R1 32B (dense, ~17GB, partial GPU offload) ─────────────────
+    # 32768 ctx: official max. ~17GB weights → ~35 layers on GPU for 12GB VRAM.
+    # q4_0 KV keeps overhead low. --reasoning-format enables thinking extraction.
+    *DeepSeek*)
+      SAFE_CTX=32768
+      USE_JINJA="--jinja"
+      NGL_VAL=35
+      EXTRA_FLAGS="--threads ${CPUS} --reasoning-format deepseek --reasoning-budget 8192"
+      CACHE_K_VAL="q4_0"
+      CACHE_V_VAL="q4_0"
+      ok "DeepSeek R1 32B: 32K ctx, ~35 layers GPU, reasoning enabled"
+      ;;
 
     # ── Gemma 4 26B MoE IQ3_XXS (~9.4GB) ───────────────────────────────────
     # MoE with ~4B active params. Fits in 12GB but needs expert offload for
