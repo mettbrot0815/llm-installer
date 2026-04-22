@@ -815,7 +815,7 @@ HDR
     tag_display="${tags//,/ }"
     printf ' ${BLD}% 2s${RST} %-26s\n' "$idx" "$dname"
       printf '   %5s GB %-7s\n' "$size_gb" "$ctx"
-      printf '   ${GC}%-13s${RST} %-24s %s\\n' "$GL" "$tag_display" "$cached"
+       printf '   ${GC}%-13s${RST} %-24s %s\n' "$GL" "$tag_display" "$cached"
   done < <(printf '%s\n' "${MODELS[@]}")
 
   declare -A catalogued
