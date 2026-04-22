@@ -1700,11 +1700,14 @@ if $INSTALL_OPENCLAUDE; then
   fi
   # Actually install OpenClaude via npm
   step "Installing OpenClaude (@gitlawb/openclaude)..."
-  if npm install -g @gitlawb/openclaude 2>&1; then
+  echo "Clearing npm cache..."
+  sudo npm cache clean --force
+  echo "Installing OpenClaude..."
+  if sudo npm install -g @gitlawb/openclaude --force --no-cache 2>&1; then
     ok "OpenClaude installed successfully."
   else
-    warn "npm install of @gitlawb/openclaude failed — trying with sudo..."
-sudo npm install -g @gitlawb/openclaude 2>&1 || {
+    warn "npm install of @gitlawb/openclaude failed — retrying..."
+    sudo npm install -g @gitlawb/openclaude --force --no-cache 2>&1 || {
       die "Failed to install OpenClaude via npm. Check output above for errors."
     }
   fi
@@ -1777,11 +1780,19 @@ if $INSTALL_CODEX; then
       fi
 
       # Install codex globally via npm
-      if npm install -g @openai/codex 2>&1; then
+      echo "Clearing npm cache for Codex..."
+      sudo npm cache clean --force
+      echo "Installing Codex..."
+      if sudo npm install -g @openai/codex --force --no-cache 2>&1; then
         ok "Codex CLI installed/updated."
+        # Fix permissions if needed
+        CODEX_BIN="$(npm root -g)/@openai/codex/bin/codex.js"
+        if [[ -f "$CODEX_BIN" ]]; then
+          sudo chmod +x "$CODEX_BIN"
+        fi
       else
-        warn "npm install of @openai/codex failed — trying with sudo..."
-sudo npm install -g @openai/codex 2>&1 || {
+        warn "npm install of @openai/codex failed — retrying..."
+        sudo npm install -g @openai/codex --force --no-cache 2>&1 || {
           warn "Codex install failed. Install manually: npm install -g @openai/codex"
           return 1
         }
