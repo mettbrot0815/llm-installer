@@ -377,19 +377,28 @@ fi
 if [[ -z "$_SMO" ]]; then
   step "Updating system packages..."
   echo "Starting apt-get update..."
-  sudo apt-get update
-  echo "apt-get update completed."
+  if sudo apt-get update; then
+    echo "apt-get update completed."
+  else
+    warn "apt-get update failed — continuing anyway."
+  fi
   echo "Starting apt-get upgrade..."
-  sudo -E DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
-  echo "apt-get upgrade completed."
+  if sudo -E DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; then
+    echo "apt-get upgrade completed."
+  else
+    warn "apt-get upgrade failed — continuing anyway."
+  fi
   echo "Starting apt-get install..."
-  sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  if sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential cmake git ccache \
     libcurl4-openssl-dev software-properties-common \
     python3 python3-pip python3-venv \
     pciutils wget curl ca-certificates zstd \
-    procps gettext-base
-  echo "apt-get install completed."
+    procps gettext-base; then
+    echo "apt-get install completed."
+  else
+    die "apt-get install failed — cannot continue."
+  fi
   ok "System packages ready."
 
   # --- Install GitHub CLI (gh) from official repository ---
