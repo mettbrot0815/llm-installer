@@ -1324,7 +1324,7 @@ _install_hermes_agent() {
 }
 
 if [[ -z "$_SMO" ]]; then
-  if command -v hermes &>/dev/null; then
+  if [[ -x "$HOME/.local/bin/hermes" ]] || [[ -x "$HOME/.hermes/hermes-agent/venv/bin/hermes" ]]; then
     skip "Hermes Agent already installed — skipping"
   else
     _install_hermes_agent
