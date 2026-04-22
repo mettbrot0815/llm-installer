@@ -684,17 +684,18 @@ apply_model_settings() {
       ;;
 
 # ── Qwopus-GLM 18B (dense, ~10.5GB, fits in 12GB) ───────────────────────
-# 262144 ctx: official max (256K!). Qwen3.5-based.
-# ~60 layers on GPU (12GB VRAM); remainder to RAM with --threads.
-# --jinja required for Hermes tool calls.
+# 65536 ctx: optimized for stability.
+# 57 layers on GPU; --no-mmap for faster loads.
 *Qwopus* | *GLM*)
-SAFE_CTX=262144
+SAFE_CTX=65536
 USE_JINJA="--jinja"
-NGL_VAL=60
-EXTRA_FLAGS="--threads ${CPUS}"
+NGL_VAL=57
+BATCH_VAL=1024
+UBATCH_VAL=512
+EXTRA_FLAGS="--no-mmap --threads ${CPUS}"
 CACHE_K_VAL="q4_0"
 CACHE_V_VAL="q4_0"
-ok "Qwopus-GLM 18B: 256K ctx, ~60 layers GPU, q4_0/q4_0 KV"
+ok "Qwopus-GLM 18B: 64K ctx, 57 layers GPU, q4_0/q4_0 KV, no-mmap"
 ;;
 
     # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
