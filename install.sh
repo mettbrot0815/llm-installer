@@ -610,15 +610,16 @@ apply_model_settings() {
 
   # Defaults — overridden per model below.
   # NGL: 99 = all layers on GPU (correct for models that fit in 12GB VRAM)
-  # BATCH/UBATCH: optimal for RTX 3060 — larger than default for faster prefill
-  # CACHE_K: q8_0 is far better quality than q4_0 with only ~50% more VRAM vs f16
-  # CACHE_V: q4_0 is acceptable for V-cache; quality impact is minimal
+  # BATCH/UBATCH: 512/512 optimal for prompt eval VRAM efficiency (2026 research)
+  # CACHE_K: q8_0 for quality, q4_0 for VRAM savings on large models
+  # CACHE_V: q4_0 standard for V-cache
+  # EXTRA_FLAGS: --flash-attn for acceleration where full GPU offload
   NGL_VAL=99
-  BATCH_VAL=2048
+  BATCH_VAL=512
   UBATCH_VAL=512
   CACHE_K_VAL="q8_0"
   CACHE_V_VAL="q4_0"
-  EXTRA_FLAGS=""
+  EXTRA_FLAGS="--flash-attn"
 
   case "$gguf" in
 
@@ -626,130 +627,120 @@ apply_model_settings() {
     *Carnice*) # FIX: use exact prefix match instead of substring
       SAFE_CTX=262144
       USE_JINJA="--jinja"
-      # 9B Q4_K_M ~5.3GB weights → ~6.7GB with q8_0 KV at 8K; fits 12GB fine
+      # 9B Q6_K ~6.9GB weights; fits 12GB fine with q8_0/q4_0 KV
       CACHE_K_VAL="q8_0"
       CACHE_V_VAL="q4_0"
-      ok "Carnice: 256K ctx, Jinja on, q8_0/q4_0 KV"
+      ok "Carnice 9B Q6_K: 256K ctx, Jinja on, q8_0/q4_0 KV, flash-attn"
       ;;
 
     # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
-    # Q5_K_M is ~6.5GB; fits fine in 12GB.
+    # Q5_K_M ~6.5GB; fits fine in 12GB.
     *Harmonic-Hermes*)
       SAFE_CTX=262144
       USE_JINJA="--jinja"
       CACHE_K_VAL="q8_0"
       CACHE_V_VAL="q4_0"
-      ok "Harmonic Hermes 9B Q5: 256K ctx, q8_0/q4_0 KV"
+      ok "Harmonic Hermes 9B Q5_K_M: 256K ctx, q8_0/q4_0 KV, flash-attn"
       ;;
 
     *Qwen3.5-9B* | *Hermes*)
       SAFE_CTX=262144
       USE_JINJA="--jinja"
-      # 9B Q4_K_M ~5.3GB weights → ~6.7GB with q8_0 KV at 8K; fits 12GB fine
+      # 9B Q4_K_M ~5.3GB weights; fits 12GB with q8_0/q4_0 KV
       CACHE_K_VAL="q8_0"
       CACHE_V_VAL="q4_0"
-      ok "Qwen3.5 9B / Hermes: 256K ctx, Jinja on, q8_0/q4_0 KV"
+      ok "Qwen3.5 9B Q4_K_M / Hermes: 256K ctx, Jinja on, q8_0/q4_0 KV, flash-attn"
       ;;
 
 
-    # ── Llama 3.1 8B (dense, fits in 12GB) ──────────────────────────────────
+    # ── Llama 3.1 8B Q4_K_M (dense, ~4.1GB, fits in 12GB) ──────────────────
     *Llama-3.1*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       CACHE_K_VAL="q8_0"
       CACHE_V_VAL="q4_0"
-      ok "Llama 3.1 8B: 128K ctx, Jinja on, q8_0/q4_0 KV"
+      ok "Llama 3.1 8B Q4_K_M: 128K ctx, Jinja on, q8_0/q4_0 KV, flash-attn"
       ;;
 
-    # ── Qwen2.5 Coder 14B / Qwen3 14B (dense, tight on 12GB) ───────────────
+    # ── Qwen2.5 Coder 14B / Qwen3 14B Q4_K_M (dense, ~8.99GB, tight on 12GB) ─
     *Qwen2.5-Coder-14B* | *Qwen3-14B*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
-      # 14B Q4_K_M ~8-9GB weights; q4_0 KV at 131K ≈ 2.5GB extra → ~11.5GB total.
-      # Fits in 12GB; use q4_0 KV to keep VRAM below the ceiling.
+      # 14B Q4_K_M ~8.99GB weights; q4_0 KV for VRAM savings
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Qwen 14B: 131K ctx (native YaRN), q4_0/q4_0 KV"
+      ok "Qwen 14B Q4_K_M: 131K ctx (YaRN), q4_0/q4_0 KV, flash-attn"
       ;;
 
-    # ── Gemma 3 12B (dense, strict roles) ───────────────────────────────────
+    # ── Gemma 3 12B Q4_K_M (~7.3GB, fits 12GB) ─────────────────────────────
     # --jinja required for tool calls (Hermes sends tools param → HTTP 500 without it)
     *google_gemma-3* | *gemma-3*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
-      EXTRA_FLAGS=""
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Gemma 3 12B: 128K ctx, Jinja on (tools support), q4_0/q4_0 KV"
+      ok "Gemma 3 12B Q4_K_M: 128K ctx, Jinja on (tools), q4_0/q4_0 KV, flash-attn"
       ;;
 
-    # ── Gemma 4 12B (dense, 132K, strict roles) ─────────────────────────────
+    # ── Gemma 4 12B Q4_K_M (~7.3GB, fits 12GB) ──────────────────────────────
     # --jinja required for tool calls (Hermes sends tools param → HTTP 500 without it)
     *google_gemma-4-12b*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
-      EXTRA_FLAGS=""
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Gemma 4 12B: 128K ctx, Jinja on (tools support), q4_0/q4_0 KV"
+      ok "Gemma 4 12B Q4_K_M: 128K ctx, Jinja on (tools), q4_0/q4_0 KV, flash-attn"
       ;;
 
-    # ── Qwen3 30B A3B MoE ───────────────────────────────────────────────────
-    # ~17GB weights: too large for 12GB VRAM alone.
+    # ── Qwen3 30B A3B MoE Q4_K_M (~17GB, experts on CPU) ────────────────────
     # Use -ot exps=CPU to keep routed expert FFN weights on RAM;
     # attention + shared experts stay on GPU. Needs CPU threads for experts.
     *Qwen3-30B*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       NGL_VAL=99
-      EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS}"
+      EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS} --flash-attn"
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Qwen3 30B MoE: experts on CPU RAM, attention on GPU, q4_0/q4_0 KV"
+      ok "Qwen3 30B MoE Q4_K_M: experts CPU, attention GPU, q4_0/q4_0 KV, flash-attn"
       ;;
 
-    # ── DeepSeek R1 32B (dense, too large for 12GB alone) ───────────────────
-    # ~17GB weights: must offload ~50% of layers to RAM.
-    # ── DeepSeek R1 32B (dense, ~17GB, partial GPU offload) ─────────────────
-    # 65536 ctx: meets Hermes 64K minimum. ~17GB weights → ~40 layers on GPU.
-    # q4_0 KV keeps overhead low for the CPU-offloaded portion.
+    # ── DeepSeek R1 32B Q4_K_M (~17GB, partial GPU offload) ──────────────────
+    # 65536 ctx meets Hermes 64K min. ~17GB weights → ~40 layers on GPU.
+    # q4_0 KV for VRAM efficiency on partial offload.
     *DeepSeek*)
       SAFE_CTX=65536
       USE_JINJA="--jinja"
       NGL_VAL=40
-      EXTRA_FLAGS="--threads ${CPUS}"
+      EXTRA_FLAGS="--threads ${CPUS} --flash-attn"
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "DeepSeek R1 32B: 64K ctx, ~40 layers GPU, q4_0/q4_0 KV"
+      ok "DeepSeek R1 32B Q4_K_M: 64K ctx, 40 layers GPU, q4_0/q4_0 KV, flash-attn"
       ;;
 
 
-    # ── Gemma 4 26B MoE IQ3_XXS (~9.4GB) ───────────────────────────────────
-    # MoE with ~4B active params. Fits in 12GB but needs expert offload for
-    # KV headroom at longer contexts.
-    # --jinja is REQUIRED: Hermes sends a tools param which llama-server
-    # rejects with HTTP 500 if Jinja is disabled. Gemma 4 supports Jinja.
+    # ── Gemma 4 26B A4B MoE IQ3_XXS (~9.4GB, experts on CPU) ────────────────
+    # MoE with ~4B active params. Fits in 12GB with expert offload.
+    # --jinja REQUIRED for tools support.
     *gemma-4-26B*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
-      EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS}"
+      EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS} --flash-attn"
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Gemma 4 26B MoE: Jinja on (tools support), experts on CPU, q4_0/q4_0 KV"
+      ok "Gemma 4 26B MoE IQ3_XXS: Jinja on (tools), experts CPU, q4_0/q4_0 KV, flash-attn"
       ;;
 
-    # ── Qwopus-GLM 18B (dense, ~10.5GB, spills slightly) ───────────────────
-    # 65536 ctx minimum: Hermes Agent refuses models below 64K context.
-    # At 10.5GB weights + q4_0 KV, 64K context fits: ~1.1GB KV overhead.
-    # ~80 layers on GPU; remainder spills to RAM with --threads for CPU side.
+    # ── Qwopus-GLM 18B Q4_K_M (~10.5GB, partial offload) ────────────────────
+    # 65536 ctx meets Hermes min. ~80 layers on GPU for 12GB VRAM.
     *Qwopus* | *GLM*)
       SAFE_CTX=65536
       USE_JINJA="--jinja"
       NGL_VAL=80
-      EXTRA_FLAGS="--threads ${CPUS}"
+      EXTRA_FLAGS="--threads ${CPUS} --flash-attn"
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Qwopus-GLM 18B: 64K ctx (Hermes min), ~80 layers GPU, q4_0/q4_0 KV"
+      ok "Qwopus-GLM 18B Q4_K_M: 64K ctx, 80 layers GPU, q4_0/q4_0 KV, flash-attn"
       ;;
 
     # ── Default fallback ─────────────────────────────────────────────────────
@@ -759,11 +750,12 @@ apply_model_settings() {
       USE_JINJA="--jinja"
       CACHE_K_VAL="q8_0"
       CACHE_V_VAL="q4_0"
+      ok "Default: 64K ctx, Jinja on, q8_0/q4_0 KV, flash-attn"
       ;;
   esac
 
   export SAFE_CTX USE_JINJA NGL_VAL BATCH_VAL UBATCH_VAL CACHE_K_VAL CACHE_V_VAL EXTRA_FLAGS
-  ok "Context: ${SAFE_CTX} | KV: ${CACHE_K_VAL}/${CACHE_V_VAL} | NGL: ${NGL_VAL} | Batch: ${BATCH_VAL}/${UBATCH_VAL}"
+  ok "Context: ${SAFE_CTX} | KV: ${CACHE_K_VAL}/${CACHE_V_VAL} | NGL: ${NGL_VAL} | Batch: ${BATCH_VAL}/${UBATCH_VAL} | Flags: ${EXTRA_FLAGS:-none}"
 }
 
 show_model_table() {
