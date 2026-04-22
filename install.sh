@@ -1328,6 +1328,15 @@ if [[ -z "$_SMO" ]]; then
     skip "Hermes Agent already installed — skipping"
   else
     _install_hermes_agent
+    # Fix potential npm issues after Hermes install
+    if [[ -d "$HOME/.hermes/node" ]]; then
+      export PATH="$HOME/.hermes/node/bin:$PATH"
+      npm cache clean --force 2>/dev/null || true
+      if ! npm --version >/dev/null 2>&1; then
+        warn "npm appears broken after Hermes install — attempting reinstall"
+        curl -L https://www.npmjs.com/install.sh | sh 2>/dev/null || warn "npm reinstall failed — continuing anyway"
+      fi
+    fi
   fi
 fi
 
