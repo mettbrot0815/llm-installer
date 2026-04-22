@@ -339,6 +339,14 @@ elif [[ -n "$GH_TOKEN" ]]; then
   export GITHUB_TOKEN="$GH_TOKEN"
 fi
 
+# Authenticate GitHub CLI and set up Git credentials if token is available
+if [[ -n "$GITHUB_TOKEN" ]]; then
+  step "Setting up GitHub CLI authentication and Git credentials..."
+  echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null || warn "gh auth login failed — you may need to run it manually"
+  gh auth setup-git 2>/dev/null || warn "gh auth setup-git failed — Git pushes may require manual auth"
+  ok "GitHub CLI and Git authentication configured."
+fi
+
 # =============================================================================
 # 3. System packages [SKIPPED by switch-model]
 # =============================================================================
