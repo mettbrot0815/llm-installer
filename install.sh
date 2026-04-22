@@ -813,9 +813,9 @@ HDR
       cached=""
     fi
     tag_display="${tags//,/ }"
-    echo -e " ${BLD}$(printf '%2s' "$idx")${RST} $(printf '%-26s' "$dname")"
-      " $(printf '%5s' "$size_gb") GB $(printf '%-7s' "$ctx")"
-      " ${GC}$(printf '%-13s' "$GL")${RST} $(printf '%-24s' "$tag_display") $cached\\n"
+    printf ' ${BLD}% 2s${RST} %-26s\n' "$idx" "$dname"
+      printf '   %5s GB %-7s\n' "$size_gb" "$ctx"
+      printf '   ${GC}%-13s${RST} %-24s %s\\n' "$GL" "$tag_display" "$cached"
   done < <(printf '%s\n' "${MODELS[@]}")
 
   declare -A catalogued
