@@ -352,7 +352,7 @@ if [[ -z "$_SMO" ]]; then
   step "Checking system Node.js..."
   if ! command -v node &>/dev/null || [[ $(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1) -lt 22 ]]; then
     step "Installing Node.js 22 LTS (required for some agents)..."
-    local node_setup_sys
+    node_setup_sys
     node_setup_sys=$(mktemp /tmp/nodesource-setup-sys.XXXXXX.sh) || die "Failed to create temp file for system Node.js setup"
     register_tmp "$node_setup_sys"
     curl -fsSL --proto '=https' --max-redirs 5 \
@@ -805,8 +805,8 @@ HDR
       cached=""
     fi
     tag_display="${tags//,/ }"
-    printf ' ${BLD}% 2s${RST} %-26s\n' "$idx" "$dname"
-      printf '   %5s GB %-7s\n' "$size_gb" "$ctx"
+    printf " ${BLD}% 2s${RST} %-26s\n" "$idx" "$dname"
+      printf "   %5s GB %-7s\n" "$size_gb" "$ctx"
        printf "   ${GC}%-13s${RST} %-24s %s\n" "$GL" "$tag_display" "$cached"
   done < <(printf '%s\n' "${MODELS[@]}")
 
@@ -1627,34 +1627,30 @@ if $INSTALL_OPENCODE; then
   if command -v opencode &>/dev/null; then
     step "Configuring OpenCode with local model..."
     mkdir -p "${HOME}/.config/opencode"
-    # Safely write config using printf for variable escaping
-    printf '%s\n' '{' \
-      '  "$schema": "https://opencode.ai/config.json",' \
-      '  "provider": {' \
-      '    "llamacpp": {' \
-      '      "npm": "@ai-sdk/openai-compatible",' \
-      '      "name": "llama.cpp (local)",' \
-      '      "options": {' \
-      '        "baseURL": "http://localhost:8080/v1",' \
-      '        "apiKey": "sk-local"' \
-      '      },' \
-      '      "models": {' \
-      "        \"${SEL_GGUF}\": { \\" \" \" \"\" \" \" \\"  " \
-      '          "name": "'"${SEL_NAME}"'",' \
-      '          "limit": {' \
-      "            \"context\": ${SAFE_CTX},' \
-      '            "output": 8192' \
-      '          }' \
-      '        }' \
-      '      }' \
-      '    }' \
-      '  },' \
-      '  "model": "llamacpp/'"${SEL_GGUF}"',' \
-      '  "small_model": "llamacpp/'"${SEL_GGUF}"',' \
-      '  "plugin": [' \
-      '    "superpowers@git+https://github.com/obra/superpowers.git"' \
-      '  ]' \
-      '}' > "${HOME}/.config/opencode/opencode.json"
+    # Use heredoc for cleaner config writing
+    cat > "${HOME}/.config/opencode/opencode.json" <<EOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama.cpp (local)",
+      "options": {
+        "baseURL": "$BASE_URL",
+        "apiKey": "$API_KEY"
+      },
+      "models": {
+        "$GGUF_NAME": {
+          "name": "$MODEL_NAME",
+          "limit": { "context": $CTX, "output": 8192 }
+        }
+      }
+    }
+  },
+  "model": "llamacpp/$GGUF_NAME",
+  "small_model": "llamacpp/$GGUF_NAME"
+}
+EOF
     ok "OpenCode configured."
   fi
 fi
@@ -1714,7 +1710,7 @@ if $INSTALL_OPENCLAUDE; then
   # Verify openclaude command is available
   if ! command -v openclaude &>/dev/null; then
     warn "OpenClaude installed but 'openclaude' command not found in PATH."
-    warn "You may need to add the following to your PATH: $(npm bin -g 2>/dev/null || echo '~/.npm-global/bin')"
+    warn "You may need to add the following to your PATH: $(npm bin -g 2>/dev/null || echo "$HOME/.npm-global/bin")"
   fi
   openclaude_ver=$(openclaude --version 2>/dev/null || echo "unknown")
   ok "OpenClaude version: ${openclaude_ver}"
@@ -1756,7 +1752,7 @@ if $INSTALL_CODEX; then
       if ! command -v node &>/dev/null || \
         [[ "$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)" -lt 22 ]]; then
         step "Installing Node.js 22 LTS (required for Codex)..."
-        local node_setup
+        node_setup
         node_setup=$(mktemp /tmp/nodesource-setup.XXXXXX.sh) || \
           die "Failed to create temp file for Node.js setup"
         register_tmp "$node_setup"
@@ -1924,7 +1920,7 @@ export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA NGL_VAL BATCH_VAL 
 
 # Use envsubst if available, otherwise fallback to sed
 if command -v envsubst &>/dev/null; then
-  envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${NGL_VAL} ${BATCH_VAL} ${UBATCH_VAL} ${CACHE_K_VAL} ${CACHE_V_VAL} ${EXTRA_FLAGS} ${PIDFILE_PATH} ${LLAMA_PORT}' \
+  envsubst "${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${NGL_VAL} ${BATCH_VAL} ${UBATCH_VAL} ${CACHE_K_VAL} ${CACHE_V_VAL} ${EXTRA_FLAGS} ${PIDFILE_PATH} ${LLAMA_PORT}" \
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 else
   warn "envsubst not found; using sed fallback (slower)."
@@ -2081,7 +2077,7 @@ STUB
 
   MARKER="# === LLM setup (added by install.sh) ==="
   if ! grep -qF "$MARKER" "${HOME}/.bashrc" 2>/dev/null; then
-    cat >>"${HOME}/.bashrc" <<'BASHRC_EXPANDED'
+    cat >>"${HOME}/.bashrc" <<EOF
 
 # === LLM setup (added by install.sh) ===
 if [[ -z "${__LLM_BASHRC_LOADED:-}" ]]; then
@@ -2115,7 +2111,7 @@ if [[ -f "${HOME}/.llm-tokens" ]]; then
   done < "${HOME}/.llm-tokens"
 fi
 
-BASHRC_EXPANDED
+EOF
 
     # Add aliases and functions with proper escaping for INSTALL_COPY
     printf 'alias start-llm='"'"'bash ~/start-llm.sh'"'"'\n' >> "${HOME}/.bashrc"
@@ -2126,7 +2122,7 @@ BASHRC_EXPANDED
     printf 'alias codex='"'"'OPENAI_API_KEY=sk-local OPENAI_BASE_URL=http://localhost:8080/v1 codex'"'"'\n' >> "${HOME}/.bashrc"
   fi
 
-  cat >>"${HOME}/.bashrc" <<'BASHRC_FUNCTIONS'
+    cat >>"${HOME}/.bashrc" <<EOF
 
 vram() {
   nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null | \
@@ -2296,36 +2292,65 @@ GCFG
   fi
 
   if command -v opencode &>/dev/null || [[ -d "${HOME}/.config/opencode" ]]; then
+
     mkdir -p "${HOME}/.config/opencode"
-    printf '{
-  "$schema": "https://opencode.ai/config.json",
+
+    cat > "${HOME}/.config/opencode/opencode.json" <<EOF
+
+{
+
+  "\$schema": "https://opencode.ai/config.json",
+
   "provider": {
+
     "llamacpp": {
+
       "npm": "@ai-sdk/openai-compatible",
+
       "name": "llama.cpp (local)",
+
       "options": {
-        "baseURL": "%s",
-        "apiKey": "%s"
+
+        "baseURL": "$BASE_URL",
+
+        "apiKey": "$API_KEY"
+
       },
+
       "models": {
-        "%s": {
-          "name": "%s",
-          "limit": { "context": %s, "output": 8192 }
+
+        "$GGUF_NAME": {
+
+          "name": "$MODEL_NAME",
+
+          "limit": { "context": $CTX, "output": 8192 }
+
         }
+
       }
+
     }
+
   },
-  "model": "llamacpp/%s",
-  "small_model": "llamacpp/%s"
+
+  "model": "llamacpp/$GGUF_NAME",
+
+  "small_model": "llamacpp/$GGUF_NAME"
+
 }
-' \
-      "$BASE_URL" "$API_KEY" "$GGUF_NAME" "$MODEL_NAME" "$CTX" "$GGUF_NAME" "$GGUF_NAME" \
-      > "${HOME}/.config/opencode/opencode.json"
+
+EOF
+
     echo -e " ${GRN}✓${RST} OpenCode opencode.json"
+
     reset_count=$((reset_count+1))
+
   else
+
     echo -e " ${YLW}~${RST} OpenCode not installed — skipped"
+
     skip_count=$((skip_count+1))
+
   fi
 
   if command -v openclaude &>/dev/null || [[ -d "${HOME}/.openclaude" ]]; then
@@ -2410,4 +2435,4 @@ alias clear='show_llm_summary; command clear'
 
 # FIX: Close the if guard opened at top of LLM block.
 fi
-BASHRC_FUNCTIONS
+EOF
