@@ -1302,6 +1302,9 @@ _install_hermes_agent() {
   # Verify integrity (warns if hash not known, fails if mismatch)
   _verify_script_integrity "$install_script" "hermes"
 
+  # Patch the installer to fix npm upgrade issues
+  sed -i '/Upgrading npm/a npm cache clean --force' "$install_script"
+
   # Run with skip-setup to avoid wizard
   bash "$install_script" --branch main --skip-setup || die "Hermes install script failed (exit code $?)"
 
