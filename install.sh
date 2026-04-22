@@ -342,9 +342,12 @@ fi
 # Authenticate GitHub CLI and set up Git credentials if token is available
 if [[ -n "$GITHUB_TOKEN" ]]; then
   step "Setting up GitHub CLI authentication and Git credentials..."
-  gh auth login --with-token "$GITHUB_TOKEN" 2>/dev/null || warn "gh auth login failed — you may need to run it manually"
-  gh auth setup-git 2>/dev/null || warn "gh auth setup-git failed — Git pushes may require manual auth"
-  ok "GitHub CLI and Git authentication configured."
+  if gh auth login --with-token "$GITHUB_TOKEN" 2>/dev/null; then
+    gh auth setup-git 2>/dev/null || warn "gh auth setup-git failed — Git pushes may require manual auth"
+    ok "GitHub CLI and Git authentication configured."
+  else
+    warn "gh auth login failed — you may need to run it manually and then gh auth setup-git"
+  fi
 fi
 
 # =============================================================================
