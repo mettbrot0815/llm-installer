@@ -352,7 +352,6 @@ if [[ -z "$_SMO" ]]; then
   step "Checking system Node.js..."
   if ! command -v node &>/dev/null || [[ $(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1) -lt 22 ]]; then
     step "Installing Node.js 22 LTS (required for some agents)..."
-    node_setup_sys
     node_setup_sys=$(mktemp /tmp/nodesource-setup-sys.XXXXXX.sh) || die "Failed to create temp file for system Node.js setup"
     register_tmp "$node_setup_sys"
     curl -fsSL --proto '=https' --max-redirs 5 \
@@ -1752,7 +1751,6 @@ if $INSTALL_CODEX; then
       if ! command -v node &>/dev/null || \
         [[ "$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)" -lt 22 ]]; then
         step "Installing Node.js 22 LTS (required for Codex)..."
-        node_setup
         node_setup=$(mktemp /tmp/nodesource-setup.XXXXXX.sh) || \
           die "Failed to create temp file for Node.js setup"
         register_tmp "$node_setup"
