@@ -184,8 +184,8 @@ _install_cuda() {
     --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 \
     https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb \
     -o "$cuda_deb" || die "Failed to download CUDA keyring"
-  dpkg -i "$cuda_deb" || die "Failed to install CUDA keyring"
-  apt-get update -qq || die "Failed to update apt cache"
+sudo dpkg -i "$cuda_deb" || die "Failed to install CUDA keyring"
+sudo apt-get update -qq || die "Failed to update apt cache"
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cuda-toolkit-12-6 || die "Failed to install cuda-toolkit-12-6"
   _set_installed_version "cuda" "12.6"
   ok "CUDA toolkit 12.6 installed."
@@ -374,7 +374,7 @@ fi
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   step "Updating system packages..."
-  apt-get update -qq
+sudo apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     build-essential cmake git ccache \
@@ -397,9 +397,9 @@ if [[ -z "$_SMO" ]]; then
       && rm -f "$gh_out"
 
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+      | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
 
-    apt-get update -qq
+sudo apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh
     ok "GitHub CLI (gh) installed."
   else
@@ -410,11 +410,11 @@ if [[ -z "$_SMO" ]]; then
   if python3 --version 2>&1 | grep -qE '3\.(1[0-9]|[2-9][0-9])'; then
     ok "Python 3.10+ found: $(python3 --version)"
   else
-    add-apt-repository -y ppa:deadsnakes/ppa
-    apt-get update -qq
+sudo add-apt-repository -y ppa:deadsnakes/ppa
+sudo apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
       python3.11 python3.11-venv
-    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
     ok "Python 3.11 installed and set as default"
   fi
 fi
@@ -1286,7 +1286,7 @@ else
       fi
       cmake --build build --config Release -j"$(nproc)"
       if -n true 2>/dev/null; then
-        cmake --install build || warn "System install failed — using build directory."
+sudo cmake --install build || warn "System install failed — using build directory."
       else
         warn "Sudo requires password; skipping system install. Using build directory."
       fi
@@ -1340,7 +1340,7 @@ _install_hermes_agent() {
   _verify_script_integrity "$install_script" "hermes"
 
   # Run with skip-setup to avoid wizard
-  bash "$install_script" --branch main --skip-setup || die "Hermes install script failed (exit code $?)"
+sudo -E bash "$install_script" --branch main --skip-setup || die "Hermes install script failed (exit code $?)"
 
   # Verify installation
   if [[ -x "${HOME}/.local/bin/hermes" ]]; then
@@ -1696,7 +1696,7 @@ if $INSTALL_OPENCLAUDE; then
     ok "OpenClaude installed successfully."
   else
     warn "npm install of @gitlawb/openclaude failed — trying with sudo..."
-    npm install -g @gitlawb/openclaude 2>&1 || {
+sudo npm install -g @gitlawb/openclaude 2>&1 || {
       die "Failed to install OpenClaude via npm. Check output above for errors."
     }
   fi
@@ -1773,7 +1773,7 @@ if $INSTALL_CODEX; then
         ok "Codex CLI installed/updated."
       else
         warn "npm install of @openai/codex failed — trying with sudo..."
-        npm install -g @openai/codex 2>&1 || {
+sudo npm install -g @openai/codex 2>&1 || {
           warn "Codex install failed. Install manually: npm install -g @openai/codex"
           return 1
         }
@@ -1974,8 +1974,8 @@ StandardError=append:/tmp/llama-server.log
 WantedBy=default.target
 SERVICE
 
-  if systemctl --user is-system-running &>/dev/null; then
-    systemctl --user enable llama-server.service 2>/dev/null || true
+  if sudo systemctl --user is-system-running &>/dev/null; then
+    sudo systemctl --user enable llama-server.service 2>/dev/null || true
     ok "llama-server systemd service enabled."
     echo " Persistent auto-start: loginctl enable-linger $USER"
   else
@@ -2059,7 +2059,7 @@ curl -fsSL --proto '=https' --max-redirs 5 \
   https://raw.githubusercontent.com/mettbrot0815/llm-installer/refs/heads/main/install.sh \
   -o "$INSTALL_TMP" || { echo "Download failed."; rm -f "$INSTALL_TMP"; exit 1; }
 chmod +x "$INSTALL_TMP"
-bash "$INSTALL_TMP"
+sudo -E bash "$INSTALL_TMP"
 rm -f "$INSTALL_TMP"
 STUB
     chmod +x "$INSTALL_COPY"
