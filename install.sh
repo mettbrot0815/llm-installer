@@ -1390,6 +1390,11 @@ memory:
     enabled: true
 YAML
 
+# Adjust compression threshold for models with <=64K context
+if (( SAFE_CTX <= 65536 )); then
+  echo -e "\ncompression:\n  threshold: 0.25" >> "$CONFIG_FILE"
+fi
+
 umask "$_ORIG_UMASK"
 
 ok "Hermes configured → llama-server (${SEL_NAME}, ctx=${SAFE_CTX})"
