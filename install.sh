@@ -815,7 +815,7 @@ HDR
     tag_display="${tags//,/ }"
     printf ' ${BLD}% 2s${RST} %-26s\n' "$idx" "$dname"
       printf '   %5s GB %-7s\n' "$size_gb" "$ctx"
-       printf '   ${GC}%-13s${RST} %-24s %s\n' "$GL" "$tag_display" "$cached"
+       printf "   ${GC}%-13s${RST} %-24s %s\n" "$GL" "$tag_display" "$cached"
   done < <(printf '%s\n' "${MODELS[@]}")
 
   declare -A catalogued
@@ -1594,6 +1594,12 @@ fi
 _get_opencode_version() {
   if command -v opencode &>/dev/null; then
     opencode --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
+  fi
+}
+
+_get_codex_version() {
+  if command -v codex &>/dev/null; then
+    codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
   fi
 }
 
@@ -2377,6 +2383,8 @@ SUPERPOWERS_RESET
 
   if command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]; then
     mkdir -p "${HOME}/.claude"
+    # Diagnostic logging for Claude config
+    echo "DEBUG: Configuring Claude with GGUF_NAME=$GGUF_NAME MODEL_NAME=$MODEL_NAME CTX=$CTX" >&2
     printf '{
   "hooks": {},
   "statusLine": {},
@@ -2392,7 +2400,7 @@ SUPERPOWERS_RESET
   }
 }
 ' \
-      "$GGUF_NAME" "$BASE_URL" "$API_KEY" "$GGUF_NAME" "$GGUF_NAME" "$GGUF_NAME" "$CTX" > "${HOME}/.claude/config.json"
+      "$GGUF_NAME" "$BASE_URL" "$API_KEY" "$GGUF_NAME" "$MODEL_NAME" "$CTX" > "${HOME}/.claude/config.json"
     chmod 600 "${HOME}/.claude/config.json"
     echo -e " ${GRN}✓${RST} Claude config.json"
     reset_count=$((reset_count+1))
