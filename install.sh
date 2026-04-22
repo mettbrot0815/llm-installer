@@ -684,17 +684,18 @@ apply_model_settings() {
       ;;
 
 # ── Qwopus-GLM 18B (dense, ~10.5GB, fits in 12GB) ───────────────────────
-# 262144 ctx: official max (256K!). Qwen3.5-based.
-# ~60 layers on GPU (12GB VRAM); remainder to RAM with --threads.
-# --jinja required for Hermes tool calls.
+# 65536 ctx: optimized for stability.
+# 57 layers on GPU; --no-mmap for faster loads.
 *Qwopus* | *GLM*)
-SAFE_CTX=262144
+SAFE_CTX=65536
 USE_JINJA="--jinja"
-NGL_VAL=60
-EXTRA_FLAGS="--threads ${CPUS}"
+NGL_VAL=57
+BATCH_VAL=1024
+UBATCH_VAL=512
+EXTRA_FLAGS="--no-mmap --threads ${CPUS}"
 CACHE_K_VAL="q4_0"
 CACHE_V_VAL="q4_0"
-ok "Qwopus-GLM 18B: 256K ctx, ~60 layers GPU, q4_0/q4_0 KV"
+ok "Qwopus-GLM 18B: 64K ctx, 57 layers GPU, q4_0/q4_0 KV, no-mmap"
 ;;
 
     # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
@@ -1302,6 +1303,9 @@ _install_hermes_agent() {
   # Verify integrity (warns if hash not known, fails if mismatch)
   _verify_script_integrity "$install_script" "hermes"
 
+  # Patch the installer to fix npm upgrade issues
+  sed -i '/npm install -g npm/i npm cache clean --force' "$install_script"
+
   # Run with skip-setup to avoid wizard
   bash "$install_script" --branch main --skip-setup || die "Hermes install script failed (exit code $?)"
 
@@ -1324,12 +1328,19 @@ _install_hermes_agent() {
 }
 
 if [[ -z "$_SMO" ]]; then
-  CURRENT_HERMES=$(_check_hermes_version)
-  INSTALLED_HERMES=$(_get_installed_version "hermes")
-  if [[ -n "$CURRENT_HERMES" ]] && [[ "$CURRENT_HERMES" == "$INSTALLED_HERMES" ]]; then
-    skip "Hermes Agent already up to date (${CURRENT_HERMES})"
+  if [[ -x "$HOME/.local/bin/hermes" ]] || [[ -x "$HOME/.hermes/hermes-agent/venv/bin/hermes" ]]; then
+    skip "Hermes Agent already installed — skipping"
   else
     _install_hermes_agent
+    # Fix potential npm issues after Hermes install
+    if [[ -d "$HOME/.hermes/node" ]]; then
+      export PATH="$HOME/.hermes/node/bin:$PATH"
+      npm cache clean --force 2>/dev/null || true
+      if ! npm --version >/dev/null 2>&1; then
+        warn "npm appears broken after Hermes install — attempting reinstall"
+        curl -L https://www.npmjs.com/install.sh | sh 2>/dev/null || warn "npm reinstall failed — continuing anyway"
+      fi
+    fi
   fi
 fi
 
