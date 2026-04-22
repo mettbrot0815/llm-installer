@@ -377,19 +377,19 @@ fi
 if [[ -z "$_SMO" ]]; then
   step "Updating system packages..."
   echo "Starting apt-get update..."
-  if sudo apt-get update; then
+  if timeout 60 sudo apt-get update; then
     echo "apt-get update completed."
   else
-    warn "apt-get update failed — continuing anyway."
+    warn "apt-get update timed out or failed — continuing anyway."
   fi
   echo "Starting apt-get upgrade..."
-  if sudo -E DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; then
+  if timeout 120 sudo -E DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; then
     echo "apt-get upgrade completed."
   else
-    warn "apt-get upgrade failed — continuing anyway."
+    warn "apt-get upgrade timed out or failed — continuing anyway."
   fi
   echo "Starting apt-get install..."
-  if sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  if timeout 300 sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential cmake git ccache \
     libcurl4-openssl-dev software-properties-common \
     python3 python3-pip python3-venv \
@@ -397,7 +397,7 @@ if [[ -z "$_SMO" ]]; then
     procps gettext-base; then
     echo "apt-get install completed."
   else
-    die "apt-get install failed — cannot continue."
+    die "apt-get install timed out or failed — cannot continue."
   fi
   ok "System packages ready."
 
