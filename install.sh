@@ -657,19 +657,18 @@ apply_model_settings() {
       ;;
 
     # ── DeepSeek R1 32B (dense, too large for 12GB alone) ───────────────────
-    # ~17GB weights: must offload ~50% of layers to RAM.
-    # ── DeepSeek R1 32B (dense, ~17GB, partial GPU offload) ─────────────────
-    # 65536 ctx: meets Hermes 64K minimum. ~17GB weights → ~40 layers on GPU.
-    # q4_0 KV keeps overhead low for the CPU-offloaded portion.
-    *DeepSeek*)
-      SAFE_CTX=65536
-      USE_JINJA="--jinja"
-      NGL_VAL=40
-      EXTRA_FLAGS="--threads ${CPUS}"
-      CACHE_K_VAL="q4_0"
-      CACHE_V_VAL="q4_0"
-      ok "DeepSeek R1 32B: 64K ctx, ~40 layers GPU, q4_0/q4_0 KV"
-      ;;
+# ── DeepSeek R1 32B (dense, ~17GB, partial GPU offload) ─────────────────
+# 32768 ctx: official max. ~17GB weights → ~35 layers on GPU for 12GB VRAM.
+# q4_0 KV keeps overhead low. --reasoning-format enables thinking extraction.
+*DeepSeek*)
+SAFE_CTX=32768
+USE_JINJA="--jinja"
+NGL_VAL=35
+EXTRA_FLAGS="--threads ${CPUS} --reasoning-format deepseek --reasoning-budget 8192"
+CACHE_K_VAL="q4_0"
+CACHE_V_VAL="q4_0"
+ok "DeepSeek R1 32B: 32K ctx, ~35 layers GPU, reasoning enabled"
+;;
 
 
     # ── Gemma 4 26B MoE IQ3_XXS (~9.4GB) ───────────────────────────────────
@@ -686,19 +685,19 @@ apply_model_settings() {
       ok "Gemma 4 26B MoE: Jinja on (tools support), experts on CPU, q4_0/q4_0 KV"
       ;;
 
-    # ── Qwopus-GLM 18B (dense, ~10.5GB, spills slightly) ───────────────────
-    # 65536 ctx minimum: Hermes Agent refuses models below 64K context.
-    # At 10.5GB weights + q4_0 KV, 64K context fits: ~1.1GB KV overhead.
-    # ~80 layers on GPU; remainder spills to RAM with --threads for CPU side.
-    *Qwopus* | *GLM*)
-      SAFE_CTX=65536
-      USE_JINJA="--jinja"
-      NGL_VAL=80
-      EXTRA_FLAGS="--threads ${CPUS}"
-      CACHE_K_VAL="q4_0"
-      CACHE_V_VAL="q4_0"
-      ok "Qwopus-GLM 18B: 64K ctx (Hermes min), ~80 layers GPU, q4_0/q4_0 KV"
-      ;;
+# ── Qwopus-GLM 18B (dense, ~10.5GB, fits in 12GB) ───────────────────────
+# 262144 ctx: official max (256K!). Qwen3.5-based.
+# ~60 layers on GPU (12GB VRAM); remainder to RAM with --threads.
+# --jinja required for Hermes tool calls.
+*Qwopus* | *GLM*)
+SAFE_CTX=262144
+USE_JINJA="--jinja"
+NGL_VAL=60
+EXTRA_FLAGS="--threads ${CPUS}"
+CACHE_K_VAL="q4_0"
+CACHE_V_VAL="q4_0"
+ok "Qwopus-GLM 18B: 256K ctx, ~60 layers GPU, q4_0/q4_0 KV"
+;;
 
     # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
     # Q5_K_M is ~6.5GB; fits fine in 12GB.
