@@ -350,6 +350,8 @@ fi
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   step "Checking system Node.js..."
+  echo "Node command: $(command -v node 2>/dev/null || echo 'not found')"
+  echo "Node version: $(node --version 2>/dev/null || echo 'not available')"
   if ! command -v node &>/dev/null || [[ $(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1) -lt 22 ]]; then
     step "Installing Node.js 22 LTS (required for some agents)..."
     node_setup_sys=$(mktemp /tmp/nodesource-setup-sys.XXXXXX.sh) || die "Failed to create temp file for system Node.js setup"
@@ -374,14 +376,20 @@ fi
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   step "Updating system packages..."
-sudo apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+  echo "Starting apt-get update..."
+  sudo apt-get update
+  echo "apt-get update completed."
+  echo "Starting apt-get upgrade..."
+  sudo -E DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+  echo "apt-get upgrade completed."
+  echo "Starting apt-get install..."
+  sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential cmake git ccache \
     libcurl4-openssl-dev software-properties-common \
     python3 python3-pip python3-venv \
     pciutils wget curl ca-certificates zstd \
     procps gettext-base
+  echo "apt-get install completed."
   ok "System packages ready."
 
   # --- Install GitHub CLI (gh) from official repository ---
