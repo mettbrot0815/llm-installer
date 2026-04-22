@@ -1324,10 +1324,8 @@ _install_hermes_agent() {
 }
 
 if [[ -z "$_SMO" ]]; then
-  CURRENT_HERMES=$(_check_hermes_version)
-  INSTALLED_HERMES=$(_get_installed_version "hermes")
-  if [[ -n "$CURRENT_HERMES" ]] && [[ "$CURRENT_HERMES" == "$INSTALLED_HERMES" ]]; then
-    skip "Hermes Agent already up to date (${CURRENT_HERMES})"
+  if command -v hermes &>/dev/null; then
+    skip "Hermes Agent already installed — skipping"
   else
     _install_hermes_agent
   fi
