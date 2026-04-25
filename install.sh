@@ -62,13 +62,24 @@ needs_update() {
     fi
 
     cd "$LLAMA_DIR"
-    git fetch origin master 2>/dev/null || return 0
+
+    # Check if we can fetch
+    if ! git fetch origin master 2>/dev/null; then
+        echo "Warning: Could not fetch from remote, assuming update needed"
+        return 0
+    fi
 
     local local_commit remote_commit
     local_commit=$(git rev-parse HEAD 2>/dev/null || echo "")
     remote_commit=$(git rev-parse origin/master 2>/dev/null || echo "")
 
-    [[ -n "$local_commit" && -n "$remote_commit" && "$local_commit" != "$remote_commit" ]]
+    # If we can't get commits, assume update needed
+    if [[ -z "$local_commit" || -z "$remote_commit" ]]; then
+        return 0
+    fi
+
+    # Return 0 (true) if commits differ, 1 (false) if same
+    [[ "$local_commit" != "$remote_commit" ]]
 }
 
 # ----------------------------- Model Selection -----------------------------
@@ -185,7 +196,7 @@ mkdir -p "$MODELS_DIR" "$INSTALL_DIR" "$LLAMA_DIR"
 # ----------------------------- llama.cpp Build (CMake) -----------------------------
 cd "$LLAMA_DIR" || exit 1
 
-if needs_update; then
+if needs_update || [[ ! -f "$VERSION_FILE" ]]; then
     echo "Updating llama.cpp..."
     if [[ ! -d ".git" ]]; then
         git clone https://github.com/ggml-org/llama.cpp.git .
@@ -196,18 +207,30 @@ if needs_update; then
     echo "Building llama.cpp with CUDA support (RTX 3060 optimized)..."
     rm -rf build
 
-    cmake -B build \
-        -DGGML_CUDA=ON \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CUDA_ARCHITECTURES="86" \
-        -DLLAMA_CURL=ON \
-        -DGGML_CCACHE=ON
+    # Configure with CMake
+    echo "Running: cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_CURL=ON -DGGML_CCACHE=ON"
+    if cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_CURL=ON -DGGML_CCACHE=ON; then
+        echo "CMake configure succeeded"
+    else
+        echo "CMake configure failed"
+        exit 1
+    fi
 
-    cmake --build build --config Release -j8   # Use 6-8 on WSL2 to avoid issues
+    echo "Building binaries..."
+    if cmake --build build --config Release -j8; then
+        echo "CMake build succeeded"
+    else
+        echo "CMake build failed"
+        exit 1
+    fi
 
     # Create symlinks / wrappers
-    sudo ln -sf "$LLAMA_DIR/build/bin/llama-server" "$INSTALL_DIR/llama-server"
-    sudo ln -sf "$LLAMA_DIR/build/bin/llama-cli"    "$INSTALL_DIR/llama-cli"
+    if command -v sudo >/dev/null 2>&1; then
+        sudo ln -sf "$LLAMA_DIR/build/bin/llama-server" "$INSTALL_DIR/llama-server"
+        sudo ln -sf "$LLAMA_DIR/build/bin/llama-cli"    "$INSTALL_DIR/llama-cli"
+    else
+        echo "Warning: sudo not available, skipping system symlinks"
+    fi
 
     echo "✅ llama.cpp built successfully"
     _set_installed_version
@@ -215,7 +238,17 @@ else
     echo "✅ llama.cpp already up-to-date"
     if [[ ! -x "$LLAMA_DIR/build/bin/llama-server" ]]; then
         echo "Building missing binaries..."
-        cmake --build build --config Release -j8
+        if cmake --build build --config Release -j8; then
+            echo "Binaries built successfully"
+        else
+            echo "Binary build failed, will rebuild from source"
+            # Force rebuild by returning to the if branch
+            cd "$LLAMA_DIR"
+            git pull
+            rm -rf build
+            cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_CURL=ON -DGGML_CCACHE=ON
+            cmake --build build --config Release -j8
+        fi
     fi
 fi
 
