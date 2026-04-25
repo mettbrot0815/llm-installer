@@ -51,6 +51,26 @@ _set_installed_version() {
     echo "llama.cpp=$(_get_llama_version)" > "$VERSION_FILE"
 }
 
+# Check if llama.cpp needs updating
+needs_update() {
+    if [[ ! -d "$LLAMA_DIR" ]]; then
+        return 0  # Need to clone
+    fi
+
+    if [[ ! -d "$LLAMA_DIR/.git" ]]; then
+        return 0  # Not a git repo, need to clone
+    fi
+
+    cd "$LLAMA_DIR"
+    git fetch origin master 2>/dev/null || return 0
+
+    local local_commit remote_commit
+    local_commit=$(git rev-parse HEAD 2>/dev/null || echo "")
+    remote_commit=$(git rev-parse origin/master 2>/dev/null || echo "")
+
+    [[ -n "$local_commit" && -n "$remote_commit" && "$local_commit" != "$remote_commit" ]]
+}
+
 # ----------------------------- Model Selection -----------------------------
 select_model() {
     echo ""
@@ -165,32 +185,39 @@ mkdir -p "$MODELS_DIR" "$INSTALL_DIR" "$LLAMA_DIR"
 # ----------------------------- llama.cpp Build (CMake) -----------------------------
 cd "$LLAMA_DIR" || exit 1
 
-if [[ ! -d ".git" ]]; then
-    echo "Cloning llama.cpp..."
-    git clone https://github.com/ggml-org/llama.cpp.git .
-else
+if needs_update; then
     echo "Updating llama.cpp..."
-    git pull
+    if [[ ! -d ".git" ]]; then
+        git clone https://github.com/ggml-org/llama.cpp.git .
+    else
+        git pull
+    fi
+
+    echo "Building llama.cpp with CUDA support (RTX 3060 optimized)..."
+    rm -rf build
+
+    cmake -B build \
+        -DGGML_CUDA=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CUDA_ARCHITECTURES="86" \
+        -DLLAMA_CURL=ON \
+        -DGGML_CCACHE=ON
+
+    cmake --build build --config Release -j8   # Use 6-8 on WSL2 to avoid issues
+
+    # Create symlinks / wrappers
+    sudo ln -sf "$LLAMA_DIR/build/bin/llama-server" "$INSTALL_DIR/llama-server"
+    sudo ln -sf "$LLAMA_DIR/build/bin/llama-cli"    "$INSTALL_DIR/llama-cli"
+
+    echo "✅ llama.cpp built successfully"
+    _set_installed_version
+else
+    echo "✅ llama.cpp already up-to-date"
+    if [[ ! -x "$LLAMA_DIR/build/bin/llama-server" ]]; then
+        echo "Building missing binaries..."
+        cmake --build build --config Release -j8
+    fi
 fi
-
-echo "Building llama.cpp with CUDA support (RTX 3060 optimized)..."
-rm -rf build
-
-cmake -B build \
-    -DGGML_CUDA=ON \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CUDA_ARCHITECTURES="86" \   # Ampere = RTX 30-series
-    -DLLAMA_CURL=ON \
-    -DGGML_CCACHE=ON
-
-cmake --build build --config Release -j8   # Use 6-8 on WSL2 to avoid issues
-
-# Create symlinks / wrappers
-sudo ln -sf "$LLAMA_DIR/build/bin/llama-server" "$INSTALL_DIR/llama-server"
-sudo ln -sf "$LLAMA_DIR/build/bin/llama-cli"    "$INSTALL_DIR/llama-cli"
-
-echo "✅ llama.cpp built successfully"
-_set_installed_version
 
 # ----------------------------- Create Wrapper Scripts -----------------------------
 create_wrapper_scripts() {
@@ -294,127 +321,12 @@ if [[ $i -eq 90 ]]; then
 fi
 EOF
 
-    # switch-model
+    # switch-model - simplified version for now
     cat > "$INSTALL_DIR/switch-model" << 'EOF'
 #!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODELS_DIR="$HOME/llm-models"
-CONFIG_FILE="$HOME/.llm-config"
-
-# Model catalog
-MODELS=(
-  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|S|chat,code,reasoning|@sudoingX pick · 50 tok/s on RTX 3060"
-  "2|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|131K|12|10|mid|A|code|#1 coding on 3060"
-  "3|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM 18B|10.5|64K|12|10|mid|A|chat,code,reasoning|Merged GLM · Q4_K_M · community"
-  "4|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|128K|12|10|mid|A|chat,code|Google Gemma 4 · 128K ctx"
-  "5|unsloth/Qwen3.5-35B-A3B-GGUF|Qwen3.5-35B-A3B-MXFP4_MOE.gguf|Qwen 3.5 35B MoE|22.0|128K|20|16|large|B|chat,code,reasoning|MoE · 3B active params"
-)
-
-grade_label() {
-  case "$1" in
-    S) echo "S Runs great " ;;
-    A) echo "A Runs well " ;;
-    B) echo "B Decent " ;;
-    C) echo "C Tight fit " ;;
-    F) echo "F Too heavy " ;;
-    *) echo "? Unknown " ;;
-  esac
-}
-
-grade_color() {
-  case "$1" in
-    S | A) echo -e "\033[0;32m" ;;
-    B | C) echo -e "\033[1;33m" ;;
-    *) echo -e "\033[0;31m" ;;
-  esac
-}
-
-show_model_menu() {
-    clear
-    echo -e "\033[1;36m╔══════════════════════════════════════════════════════════════════════════════╗\033[0m"
-    echo -e "\033[1;36m║\033[0m \033[1mModel Selection\033[0m"
-    echo -e "\033[1;36m╚══════════════════════════════════════════════════════════════════════════════╝\033[0m"
-    echo ""
-    echo -e "Hardware: ${RAM_GiB}GB RAM, ${VRAM_GiB}GB VRAM, CUDA: $HAS_NVIDIA"
-    echo ""
-    echo -e "\033[1m # Model Size Ctx Grade Tags\033[0m"
-    echo " ─────────────────────────────────────────────────────────────────────────────"
-
-    local idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier grade tags desc
-    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier grade tags desc; do
-        local color
-        color=$(grade_color "$grade")
-        local label
-        label=$(grade_label "$grade")
-        local cached=""
-        [[ -f "$MODELS_DIR/$gguf_file" ]] && cached=" \033[0;36m↓\033[0m"
-
-        echo -e " \033[1m$(printf '%2s' "$idx")\033[0m $(printf '%-26s' "$dname")" \
-          " $(printf '%5s' "$size_gb") GB $(printf '%-7s' "$ctx")" \
-          " ${color}$(printf '%-13s' "$label")\033[0m $(printf '%-24s' "$tags") $cached"
-    done < <(printf '%s\n' "${MODELS[@]}")
-
-    echo ""
-    echo -e " \033[0;32mS/A\033[0m Runs great/well \033[1;33mB/C\033[0m Tight fit \033[0;31mF\033[0m Too heavy \033[0;36m↓\033[0m Already downloaded"
-    echo ""
-    echo -e " Enter number, or \033[1mu\033[0m for custom HF URL."
-    echo ""
-}
-
-download_model() {
-    local repo="$1" file="$2" name="$3"
-    echo "Downloading $name..."
-
-    if command -v huggingface-cli &>/dev/null; then
-        cd "$MODELS_DIR"
-        huggingface-cli download "$repo" "$file" --local-dir .
-    else
-        echo "huggingface-cli not found. Please install with: pip install huggingface_hub"
-        echo "Manual download: https://huggingface.co/$repo/resolve/main/$file"
-    fi
-}
-
-# Main logic
-show_model_menu
-
-read -rp "Select model [1-${#MODELS[@]}] or 'u' for URL: " choice
-
-if [[ "$choice" =~ ^[Uu]$ ]]; then
-    read -rp "HuggingFace URL or repo/name: " custom_input
-    # Handle custom URL - simplified
-    echo "Custom model selection not fully implemented yet"
-    echo "Please manually download and place in $MODELS_DIR"
-    exit 0
-elif [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#MODELS[@]})); then
-    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier grade tags desc; do
-        if [[ "$idx" == "$choice" ]]; then
-            SELECTED_REPO="$hf_repo"
-            SELECTED_GGUF="$gguf_file"
-            SELECTED_NAME="$dname"
-            SELECTED_GRADE="$grade"
-            break
-        fi
-    done < <(printf '%s\n' "${MODELS[@]}")
-
-    # Download if needed
-    if [[ ! -f "$MODELS_DIR/$SELECTED_GGUF" ]]; then
-        download_model "$SELECTED_REPO" "$SELECTED_GGUF" "$SELECTED_NAME"
-    fi
-
-    # Save config
-    cat > "$CONFIG_FILE" << EOF
-SELECTED_GGUF="$SELECTED_GGUF"
-SELECTED_NAME="$SELECTED_NAME"
+echo "switch-model: Feature coming soon"
+echo "For now, manually edit ~/.llm-config to change models"
 EOF
-
-    echo "✅ Switched to $SELECTED_NAME"
-    echo "Restart server with: stop-llm && start-llm"
-else
-    echo "Invalid choice"
-    exit 1
-fi
 
     # vram
     cat > "$INSTALL_DIR/vram" << 'EOF'
