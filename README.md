@@ -98,7 +98,16 @@ Shows if server is running and endpoint info.
 switch-model
 ```
 
-Interactive menu with hardware-graded model selection. Shows performance estimates, optimal settings, and download status. Automatically applies RTX 3060 optimized parameters based on model grade.
+Shows exact GGUF filenames with performance grades and specs. Use the filename in ~/.llm-config:
+
+```bash
+# Edit ~/.llm-config
+SELECTED_GGUF="Qwen3.5-9B-Q4_K_M.gguf"
+SELECTED_NAME="Qwen 3.5 9B"
+
+# Then restart
+stop-llm && start-llm
+```
 
 ### Monitor GPU Usage
 
@@ -186,30 +195,27 @@ export HF_TOKEN="hf_your_token_here"
 
 ### Available Models
 
-Comprehensive model catalog optimized for RTX 3060 12GB VRAM (April 2026):
+Comprehensive model catalog with exact filenames optimized for RTX 3060 12GB VRAM (April 2026):
 
-| Model | Size | Context | Grade | Performance | Best For |
-|-------|------|---------|-------|-------------|----------|
-| **Qwen 3.5 9B** | 5.3 GB | 256K | **S** | 45-55 tok/s | Perfect all-rounder, chat/code/reasoning |
-| **Qwen2.5 14B** | 8.8 GB | 128K | **A** | 35-45 tok/s | Balanced performer, great quality |
-| **Gemma 4 9B** | 5.6 GB | 8K | **S** | 40-50 tok/s | Latest Google, fast and capable |
-| **Phi-4 14B** | 8.8 GB | 16K | **A** | 35-45 tok/s | Microsoft Phi, strong reasoning |
-| **Qwen2.5 Coder 32B** | 20 GB | 128K | **B** | 25-35 tok/s | Elite coding, best for development |
-| **Gemma 3 27B** | 17 GB | 8K | **B** | 15-25 tok/s | Google quality, good performance |
-| **Gemma 4 27B** | 17 GB | 8K | **B** | 15-25 tok/s | Google flagship, excellent quality |
-| **Mistral Small 24B** | 15 GB | 32K | **A** | 20-30 tok/s | Efficient Mistral, great all-round |
-| **Qwen2.5 72B** | 45 GB | 32K | **C** | 8-12 tok/s | Heavy reasoning, slow but capable |
-| **Llama 3.3 70B** | 44 GB | 8K | **C** | 8-12 tok/s | Meta's latest, comprehensive |
-| **DeepSeek V3 671B** | 421 GB | 4K | **F** | 2-3 tok/s | Massive MoE, doesn't fit 12GB VRAM |
+| Filename | Size | Context | Grade | Performance | Description |
+|----------|------|---------|-------|-------------|-------------|
+| **Qwen3.5-9B-Q4_K_M.gguf** | 5.3 GB | 256K | **S** | 45-55 t/s | Qwen 3.5 9B - Perfect all-rounder |
+| **Qwen2.5-14B-Instruct-Q4_K_M.gguf** | 8.8 GB | 128K | **A** | 35-45 t/s | Qwen2.5 14B - Balanced performer |
+| **google_gemma-4-9b-it-Q4_K_M.gguf** | 5.6 GB | 8K | **S** | 40-50 t/s | Gemma 4 9B - Latest Google |
+| **Phi-4-Q4_K_M.gguf** | 8.8 GB | 16K | **A** | 35-45 t/s | Phi-4 14B - Microsoft Phi |
+| **Mistral-Small-Instruct-2501-Q4_K_M.gguf** | 15 GB | 32K | **A** | 20-30 t/s | Mistral Small 24B - Efficient |
+| **Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf** | 20 GB | 128K | **B** | 25-35 t/s | Qwen2.5 Coder 32B - Elite coding |
+| **gemma-3-27b-it-Q4_K_M.gguf** | 17 GB | 8K | **B** | 15-25 t/s | Gemma 3 27B - Google quality |
+| **google_gemma-4-27b-it-Q4_K_M.gguf** | 17 GB | 8K | **B** | 15-25 t/s | Gemma 4 27B - Google flagship |
 
 **Grade Legend & Settings:**
-- **S** Perfect: q8_0 KV cache, 1024 batch, full GPU offload
-- **A** Excellent: q8_0/q4_0 KV cache, 1024 batch, full GPU offload
-- **B** Good: q4_0 KV cache, 512 batch, full GPU offload
-- **C** Tight: q4_0 KV cache, 256 batch, partial GPU offload (35 layers)
-- **F** Too Big: q4_0 KV cache, 128 batch, heavy offloading (17 layers)
+- **S (Perfect)**: q8_0 KV cache, 1024 batch, full GPU offload (99 layers)
+- **A (Excellent)**: q8_0/q4_0 KV cache, 1024 batch, full GPU offload
+- **B (Good)**: q4_0 KV cache, 512 batch, full GPU offload
 
-All models use RTX 3060 optimized settings with flash attention, balanced threading (6 cores), and memory mapping disabled for stability.
+**Quantization**: All models use Q4_K_M - optimal balance of quality vs VRAM for RTX 3060
+**Platform**: All available on HuggingFace under respective repos
+**Optimization**: RTX 3060 specific with flash attention, 6-threaded, memory mapping disabled
 
 ## Help & Support
 

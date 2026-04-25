@@ -286,33 +286,36 @@ VRAM_GiB="$VRAM_GiB"
 HAS_NVIDIA="$HAS_NVIDIA"
 
 # Model catalog - optimized for RTX 3060 12GB
+# Format: id|repo|file|display_name|size_gb|ctx|min_ram_gb|min_vram_gb|tier|grade|tags|description
 MODELS=(
-  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|262144|8|6|mid|S|chat,code,reasoning|Perfect all-rounder · 45-55 tok/s"
-  "2|bartowski/Qwen2.5-14B-Instruct-GGUF|Qwen2.5-14B-Instruct-Q4_K_M.gguf|Qwen2.5 14B|8.8|131072|12|8|mid|A|chat,code,reasoning|Balanced performer · 35-45 tok/s"
-  "3|bartowski/google_gemma-4-9b-it-GGUF|google_gemma-4-9b-it-Q4_K_M.gguf|Gemma 4 9B|5.6|8192|8|6|mid|S|chat,code|Latest Google · 40-50 tok/s"
-  "4|bartowski/Phi-4-GGUF|Phi-4-Q4_K_M.gguf|Phi-4 14B|8.8|16384|12|8|mid|A|chat,code,reasoning|Microsoft Phi · 35-45 tok/s"
-  "5|bartowski/Mistral-Small-Instruct-2501-GGUF|Mistral-Small-Instruct-2501-Q4_K_M.gguf|Mistral Small 24B|15.0|32768|12|10|large|A|chat,code,reasoning|Efficient Mistral · 20-30 tok/s"
-  "6|bartowski/Qwen2.5-Coder-32B-Instruct-GGUF|Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 32B|20.0|131072|16|12|large|B|code|Elite coding · 25-35 tok/s"
-  "7|bartowski/gemma-3-27b-it-GGUF|gemma-3-27b-it-Q4_K_M.gguf|Gemma 3 27B|17.0|8192|16|12|large|B|chat,reasoning|Google quality · 15-25 tok/s"
-  "8|bartowski/google_gemma-4-27b-it-GGUF|google_gemma-4-27b-it-Q4_K_M.gguf|Gemma 4 27B|17.0|8192|16|12|large|B|chat,reasoning|Google flagship · 15-25 tok/s"
+  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen3.5-9B-Q4_K_M.gguf|5.3|262144|8|6|mid|S|chat,code,reasoning|Qwen 3.5 9B · Perfect all-rounder · 45-55 tok/s"
+  "2|bartowski/Qwen2.5-14B-Instruct-GGUF|Qwen2.5-14B-Instruct-Q4_K_M.gguf|Qwen2.5-14B-Instruct-Q4_K_M.gguf|8.8|131072|12|8|mid|A|chat,code,reasoning|Qwen2.5 14B · Balanced performer · 35-45 tok/s"
+  "3|bartowski/google_gemma-4-9b-it-GGUF|google_gemma-4-9b-it-Q4_K_M.gguf|google_gemma-4-9b-it-Q4_K_M.gguf|5.6|8192|8|6|mid|S|chat,code|Gemma 4 9B · Latest Google · 40-50 tok/s"
+  "4|bartowski/Phi-4-GGUF|Phi-4-Q4_K_M.gguf|Phi-4-Q4_K_M.gguf|8.8|16384|12|8|mid|A|chat,code,reasoning|Phi-4 14B · Microsoft Phi · 35-45 tok/s"
+  "5|bartowski/Mistral-Small-Instruct-2501-GGUF|Mistral-Small-Instruct-2501-Q4_K_M.gguf|Mistral-Small-Instruct-2501-Q4_K_M.gguf|15.0|32768|12|10|large|A|chat,code,reasoning|Mistral Small 24B · Efficient · 20-30 tok/s"
+  "6|bartowski/Qwen2.5-Coder-32B-Instruct-GGUF|Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf|Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf|20.0|131072|16|12|large|B|code|Qwen2.5 Coder 32B · Elite coding · 25-35 tok/s"
+  "7|bartowski/gemma-3-27b-it-GGUF|gemma-3-27b-it-Q4_K_M.gguf|gemma-3-27b-it-Q4_K_M.gguf|17.0|8192|16|12|large|B|chat,reasoning|Gemma 3 27B · Google quality · 15-25 tok/s"
+  "8|bartowski/google_gemma-4-27b-it-GGUF|google_gemma-4-27b-it-Q4_K_M.gguf|google_gemma-4-27b-it-Q4_K_M.gguf|17.0|8192|16|12|large|B|chat,reasoning|Gemma 4 27B · Google flagship · 15-25 tok/s"
 )
 
-    # switch-model - simplified menu
+    # switch-model - shows actual model files
     cat > "$INSTALL_DIR/switch-model" << 'EOF'
 #!/usr/bin/env bash
 echo "RTX 3060 12GB Optimized Models:"
 echo ""
-echo "1) Qwen 3.5 9B     (5.3GB) - S Perfect   - 45-55 tok/s - All-rounder"
-echo "2) Qwen2.5 14B     (8.8GB) - A Excellent - 35-45 tok/s - Balanced"
-echo "3) Gemma 4 9B      (5.6GB) - S Perfect   - 40-50 tok/s - Latest Google"
-echo "4) Phi-4 14B       (8.8GB) - A Excellent - 35-45 tok/s - Microsoft"
-echo "5) Mistral Small   (15GB)  - A Excellent - 20-30 tok/s - Efficient"
-echo "6) Qwen2.5 Coder   (20GB)  - B Good      - 25-35 tok/s - Elite coding"
-echo "7) Gemma 3 27B     (17GB)  - B Good      - 15-25 tok/s - Google quality"
-echo "8) Gemma 4 27B     (17GB)  - B Good      - 15-25 tok/s - Google flagship"
+echo "1) Qwen3.5-9B-Q4_K_M.gguf              (5.3GB) - S Perfect   - 45-55 tok/s"
+echo "2) Qwen2.5-14B-Instruct-Q4_K_M.gguf    (8.8GB) - A Excellent - 35-45 tok/s"
+echo "3) google_gemma-4-9b-it-Q4_K_M.gguf    (5.6GB) - S Perfect   - 40-50 tok/s"
+echo "4) Phi-4-Q4_K_M.gguf                   (8.8GB) - A Excellent - 35-45 tok/s"
+echo "5) Mistral-Small-Instruct-2501-Q4_K_M.gguf (15GB) - A Excellent - 20-30 tok/s"
+echo "6) Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf (20GB) - B Good      - 25-35 tok/s"
+echo "7) gemma-3-27b-it-Q4_K_M.gguf          (17GB)  - B Good      - 15-25 tok/s"
+echo "8) google_gemma-4-27b-it-Q4_K_M.gguf  (17GB)  - B Good      - 15-25 tok/s"
 echo ""
-echo "To switch: edit ~/.llm-config with SELECTED_GGUF=\"model.gguf\""
+echo "To switch: edit ~/.llm-config with SELECTED_GGUF=\"exact-filename.gguf\""
 echo "Then restart: stop-llm && start-llm"
+echo ""
+echo "All models use Q4_K_M quantization optimized for RTX 3060 12GB VRAM"
 EOF
 
     # vram
