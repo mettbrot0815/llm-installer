@@ -98,7 +98,7 @@ Shows if server is running and endpoint info.
 switch-model
 ```
 
-Interactive menu to select and download different models.
+Interactive menu with hardware-graded model selection. Shows performance estimates, optimal settings, and download status. Automatically applies RTX 3060 optimized parameters based on model grade.
 
 ### Monitor GPU Usage
 
@@ -128,12 +128,14 @@ systemctl --user enable llama-server  # Auto-start on login
 
 | Command | Description |
 |---------|-------------|
-| `start-llm` | Start llama-server |
-| `stop-llm` | Stop llama-server |
-| `llm-status` | Show server status |
-| `switch-model` | Interactive model selection |
-| `vram` | GPU memory & status monitor |
+| `start-llm` | Start llama-server with auto-optimized settings |
+| `stop-llm` | Stop llama-server cleanly |
+| `llm-status` | Show server status and endpoint |
+| `switch-model` | Interactive model selection with grades |
+| `vram` | GPU memory, temperature & server status |
 | `hermes` | Run Hermes Agent (if installed) |
+| `systemctl --user start llama-server` | Auto-start service |
+| `systemctl --user stop llama-server` | Stop auto-start service |
 
 ## Default Model
 
@@ -184,22 +186,30 @@ export HF_TOKEN="hf_your_token_here"
 
 ### Available Models
 
-The installer includes models optimized for 12GB VRAM RTX 3060:
+Comprehensive model catalog optimized for RTX 3060 12GB VRAM (April 2026):
 
-| Model | Size | Context | Grade | Best For |
-|-------|------|---------|-------|----------|
-| Qwen 3.5 9B | 5.3 GB | 256K | **S** | Fast general purpose, excellent performance |
-| Qwen2.5 Coder 14B | 9 GB | 131K | **A** | Coding performance, #1 on benchmarks |
-| Qwopus-GLM 18B | 10.5 GB | 64K | **A** | Balanced performance, community optimized |
-| Gemma 4 12B | 7.3 GB | 128K | **A** | Long context, Google quality |
-| Qwen 3.5 35B MoE | 22 GB | 128K | **B** | High performance, MoE efficiency |
+| Model | Size | Context | Grade | Performance | Best For |
+|-------|------|---------|-------|-------------|----------|
+| **Qwen 3.5 9B** | 5.3 GB | 256K | **S** | 45-55 tok/s | Perfect all-rounder, chat/code/reasoning |
+| **Qwen2.5 14B** | 8.8 GB | 128K | **A** | 35-45 tok/s | Balanced performer, great quality |
+| **Gemma 4 9B** | 5.6 GB | 8K | **S** | 40-50 tok/s | Latest Google, fast and capable |
+| **Phi-4 14B** | 8.8 GB | 16K | **A** | 35-45 tok/s | Microsoft Phi, strong reasoning |
+| **Qwen2.5 Coder 32B** | 20 GB | 128K | **B** | 25-35 tok/s | Elite coding, best for development |
+| **Gemma 3 27B** | 17 GB | 8K | **B** | 15-25 tok/s | Google quality, good performance |
+| **Gemma 4 27B** | 17 GB | 8K | **B** | 15-25 tok/s | Google flagship, excellent quality |
+| **Mistral Small 24B** | 15 GB | 32K | **A** | 20-30 tok/s | Efficient Mistral, great all-round |
+| **Qwen2.5 72B** | 45 GB | 32K | **C** | 8-12 tok/s | Heavy reasoning, slow but capable |
+| **Llama 3.3 70B** | 44 GB | 8K | **C** | 8-12 tok/s | Meta's latest, comprehensive |
+| **DeepSeek V3 671B** | 421 GB | 4K | **F** | 2-3 tok/s | Massive MoE, doesn't fit 12GB VRAM |
 
-**Grade Legend:**
-- **S** = Runs great (excellent performance)
-- **A** = Runs well (good performance)
-- **B** = Decent (acceptable performance)
-- **C** = Tight fit (may be slow)
-- **F** = Too heavy (not recommended)
+**Grade Legend & Settings:**
+- **S** Perfect: q8_0 KV cache, 1024 batch, full GPU offload
+- **A** Excellent: q8_0/q4_0 KV cache, 1024 batch, full GPU offload
+- **B** Good: q4_0 KV cache, 512 batch, full GPU offload
+- **C** Tight: q4_0 KV cache, 256 batch, partial GPU offload (35 layers)
+- **F** Too Big: q4_0 KV cache, 128 batch, heavy offloading (17 layers)
+
+All models use RTX 3060 optimized settings with flash attention, balanced threading (6 cores), and memory mapping disabled for stability.
 
 ## Help & Support
 

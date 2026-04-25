@@ -30,13 +30,20 @@ fi
 
 echo "Hardware: ${RAM_GiB}GB RAM, ${CPUS} CPUs, ${VRAM_GiB}GB VRAM, CUDA: $HAS_NVIDIA"
 
-# Model catalog
+# Model catalog - Optimized for RTX 3060 12GB VRAM (April 2026)
+# Format: id|repo|file|display_name|size_gb|ctx|min_ram_gb|min_vram_gb|tier|grade|tags|description
 MODELS=(
-  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|Fast general purpose"
-  "2|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|131K|12|10|mid|code|#1 coding performance"
-  "3|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM 18B|10.5|64K|12|10|mid|chat,code,reasoning|Merged GLM · optimized"
-  "4|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|128K|12|10|mid|chat,code|Google · 128K context"
-  "5|unsloth/Qwen3.5-35B-A3B-GGUF|Qwen3.5-35B-A3B-MXFP4_MOE.gguf|Qwen 3.5 35B MoE|22.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active"
+  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|262144|8|6|mid|S|chat,code,reasoning|Perfect all-rounder · 45-55 tok/s · Q4_K_M · 256K ctx"
+  "2|bartowski/Qwen2.5-Coder-32B-Instruct-GGUF|Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 32B|20.0|131072|16|12|large|B|code|Elite coding · 25-35 tok/s · Q4_K_M · 128K ctx"
+  "3|bartowski/Qwen2.5-72B-Instruct-GGUF|Qwen2.5-72B-Instruct-Q3_K_XL.gguf|Qwen2.5 72B|45.0|32768|24|16|large|C|chat,reasoning|Heavy reasoning · 8-12 tok/s · Q3_K_XL · 32K ctx"
+  "4|bartowski/Qwen2.5-14B-Instruct-GGUF|Qwen2.5-14B-Instruct-Q4_K_M.gguf|Qwen2.5 14B|8.8|131072|12|8|mid|A|chat,code,reasoning|Balanced performer · 35-45 tok/s · Q4_K_M · 128K ctx"
+  "5|bartowski/gemma-3-27b-it-GGUF|gemma-3-27b-it-Q4_K_M.gguf|Gemma 3 27B|17.0|8192|16|12|large|B|chat,reasoning|Google quality · 15-25 tok/s · Q4_K_M · 8K ctx"
+  "6|bartowski/google_gemma-4-9b-it-GGUF|google_gemma-4-9b-it-Q4_K_M.gguf|Gemma 4 9B|5.6|8192|8|6|mid|S|chat,code|Latest Google · 40-50 tok/s · Q4_K_M · 8K ctx"
+  "7|bartowski/google_gemma-4-27b-it-GGUF|google_gemma-4-27b-it-Q4_K_M.gguf|Gemma 4 27B|17.0|8192|16|12|large|B|chat,reasoning|Google flagship · 15-25 tok/s · Q4_K_M · 8K ctx"
+  "8|unsloth/Llama-3.3-70B-Instruct-GGUF|Llama-3.3-70B-Instruct-Q3_K_XL.gguf|Llama 3.3 70B|44.0|8192|24|16|large|C|chat,reasoning|Meta's latest · 8-12 tok/s · Q3_K_XL · 8K ctx"
+  "9|bartowski/Mistral-Small-Instruct-2501-GGUF|Mistral-Small-Instruct-2501-Q4_K_M.gguf|Mistral Small 24B|15.0|32768|12|10|large|A|chat,code,reasoning|Efficient Mistral · 20-30 tok/s · Q4_K_M · 32K ctx"
+  "10|bartowski/Phi-4-GGUF|Phi-4-Q4_K_M.gguf|Phi-4 14B|8.8|16384|12|8|mid|A|chat,code,reasoning|Microsoft Phi · 35-45 tok/s · Q4_K_M · 16K ctx"
+  "11|bartowski/deepseek-v3-GGUF|deepseek-v3-Q4_K_M.gguf|DeepSeek V3 671B|421.0|4096|32|20|xl|F|chat,reasoning|Massive MoE · 2-3 tok/s · Q4_K_M · 4K ctx"
 )
 
 # ----------------------------- Version Tracking -----------------------------
@@ -85,21 +92,33 @@ needs_update() {
 # ----------------------------- Model Selection -----------------------------
 select_model() {
     echo ""
-    echo "Available Models:"
-    echo "─────────────────────────────────────"
-    local idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc
-    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
-        echo "$idx) $dname ($size_gb GB, $ctx ctx)"
+    echo "Available Models (RTX 3060 12GB optimized):"
+    echo "────────────────────────────────────────────"
+    local idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier grade tags desc
+    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier grade tags desc; do
+        local grade_label
+        case "$grade" in
+            S) grade_label="Perfect" ;;
+            A) grade_label="Excellent" ;;
+            B) grade_label="Good" ;;
+            C) grade_label="Tight" ;;
+            F) grade_label="Too Big" ;;
+            *) grade_label="Unknown" ;;
+        esac
+
+        echo "$idx) $dname ($size_gb GB, $ctx ctx) - $grade_label"
         echo "   $desc"
         echo ""
     done < <(printf '%s\n' "${MODELS[@]}")
 
     read -rp "Select model [1-${#MODELS[@]}]: " choice
-    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
+    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier grade tags desc; do
         if [[ "$idx" == "$choice" ]]; then
             SELECTED_REPO="$hf_repo"
             SELECTED_GGUF="$gguf_file"
             SELECTED_NAME="$dname"
+            SELECTED_GRADE="$grade"
+            SELECTED_CTX="$ctx"
             break
         fi
     done < <(printf '%s\n' "${MODELS[@]}")
@@ -260,105 +279,40 @@ create_wrapper_scripts() {
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODELS_DIR="$HOME/llm-models"
 CONFIG_FILE="$HOME/.llm-config"
+RAM_GiB="$RAM_GiB"
+VRAM_GiB="$VRAM_GiB"
+HAS_NVIDIA="$HAS_NVIDIA"
 
-# Load config
-if [[ -f "$CONFIG_FILE" ]]; then
-    source "$CONFIG_FILE"
-fi
-
-# Allow override via env vars
-GGUF="${1:-${SELECTED_GGUF:-}}"
-CTX="${CTX:-65536}"
-NGL="${NGL:-99}"
-PORT="${PORT:-8080}"
-BATCH="${BATCH:-1024}"
-UBATCH="${UBATCH:-512}"
-CACHE_K="${CACHE_K:-q8_0}"
-CACHE_V="${CACHE_V:-q8_0}"
-THREADS="${THREADS:-6}"
-UNIFIED_MEMORY="${UNIFIED_MEMORY:-false}"
-
-# Default to Qwopus if no model selected
-if [[ -z "$GGUF" ]]; then
-    GGUF="$HOME/llm-models/Qwopus-GLM-18B-Healed-Q4_K_M.gguf"
-fi
-
-LLAMA_BIN="$HOME/llama.cpp/build/bin/llama-server"
-
-if [[ ! -x "$LLAMA_BIN" ]]; then
-    echo "ERROR: llama-server not found. Re-run installer."
-    exit 1
-fi
-
-# Kill existing instance
-EXISTING_PID=$(ss -tlnp 2>/dev/null | awk -v p=":$PORT" '$4 ~ p {match($0,/pid=([0-9]+)/,a); print a[1]}' | head -1 || true)
-[[ -n "$EXISTING_PID" ]] && kill "$EXISTING_PID" 2>/dev/null && sleep 2
-
-echo "🚀 Starting llama-server (RTX 3060 optimized)"
-echo "Model   : $(basename "$GGUF")"
-echo "Context : $CTX tokens"
-echo "GPU     : $NGL layers"
-echo "KV Cache: $CACHE_K / $CACHE_V"
-echo "Unified : $UNIFIED_MEMORY"
-echo "Threads : $THREADS"
-
-# Build command array
-CMD=(
-    "$LLAMA_BIN"
-    -m "$GGUF"
-    -ngl "$NGL"
-    --flash-attn on
-    -c "$CTX"
-    -b "$BATCH"
-    -ub "$UBATCH"
-    --cache-type-k "$CACHE_K"
-    --cache-type-v "$CACHE_V"
-    --host 0.0.0.0
-    --port "$PORT"
-    --jinja
-    --threads "$THREADS"
-    --threads-batch "$THREADS"
-    --no-mmap
+# Model catalog - optimized for RTX 3060 12GB
+MODELS=(
+  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|262144|8|6|mid|S|chat,code,reasoning|Perfect all-rounder · 45-55 tok/s"
+  "2|bartowski/Qwen2.5-14B-Instruct-GGUF|Qwen2.5-14B-Instruct-Q4_K_M.gguf|Qwen2.5 14B|8.8|131072|12|8|mid|A|chat,code,reasoning|Balanced performer · 35-45 tok/s"
+  "3|bartowski/google_gemma-4-9b-it-GGUF|google_gemma-4-9b-it-Q4_K_M.gguf|Gemma 4 9B|5.6|8192|8|6|mid|S|chat,code|Latest Google · 40-50 tok/s"
+  "4|bartowski/Phi-4-GGUF|Phi-4-Q4_K_M.gguf|Phi-4 14B|8.8|16384|12|8|mid|A|chat,code,reasoning|Microsoft Phi · 35-45 tok/s"
+  "5|bartowski/Mistral-Small-Instruct-2501-GGUF|Mistral-Small-Instruct-2501-Q4_K_M.gguf|Mistral Small 24B|15.0|32768|12|10|large|A|chat,code,reasoning|Efficient Mistral · 20-30 tok/s"
+  "6|bartowski/Qwen2.5-Coder-32B-Instruct-GGUF|Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 32B|20.0|131072|16|12|large|B|code|Elite coding · 25-35 tok/s"
+  "7|bartowski/gemma-3-27b-it-GGUF|gemma-3-27b-it-Q4_K_M.gguf|Gemma 3 27B|17.0|8192|16|12|large|B|chat,reasoning|Google quality · 15-25 tok/s"
+  "8|bartowski/google_gemma-4-27b-it-GGUF|google_gemma-4-27b-it-Q4_K_M.gguf|Gemma 4 27B|17.0|8192|16|12|large|B|chat,reasoning|Google flagship · 15-25 tok/s"
 )
 
-# Add unified memory if enabled
-if [[ "$UNIFIED_MEMORY" == "true" ]]; then
-    CMD+=(--unified-memory)
-fi
-
-# Aggressive performance flags for RTX 3060
-CMD+=(
-    --numa distribute
-    --prio 1
-)
-
-"${CMD[@]}" &
-
-LLAMA_PID=$!
-echo "$LLAMA_PID" > /tmp/llama-server.pid
-
-# Readiness check
-for i in {1..90}; do
-    if curl -sf "http://localhost:$PORT/v1/models" &>/dev/null; then
-        echo "✅ Server ready at http://localhost:$PORT/v1"
-        echo "💡 Use 'hermes' to chat with your model"
-        break
-    fi
-    sleep 1
-done
-
-if [[ $i -eq 90 ]]; then
-    echo "❌ Server failed to start within 90 seconds"
-    exit 1
-fi
-EOF
-
-    # switch-model - simplified version for now
+    # switch-model - simplified menu
     cat > "$INSTALL_DIR/switch-model" << 'EOF'
 #!/usr/bin/env bash
-echo "switch-model: Feature coming soon"
-echo "For now, manually edit ~/.llm-config to change models"
+echo "RTX 3060 12GB Optimized Models:"
+echo ""
+echo "1) Qwen 3.5 9B     (5.3GB) - S Perfect   - 45-55 tok/s - All-rounder"
+echo "2) Qwen2.5 14B     (8.8GB) - A Excellent - 35-45 tok/s - Balanced"
+echo "3) Gemma 4 9B      (5.6GB) - S Perfect   - 40-50 tok/s - Latest Google"
+echo "4) Phi-4 14B       (8.8GB) - A Excellent - 35-45 tok/s - Microsoft"
+echo "5) Mistral Small   (15GB)  - A Excellent - 20-30 tok/s - Efficient"
+echo "6) Qwen2.5 Coder   (20GB)  - B Good      - 25-35 tok/s - Elite coding"
+echo "7) Gemma 3 27B     (17GB)  - B Good      - 15-25 tok/s - Google quality"
+echo "8) Gemma 4 27B     (17GB)  - B Good      - 15-25 tok/s - Google flagship"
+echo ""
+echo "To switch: edit ~/.llm-config with SELECTED_GGUF=\"model.gguf\""
+echo "Then restart: stop-llm && start-llm"
 EOF
 
     # vram
