@@ -415,7 +415,6 @@ else
     echo "Invalid choice"
     exit 1
 fi
-EOF
 
     # vram
     cat > "$INSTALL_DIR/vram" << 'EOF'
