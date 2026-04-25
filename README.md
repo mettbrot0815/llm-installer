@@ -195,29 +195,30 @@ export HF_TOKEN="hf_your_token_here"
 
 ### Available Models
 
-Comprehensive model catalog with exact filenames and real model details optimized for RTX 3060 12GB VRAM (April 2026):
+Comprehensive model catalog optimized for RTX 3060 12GB VRAM (April 2026):
 
-| Filename | Real Model | Size | Context | Grade | Performance | Description |
-|----------|------------|------|---------|-------|-------------|-------------|
-| **Qwen3.5-9B-Q4_K_M.gguf** | Alibaba Qwen 3.5 9B | 5.3 GB | 256K | **S** | 45-55 t/s | Latest Alibaba model - perfect all-rounder for chat/code/reasoning |
-| **Qwen2.5-14B-Instruct-Q4_K_M.gguf** | Alibaba Qwen2.5 14B | 8.8 GB | 128K | **A** | 35-45 t/s | Improved Qwen2.5 - excellent balanced performance |
-| **google_gemma-4-9b-it-Q4_K_M.gguf** | Google Gemma 4 9B | 5.6 GB | 8K | **S** | 40-50 t/s | Google's latest 2026 model - fast and capable |
-| **Phi-4-Q4_K_M.gguf** | Microsoft Phi-4 14B | 8.8 GB | 16K | **A** | 35-45 t/s | Microsoft's strongest Phi model - reasoning focus |
-| **Mistral-Small-Instruct-2501-Q4_K_M.gguf** | Mistral AI Small 24B | 15 GB | 32K | **A** | 20-30 t/s | Mistral's efficient long-context model |
-| **Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf** | Alibaba Qwen2.5 Coder 32B | 20 GB | 128K | **B** | 25-35 t/s | Specialized coding model - best for development |
-| **gemma-3-27b-it-Q4_K_M.gguf** | Google Gemma 3 27B | 17 GB | 8K | **B** | 15-25 t/s | Google's quality-focused large model |
-| **google_gemma-4-27b-it-Q4_K_M.gguf** | Google Gemma 4 27B | 17 GB | 8K | **B** | 15-25 t/s | Google's flagship 2026 model - highest quality |
+| Model Name | Size | Context | Grade | Performance | Company | Description |
+|------------|------|---------|-------|-------------|---------|-------------|
+| **Qwen3.5-9B-Q4_K_M** | 5.3 GB | 256K | **S** | 45-55 t/s | Alibaba | Latest Qwen 3.5 - perfect all-rounder for chat/code/reasoning |
+| **Qwen2.5-14B-Instruct-Q4_K_M** | 8.8 GB | 128K | **A** | 35-45 t/s | Alibaba | Improved Qwen2.5 - excellent balanced performance |
+| **google_gemma-4-9b-it-Q4_K_M** | 5.6 GB | 8K | **S** | 40-50 t/s | Google | Latest 2026 Gemma 4 - fast and capable |
+| **Phi-4-Q4_K_M** | 8.8 GB | 16K | **A** | 35-45 t/s | Microsoft | Strongest Phi-4 - reasoning focus |
+| **Mistral-Small-Instruct-2501-Q4_K_M** | 15 GB | 32K | **A** | 20-30 t/s | Mistral AI | Efficient long-context Small model |
+| **Qwen2.5-Coder-32B-Instruct-Q4_K_M** | 20 GB | 128K | **B** | 25-35 t/s | Alibaba | Specialized Qwen2.5 Coder for development |
+| **gemma-3-27b-it-Q4_K_M** | 17 GB | 8K | **B** | 15-25 t/s | Google | Quality-focused Gemma 3 large model |
+| **google_gemma-4-27b-it-Q4_K_M** | 17 GB | 8K | **B** | 15-25 t/s | Google | Flagship 2026 Gemma 4 - highest quality |
 
 **Grade Legend & Settings:**
-- **S (Perfect)**: q8_0 KV cache, 1024 batch, full GPU offload (99 layers) - Optimal fit
+- **S (Perfect)**: q8_0 KV cache, 1024 batch, full GPU offload - Optimal fit
 - **A (Excellent)**: q8_0/q4_0 KV cache, 1024 batch, full GPU offload - Great performance
 - **B (Good)**: q4_0 KV cache, 512 batch, full GPU offload - Solid performance
 
 **Model Details:**
-- **Quantization**: Q4_K_M - Best quality-to-VRAM ratio for RTX 3060
-- **Sources**: All models from HuggingFace (bartowski/unsloth repos)
-- **Optimization**: RTX 3060 specific settings with flash attention, balanced threading, no memory mapping
-- **Companies**: Alibaba (Qwen), Google (Gemma), Microsoft (Phi), Mistral AI
+- **Format**: All names show exact GGUF filenames (just remove .gguf extension)
+- **Quantization**: Q4_K_M - Best quality-to-VRAM ratio for RTX 3060 12GB
+- **Sources**: HuggingFace repos (bartowski/unsloth)
+- **Optimization**: RTX 3060 specific with flash attention, balanced threading, no memory mapping
+- **Companies**: Alibaba (Qwen series), Google (Gemma series), Microsoft (Phi), Mistral AI
 
 ## Help & Support
 
