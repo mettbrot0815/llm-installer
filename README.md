@@ -36,28 +36,37 @@ The installer performs the following steps:
 1. **System Setup**
     - Updates system packages
     - Installs build tools, CUDA toolkit, and dependencies
-    - Detects hardware (RAM, CPU, GPU)
+    - Detects hardware (RAM, CPU, GPU VRAM)
 
 2. **Model Selection**
-    - Interactive menu to choose from optimized models
-    - Hardware-aware recommendations
+    - Interactive menu with hardware grading
+    - 5 optimized models for 12GB VRAM RTX 3060
+    - Shows performance grades (S/A/B/C/F)
 
 3. **llama.cpp Build**
     - Clones and builds llama.cpp with CMake
-    - Optimizes for RTX 3060 (Ampere architecture)
-    - Enables CUDA acceleration and ccache for fast rebuilds
+    - RTX 3060 optimized (Ampere architecture, CUDA 86)
+    - Enables CUDA acceleration, ccache, and performance flags
 
 4. **Model Download**
-    - Downloads selected model via HuggingFace
+    - Downloads selected model via HuggingFace CLI
     - Supports token authentication for faster downloads
+    - Automatic fallback for manual download
 
-5. **Agent Setup** (optional)
+5. **Wrapper Scripts**
+    - `start-llm`: Optimized server launcher with readiness checks
+    - `stop-llm`: Clean shutdown
+    - `llm-status`: Server status monitoring
+    - `switch-model`: Interactive model switcher
+    - `vram`: GPU memory and system monitoring
+
+6. **Agent Setup** (optional)
     - Installs and configures Hermes Agent
-    - Points to local llama-server endpoint
+    - Automatic configuration for local server endpoint
 
-6. **Wrapper Scripts**
-    - Creates start-llm, stop-llm, llm-status commands
-    - Optimized server flags for performance and stability
+7. **Systemd Service** (optional)
+    - User service for auto-start on login
+    - Persistent background operation
 
 ## Usage
 
@@ -81,6 +90,24 @@ stop-llm
 llm-status
 ```
 
+Shows if server is running and endpoint info.
+
+### Switch Models
+
+```bash
+switch-model
+```
+
+Interactive menu to select and download different models.
+
+### Monitor GPU Usage
+
+```bash
+vram
+```
+
+Shows GPU memory usage, temperature, and server status.
+
 ### Use Hermes Agent
 
 ```bash
@@ -89,6 +116,14 @@ hermes
 
 Starts the Hermes Agent configured to use your local llama-server.
 
+### Systemd Service (optional)
+
+```bash
+systemctl --user start llama-server
+systemctl --user stop llama-server
+systemctl --user enable llama-server  # Auto-start on login
+```
+
 ### List Commands
 
 | Command | Description |
@@ -96,6 +131,8 @@ Starts the Hermes Agent configured to use your local llama-server.
 | `start-llm` | Start llama-server |
 | `stop-llm` | Stop llama-server |
 | `llm-status` | Show server status |
+| `switch-model` | Interactive model selection |
+| `vram` | GPU memory & status monitor |
 | `hermes` | Run Hermes Agent (if installed) |
 
 ## Default Model
@@ -147,15 +184,22 @@ export HF_TOKEN="hf_your_token_here"
 
 ### Available Models
 
-The installer includes models optimized for 12GB VRAM:
+The installer includes models optimized for 12GB VRAM RTX 3060:
 
-| Model | Size | Context | Best For |
-|-------|------|---------|----------|
-| Qwen 3.5 9B | 5.3 GB | 256K | Fast general purpose |
-| Qwen2.5 Coder 14B | 9 GB | 131K | Coding performance |
-| Qwopus-GLM 18B | 10.5 GB | 64K | Balanced performance |
-| Gemma 4 12B | 7.3 GB | 128K | Long context |
-| Qwen 3.5 35B MoE | 22 GB | 128K | High performance |
+| Model | Size | Context | Grade | Best For |
+|-------|------|---------|-------|----------|
+| Qwen 3.5 9B | 5.3 GB | 256K | **S** | Fast general purpose, excellent performance |
+| Qwen2.5 Coder 14B | 9 GB | 131K | **A** | Coding performance, #1 on benchmarks |
+| Qwopus-GLM 18B | 10.5 GB | 64K | **A** | Balanced performance, community optimized |
+| Gemma 4 12B | 7.3 GB | 128K | **A** | Long context, Google quality |
+| Qwen 3.5 35B MoE | 22 GB | 128K | **B** | High performance, MoE efficiency |
+
+**Grade Legend:**
+- **S** = Runs great (excellent performance)
+- **A** = Runs well (good performance)
+- **B** = Decent (acceptable performance)
+- **C** = Tight fit (may be slow)
+- **F** = Too heavy (not recommended)
 
 ## Help & Support
 
