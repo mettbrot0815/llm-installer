@@ -504,10 +504,10 @@ MODELS=(
   "2|kai-os/Carnice-9b-GGUF|Carnice-9b-Q6_K.gguf|Carnice-9b (Hermes)|6.9|256K|8|6|mid|hermes,agent,tool-use|Qwen3.5-9B tuned for Hermes Agent harness"
   "3|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction"
   "4|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|131K|12|10|mid|code|#1 coding on 3060"
-  "5|unsloth/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|131K|14|10|mid|chat,code,reasoning|Strong planning"
+  "5|Qwen/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|131K|14|10|mid|chat,code,reasoning|Strong planning"
   "6|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 3 · strict roles"
   "7|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 4 · 128K ctx"
-  "8|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params"
+  "8|unsloth/Qwen3.5-35B-A3B-GGUF|Qwen3.5-35B-A3B-MXFP4_MOE.gguf|Qwen 3.5 35B MoE|22.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params · optimized"
   "9|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
   "10|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
   "11|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM 18B|10.5|64K|12|10|mid|chat,code,reasoning|Merged GLM · Q4_K_M · community"
@@ -653,6 +653,18 @@ apply_model_settings() {
       ok "Gemma 4 12B: 128K ctx, Jinja on (tools support), q4_0/q4_0 KV"
       ;;
 
+    # ── Qwen3.5 35B A3B MoE ─────────────────────────────────────────────────
+    # ~22GB weights with MXFP4_MOE: optimized for MoE, fits with layer splitting.
+    *Qwen3.5-35B*)
+      SAFE_CTX=131072
+      USE_JINJA="--jinja"
+      NGL_VAL=99
+      EXTRA_FLAGS="--fit on"
+      CACHE_K_VAL="q8_0"
+      CACHE_V_VAL="q8_0"
+      ok "Qwen3.5 35B MoE: 128K ctx, fit on for layer splitting, q8_0/q8_0 KV"
+      ;;
+
     # ── Qwen3 30B A3B MoE ───────────────────────────────────────────────────
     # ~17GB weights: too large for 12GB VRAM alone.
     # Use -ot exps=CPU to keep routed expert FFN weights on RAM;
@@ -661,10 +673,10 @@ apply_model_settings() {
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       NGL_VAL=99
-      EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS}"
+      EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS} --fit on"
       CACHE_K_VAL="q4_0"
       CACHE_V_VAL="q4_0"
-      ok "Qwen3 30B MoE: experts on CPU RAM, attention on GPU, q4_0/q4_0 KV"
+      ok "Qwen3 30B MoE: experts on CPU RAM, attention on GPU, q4_0/q4_0 KV, fit on"
       ;;
 
     # ── DeepSeek R1 32B (dense, ~17GB, partial GPU offload) ─────────────────
@@ -996,15 +1008,15 @@ SEL_HF_REPO=""
 SEL_GGUF=""
 SEL_NAME=""
 SEL_MIN_RAM="0"
-SEL_MIN_VRAM="0"
-SAFE_CTX=32768
-USE_JINJA="--jinja"
-NGL_VAL=99
-BATCH_VAL=2048
-UBATCH_VAL=512
-CACHE_K_VAL="q8_0"
-CACHE_V_VAL="q4_0"
-EXTRA_FLAGS=""
+  SEL_MIN_VRAM="0"
+  SAFE_CTX=65536
+  USE_JINJA="--jinja"
+  NGL_VAL=99
+  BATCH_VAL=1024
+  UBATCH_VAL=512
+  CACHE_K_VAL="q8_0"
+  CACHE_V_VAL="q8_0"
+  EXTRA_FLAGS="--no-mmap --threads 6 --threads-batch 6"
 CHOICE=""
 
 show_model_table
@@ -1240,33 +1252,42 @@ else
         git clone https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
       fi
 
-      cd -- "$LLAMA_DIR"
-      # Use ccache for faster rebuilds if available
-      if command -v ccache &>/dev/null; then
-        CC="ccache gcc"
-        CXX="ccache g++"
-      else
-        CC="gcc"
-        CXX="g++"
-      fi
-      export CC CXX
+       cd -- "$LLAMA_DIR"
 
-      # Build with CUDA if NVIDIA GPU detected
-      # -ngl 99: Offload all layers to GPU for maximum performance
-      # --cache-type-k/v q4_0: Use 4-bit quantized KV cache to save VRAM
-      if [[ "$HAS_NVIDIA" == "true" ]]; then
-        cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON \
-          -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DGGML_CCACHE=ON
-      else
-        cmake -B build -DGGML_CCACHE=ON
-      fi
-      cmake --build build --config Release -j"$(nproc)"
-      if sudo -n true 2>/dev/null; then
-        sudo cmake --install build || warn "System install failed — using build directory."
-      else
-        warn "Sudo requires password; skipping system install. Using build directory."
-      fi
-      cd -- "$HOME"
+       # Clean previous build
+       rm -rf build
+
+       # Check CUDA toolkit availability
+       CUDA_TOOLKIT_MISSING=false
+       if [[ "$HAS_NVIDIA" == "true" ]]; then
+         if ! command -v nvcc &>/dev/null; then
+           warn "CUDA toolkit not found — install with: ./install.sh (it will install CUDA 12.6)"
+           CUDA_TOOLKIT_MISSING=true
+         fi
+       fi
+
+       # Build with CMake - optimized for RTX 3060 12GB + CUDA 12.x in WSL2
+       CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=ON"
+       if [[ "$HAS_NVIDIA" == "true" && "$CUDA_TOOLKIT_MISSING" != "true" ]]; then
+         CMAKE_FLAGS="${CMAKE_FLAGS} -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=86"  # Ampere / RTX 30-series
+         ok "CUDA detected — building with GPU acceleration"
+       else
+         ok "Building CPU-only (no CUDA or toolkit missing)"
+       fi
+
+       step "Running cmake configure..."
+       # shellcheck disable=SC2086
+       cmake -B build $CMAKE_FLAGS
+
+       step "Building llama.cpp..."
+       cmake --build build --config Release -j8  # -j8 for RTX 3060; -j6 safer in WSL2
+
+       if sudo -n true 2>/dev/null; then
+         sudo cmake --install build || warn "System install failed — using build directory."
+       else
+         warn "Sudo requires password; skipping system install. Using build directory."
+       fi
+       cd -- "$HOME"
 
       NEW_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
       _set_installed_version "llama.cpp" "${NEW_VER:-latest}"
@@ -1983,7 +2004,7 @@ ExecStart=${HOME}/.local/bin/llama-server-wrapper
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${HOME}
-Environment=PATH=/usr/local/cuda/bin:${HOME}/.local/bin:/usr/bin:/bin
+  Environment=PATH=/usr/local/cuda/bin:${HOME}/.local/bin:${HOME}/llama.cpp/build/bin:/usr/bin:/bin
 StandardOutput=append:/tmp/llama-server.log
 StandardError=append:/tmp/llama-server.log
 

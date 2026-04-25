@@ -97,18 +97,50 @@ Quickly switch between different GGUF models (lightweight, ~5 seconds)
 
 ## Default Models
 
-The installer provides a curated list of models:
+The installer provides a curated list of models optimized for 12GB VRAM RTX 3060:
 
-| # | Model | Size | Best For |
-|---|-------|------|----------|
-| 1 | Qwen3.5-0.8B | 0.5 GB | Quick tests, edge devices |
-| 2 | Qwen3.5-2B | 1 GB | Fast CPU inference |
-| 3 | Qwen3.5-4B | 2 GB | Capable CPU performance |
-| 4 | Phi-4 Mini | 2 GB | Strong reasoning |
-| 5 | Qwen3.5-9B | 5.3 GB | General purpose |
-| 6 | Carnice-9b (Hermes) | 6.9 GB | Hermes-tuned agent |
-| 7 | Llama 3.1 8B | 4.1 GB | Excellent instruction following |
-| 8 | Qwen2.5 Coder 14B | 9 GB | #1 coding performance |
+| # | Model | Size | Context | Best For |
+|---|---|------|--------|----------|
+| 1 | Qwen 3.5 9B | 5.3 GB | 256K | General purpose, fast |
+| 2 | Carnice-9b (Hermes) | 6.9 GB | 256K | Agent-tuned, tool-use |
+| 3 | Llama 3.1 8B | 4.1 GB | 128K | Instruction following |
+| 4 | Qwen2.5 Coder 14B | 9 GB | 131K | Coding, #1 performance |
+| 5 | Qwen 3 14B | 9 GB | 131K | Chat, code, reasoning |
+| 6 | Gemma 3 12B | 7.3 GB | 128K | Strict roles, tools |
+| 7 | Gemma 4 12B | 7.3 GB | 128K | 128K context |
+| 8 | Qwen 3.5 35B MoE | 22 GB | 128K | MoE, 3B active |
+| 9 | DeepSeek R1 32B | 17 GB | 64K | Reasoning |
+| 10 | Harmonic Hermes 9B | 6.5 GB | 256K | Hermes-tuned |
+| 11 | Qwopus-GLM 18B | 10.5 GB | 64K | Merged GLM |
+| 12 | Gemma 4 26B MoE | 9.4 GB | 128K | MoE, 4B active |
+
+## Building llama.cpp
+
+The installer uses CMake for building:
+
+```bash
+rm -rf build
+cmake -B build \
+  -DGGML_CUDA=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES="86" \
+  -DLLAMA_CURL=ON
+cmake --build build --config Release -j8
+```
+
+For RTX 3060 12GB, use CUDA architectures "86" (Ampere). Adjust -j for your CPU cores.
+
+## Updating llama.cpp
+
+To update llama.cpp to the latest version:
+
+```bash
+cd ~/llama.cpp
+git pull origin master
+rm -rf build
+cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES="86" -DLLAMA_CURL=ON
+cmake --build build --config Release -j8
+```
 
 ## Configuration
 
