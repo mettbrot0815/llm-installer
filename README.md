@@ -193,32 +193,24 @@ For faster downloads and higher rate limits:
 export HF_TOKEN="hf_your_token_here"
 ```
 
-### Available Models
+### Default Models
 
-Comprehensive model catalog optimized for RTX 3060 12GB VRAM (April 2026):
+The installer provides a curated list of models:
 
-| Model Name | Size | Context | Grade | Performance | Company | Description |
-|------------|------|---------|-------|-------------|---------|-------------|
-| **Qwen3.5-9B-Q4_K_M** | 5.3 GB | 256K | **S** | 45-55 t/s | Alibaba | Latest Qwen 3.5 - perfect all-rounder for chat/code/reasoning |
-| **Qwen2.5-14B-Instruct-Q4_K_M** | 8.8 GB | 128K | **A** | 35-45 t/s | Alibaba | Improved Qwen2.5 - excellent balanced performance |
-| **google_gemma-4-9b-it-Q4_K_M** | 5.6 GB | 8K | **S** | 40-50 t/s | Google | Latest 2026 Gemma 4 - fast and capable |
-| **Phi-4-Q4_K_M** | 8.8 GB | 16K | **A** | 35-45 t/s | Microsoft | Strongest Phi-4 - reasoning focus |
-| **Mistral-Small-Instruct-2501-Q4_K_M** | 15 GB | 32K | **A** | 20-30 t/s | Mistral AI | Efficient long-context Small model |
-| **Qwen2.5-Coder-32B-Instruct-Q4_K_M** | 20 GB | 128K | **B** | 25-35 t/s | Alibaba | Specialized Qwen2.5 Coder for development |
-| **gemma-3-27b-it-Q4_K_M** | 17 GB | 8K | **B** | 15-25 t/s | Google | Quality-focused Gemma 3 large model |
-| **google_gemma-4-27b-it-Q4_K_M** | 17 GB | 8K | **B** | 15-25 t/s | Google | Flagship 2026 Gemma 4 - highest quality |
-
-**Grade Legend & Settings:**
-- **S (Perfect)**: q8_0 KV cache, 1024 batch, full GPU offload - Optimal fit
-- **A (Excellent)**: q8_0/q4_0 KV cache, 1024 batch, full GPU offload - Great performance
-- **B (Good)**: q4_0 KV cache, 512 batch, full GPU offload - Solid performance
-
-**Model Details:**
-- **Format**: All names show exact GGUF filenames (just remove .gguf extension)
-- **Quantization**: Q4_K_M - Best quality-to-VRAM ratio for RTX 3060 12GB
-- **Sources**: HuggingFace repos (bartowski/unsloth)
-- **Optimization**: RTX 3060 specific with flash attention, balanced threading, no memory mapping
-- **Companies**: Alibaba (Qwen series), Google (Gemma series), Microsoft (Phi), Mistral AI
+| # | Model | Size | Context | Best For |
+|---|---|------|---------|----------|
+| 1 | Qwen3.5-9B | 5.3 GB | 256K | General purpose |
+| 2 | Carnice-9b (Hermes) | 6.9 GB | 256K | Agent-tuned |
+| 3 | Llama 3.1 8B | 4.1 GB | 128K | Instruction following |
+| 4 | Qwen2.5 Coder 14B | 9 GB | 131K | Coding |
+| 5 | Qwen 3 14B | 9 GB | 131K | Chat/code |
+| 6 | Gemma 3 12B | 7.3 GB | 128K | Quality |
+| 7 | Gemma 4 12B | 7.3 GB | 128K | Latest Google |
+| 8 | Qwen 3 30B MoE | 17 GB | 128K | Large MoE |
+| 9 | DeepSeek R1 32B | 17 GB | 64K | Reasoning |
+| 10 | Harmonic Hermes 9B | 6.5 GB | 256K | Agent-tuned |
+| 11 | Qwopus-GLM 18B | 10.5 GB | 64K | Community |
+| 12 | Gemma 4 26B MoE | 9.4 GB | 128K | Large MoE |
 
 ## Help & Support
 

@@ -285,41 +285,44 @@ RAM_GiB="$RAM_GiB"
 VRAM_GiB="$VRAM_GiB"
 HAS_NVIDIA="$HAS_NVIDIA"
 
-# Model catalog - optimized for RTX 3060 12GB
-# Format: id|repo|file|display_name|size_gb|ctx|min_ram_gb|min_vram_gb|tier|grade|tags|description
+# Model catalogue
 MODELS=(
-  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen3.5-9B-Q4_K_M|5.3|262144|8|6|mid|S|chat,code,reasoning|Alibaba Qwen 3.5 9B · Q4_K_M quantization · Perfect all-rounder · 45-55 tok/s"
-  "2|bartowski/Qwen2.5-14B-Instruct-GGUF|Qwen2.5-14B-Instruct-Q4_K_M.gguf|Qwen2.5-14B-Instruct-Q4_K_M|8.8|131072|12|8|mid|A|chat,code,reasoning|Alibaba Qwen2.5 14B · Instruct tuned · Q4_K_M quantization · Balanced performer · 35-45 tok/s"
-  "3|bartowski/google_gemma-4-9b-it-GGUF|google_gemma-4-9b-it-Q4_K_M.gguf|google_gemma-4-9b-it-Q4_K_M|5.6|8192|8|6|mid|S|chat,code|Google Gemma 4 9B · Instruction tuned · Q4_K_M quantization · Latest Google · 40-50 tok/s"
-  "4|bartowski/Phi-4-GGUF|Phi-4-Q4_K_M.gguf|Phi-4-Q4_K_M|8.8|16384|12|8|mid|A|chat,code,reasoning|Microsoft Phi-4 14B · Q4_K_M quantization · Strong reasoning · 35-45 tok/s"
-  "5|bartowski/Mistral-Small-Instruct-2501-GGUF|Mistral-Small-Instruct-2501-Q4_K_M.gguf|Mistral-Small-Instruct-2501-Q4_K_M|15.0|32768|12|10|large|A|chat,code,reasoning|Mistral AI Small 24B · Instruct 2501 · Q4_K_M quantization · Efficient long context · 20-30 tok/s"
-  "6|bartowski/Qwen2.5-Coder-32B-Instruct-GGUF|Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf|Qwen2.5-Coder-32B-Instruct-Q4_K_M|20.0|131072|16|12|large|B|code|Alibaba Qwen2.5 Coder 32B · Instruct tuned · Q4_K_M quantization · Elite coding model · 25-35 tok/s"
-  "7|bartowski/gemma-3-27b-it-GGUF|gemma-3-27b-it-Q4_K_M.gguf|gemma-3-27b-it-Q4_K_M|17.0|8192|16|12|large|B|chat,reasoning|Google Gemma 3 27B · Instruction tuned · Q4_K_M quantization · High quality · 15-25 tok/s"
-  "8|bartowski/google_gemma-4-27b-it-GGUF|google_gemma-4-27b-it-Q4_K_M.gguf|google_gemma-4-27b-it-Q4_K_M|17.0|8192|16|12|large|B|chat,reasoning|Google Gemma 4 27B · Instruction tuned · Q4_K_M quantization · Flagship model · 15-25 tok/s"
+  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen3.5-9B|5.3|256K|8|6|mid|chat,code,reasoning|@sudoingX pick · 50 tok/s on RTX 3060"
+  "2|kai-os/Carnice-9b-GGUF|Carnice-9b-Q6_K.gguf|Carnice-9b (Hermes)|6.9|256K|8|6|mid|hermes,agent,tool-use|Qwen3.5-9B tuned for Hermes Agent harness"
+  "3|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|Llama 3.1 8B|4.1|128K|8|6|mid|chat,code,reasoning|Meta · excellent instruction"
+  "4|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|131K|12|10|mid|code|#1 coding on 3060"
+  "5|Qwen/Qwen3-14B-GGUF|Qwen3-14B-Q4_K_M.gguf|Qwen 3 14B|9.0|131K|14|10|mid|chat,code,reasoning|Strong planning"
+  "6|bartowski/google_gemma-3-12b-it-GGUF|google_gemma-3-12b-it-Q4_K_M.gguf|Gemma 3 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 3 · strict roles"
+  "7|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|128K|12|10|mid|chat,code|Google Gemma 4 · 128K ctx"
+  "8|unsloth/Qwen3-30B-A3B-GGUF|Qwen3-30B-A3B-Q4_K_M.gguf|Qwen 3 30B MoE|17.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active params"
+  "9|bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF|DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf|DeepSeek R1 32B|17.0|64K|32|20|large|reasoning|R1 distill"
+  "10|DJLougen/Harmonic-Hermes-9B-GGUF|Harmonic-Hermes-9B-Q5_K_M.gguf|Harmonic Hermes 9B|6.5|256K|8|6|mid|hermes,agent,tool-use|Harmonic AI · Hermes-tuned 9B · Q5_K_M"
+  "11|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM 18B|10.5|64K|12|10|mid|chat,code,reasoning|Merged GLM · Q4_K_M · community"
+  "12|unsloth/gemma-4-26B-A4B-it-GGUF|gemma-4-26B-A4B-it-UD-IQ3_XXS.gguf|Gemma 4 26B MoE|9.4|128K|12|10|mid|chat,code,reasoning|Google MoE · 4B active · IQ3_XXS"
 )
 
-    # switch-model - shows clean model names
+    # switch-model - original style display
     cat > "$INSTALL_DIR/switch-model" << 'EOF'
 #!/usr/bin/env bash
-echo "RTX 3060 12GB Optimized Models (April 2026):"
+echo "Model Selection"
+echo "───────────────"
 echo ""
-echo "1) Qwen3.5-9B-Q4_K_M              - 5.3GB - S Perfect   - 45-55 t/s - Alibaba Qwen 3.5"
-echo "2) Qwen2.5-14B-Instruct-Q4_K_M    - 8.8GB - A Excellent - 35-45 t/s - Alibaba Qwen2.5"
-echo "3) google_gemma-4-9b-it-Q4_K_M    - 5.6GB - S Perfect   - 40-50 t/s - Google Gemma 4"
-echo "4) Phi-4-Q4_K_M                   - 8.8GB - A Excellent - 35-45 t/s - Microsoft Phi-4"
-echo "5) Mistral-Small-Instruct-2501-Q4_K_M - 15GB - A Excellent - 20-30 t/s - Mistral AI Small"
-echo "6) Qwen2.5-Coder-32B-Instruct-Q4_K_M - 20GB - B Good      - 25-35 t/s - Alibaba Qwen2.5 Coder"
-echo "7) gemma-3-27b-it-Q4_K_M          - 17GB  - B Good      - 15-25 t/s - Google Gemma 3"
-echo "8) google_gemma-4-27b-it-Q4_K_M  - 17GB  - B Good      - 15-25 t/s - Google Gemma 4"
+echo "Available models:"
 echo ""
-echo "To switch: edit ~/.llm-config with:"
-echo "SELECTED_GGUF=\"Qwen3.5-9B-Q4_K_M.gguf\""
-echo "SELECTED_NAME=\"Qwen 3.5 9B\""
+echo "1) Qwen3.5-9B"
+echo "2) Carnice-9b (Hermes)"
+echo "3) Llama 3.1 8B"
+echo "4) Qwen2.5 Coder 14B"
+echo "5) Qwen 3 14B"
+echo "6) Gemma 3 12B"
+echo "7) Gemma 4 12B"
+echo "8) Qwen 3 30B MoE"
+echo "9) DeepSeek R1 32B"
+echo "10) Harmonic Hermes 9B"
+echo "11) Qwopus-GLM 18B"
+echo "12) Gemma 4 26B MoE"
 echo ""
-echo "Then restart: stop-llm && start-llm"
-echo ""
-echo "All models use Q4_K_M quantization optimized for RTX 3060 12GB VRAM"
-echo "Grade: S=Perfect fit, A=Excellent performance, B=Good performance"
+echo "Enter number to select model, or 'u' for custom URL"
 EOF
 
     # vram
