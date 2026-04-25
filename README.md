@@ -1,6 +1,6 @@
 # LLM Installer for Ubuntu WSL2 (2026 Edition)
 
-A streamlined installer script that sets up llama.cpp with GPU acceleration on Ubuntu WSL2, optimized for RTX 3060 12GB.
+A hybrid installer that combines modern CMake builds with model selection and agent integration, optimized for RTX 3060 12GB.
 
 ## Features
 
@@ -36,18 +36,27 @@ The installer performs the following steps:
 1. **System Setup**
     - Updates system packages
     - Installs build tools, CUDA toolkit, and dependencies
+    - Detects hardware (RAM, CPU, GPU)
 
-2. **llama.cpp Build**
+2. **Model Selection**
+    - Interactive menu to choose from optimized models
+    - Hardware-aware recommendations
+
+3. **llama.cpp Build**
     - Clones and builds llama.cpp with CMake
     - Optimizes for RTX 3060 (Ampere architecture)
     - Enables CUDA acceleration and ccache for fast rebuilds
 
-3. **Model Download**
-    - Downloads Qwopus-GLM-18B (optimized for 12GB VRAM)
-    - Supports manual placement of other GGUF models
+4. **Model Download**
+    - Downloads selected model via HuggingFace
+    - Supports token authentication for faster downloads
 
-4. **Wrapper Scripts**
-    - Creates start-llm and stop-llm commands
+5. **Agent Setup** (optional)
+    - Installs and configures Hermes Agent
+    - Points to local llama-server endpoint
+
+6. **Wrapper Scripts**
+    - Creates start-llm, stop-llm, llm-status commands
     - Optimized server flags for performance and stability
 
 ## Usage
@@ -66,13 +75,28 @@ Starts the server at `http://localhost:8080/v1` with optimized settings for RTX 
 stop-llm
 ```
 
+### Check Status
+
+```bash
+llm-status
+```
+
+### Use Hermes Agent
+
+```bash
+hermes
+```
+
+Starts the Hermes Agent configured to use your local llama-server.
+
 ### List Commands
 
 | Command | Description |
 |---------|-------------|
-| `start-llm` | Start llama-server with default model |
-| `start-llm /path/to/model.gguf` | Start with specific model |
+| `start-llm` | Start llama-server |
 | `stop-llm` | Stop llama-server |
+| `llm-status` | Show server status |
+| `hermes` | Run Hermes Agent (if installed) |
 
 ## Default Model
 
@@ -112,6 +136,26 @@ Add to your `~/.bashrc`:
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+### HuggingFace Token (recommended)
+
+For faster downloads and higher rate limits:
+
+```bash
+export HF_TOKEN="hf_your_token_here"
+```
+
+### Available Models
+
+The installer includes models optimized for 12GB VRAM:
+
+| Model | Size | Context | Best For |
+|-------|------|---------|----------|
+| Qwen 3.5 9B | 5.3 GB | 256K | Fast general purpose |
+| Qwen2.5 Coder 14B | 9 GB | 131K | Coding performance |
+| Qwopus-GLM 18B | 10.5 GB | 64K | Balanced performance |
+| Gemma 4 12B | 7.3 GB | 128K | Long context |
+| Qwen 3.5 35B MoE | 22 GB | 128K | High performance |
 
 ## Help & Support
 

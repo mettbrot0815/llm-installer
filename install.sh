@@ -2,6 +2,7 @@
 # =============================================================================
 # llm-installer - Updated for llama.cpp (CMake era, April 2026)
 # Optimized for Ubuntu 24.04+ / WSL2 with RTX 3060 12GB
+# Hybrid: Modern build + model selection + agent integration
 # =============================================================================
 
 set -euo pipefail
@@ -13,11 +14,53 @@ LLAMA_DIR="$HOME/llama.cpp"
 MODELS_DIR="$HOME/llm-models"
 INSTALL_DIR="$HOME/.local/bin"
 PORT="8080"
+VERSION_FILE="$HOME/.llm-versions"
 
-# Default model (you can expand this list)
-DEFAULT_MODEL="Qwopus-GLM-18B-Healed-Q4_K_M.gguf"
-DEFAULT_CTX="65536"
-DEFAULT_NGL="99"
+# Hardware detection
+RAM_GiB=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024/1024)}')
+CPUS=$(nproc)
+HAS_NVIDIA=false
+VRAM_GiB=0
+
+if command -v nvidia-smi &>/dev/null; then
+    VRAM_MiB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 || echo "0")
+    VRAM_GiB=$((VRAM_MiB / 1024))
+    HAS_NVIDIA=true
+fi
+
+echo "Hardware: ${RAM_GiB}GB RAM, ${CPUS} CPUs, ${VRAM_GiB}GB VRAM, CUDA: $HAS_NVIDIA"
+
+# Model catalog
+MODELS=(
+  "1|unsloth/Qwen3.5-9B-GGUF|Qwen3.5-9B-Q4_K_M.gguf|Qwen 3.5 9B|5.3|256K|8|6|mid|chat,code,reasoning|Fast general purpose"
+  "2|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf|Qwen2.5 Coder 14B|8.99|131K|12|10|mid|code|#1 coding performance"
+  "3|KyleHessling1/Qwopus-GLM-18B-Merged-GGUF|Qwopus-GLM-18B-Healed-Q4_K_M.gguf|Qwopus-GLM 18B|10.5|64K|12|10|mid|chat,code,reasoning|Merged GLM · optimized"
+  "4|bartowski/google_gemma-4-12b-it-GGUF|google_gemma-4-12b-it-Q4_K_M.gguf|Gemma 4 12B|7.3|128K|12|10|mid|chat,code|Google · 128K context"
+  "5|unsloth/Qwen3.5-35B-A3B-GGUF|Qwen3.5-35B-A3B-MXFP4_MOE.gguf|Qwen 3.5 35B MoE|22.0|128K|20|16|large|chat,code,reasoning|MoE · 3B active"
+)
+
+# ----------------------------- Model Selection -----------------------------
+select_model() {
+    echo ""
+    echo "Available Models:"
+    echo "─────────────────────────────────────"
+    local idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc
+    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
+        echo "$idx) $dname ($size_gb GB, $ctx ctx)"
+        echo "   $desc"
+        echo ""
+    done < <(printf '%s\n' "${MODELS[@]}")
+
+    read -rp "Select model [1-${#MODELS[@]}]: " choice
+    while IFS='|' read -r idx hf_repo gguf_file dname size_gb ctx min_ram min_vram tier tags desc; do
+        if [[ "$idx" == "$choice" ]]; then
+            SELECTED_REPO="$hf_repo"
+            SELECTED_GGUF="$gguf_file"
+            SELECTED_NAME="$dname"
+            break
+        fi
+    done < <(printf '%s\n' "${MODELS[@]}")
+}
 
 # ----------------------------- System Setup -----------------------------
 echo "Updating system packages..."
@@ -27,8 +70,17 @@ echo "Installing dependencies..."
 sudo apt install -y \
     build-essential cmake git python3 python3-pip python3-venv \
     curl wget libcurl4-openssl-dev libopenblas-dev \
-    nvidia-cuda-toolkit nvidia-cuda-toolkit-doc \
     ccache
+
+# Install CUDA if NVIDIA GPU detected
+if [[ "$HAS_NVIDIA" == "true" ]] && ! command -v nvcc &>/dev/null; then
+    echo "Installing CUDA toolkit..."
+    wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i cuda-keyring_1.1-1_all.deb
+    sudo apt update
+    sudo apt install -y cuda-toolkit-12-6
+    rm cuda-keyring_1.1-1_all.deb
+fi
 
 # Create directories
 mkdir -p "$MODELS_DIR" "$INSTALL_DIR" "$LLAMA_DIR"
@@ -60,101 +112,41 @@ cmake --build build --config Release -j8   # Use 6-8 on WSL2 to avoid issues
 sudo ln -sf "$LLAMA_DIR/build/bin/llama-server" "$INSTALL_DIR/llama-server"
 sudo ln -sf "$LLAMA_DIR/build/bin/llama-cli"    "$INSTALL_DIR/llama-cli"
 
-echo "✅ llama.cpp built successfully (latest commit)"
+echo "✅ llama.cpp built successfully"
+_set_installed_version
 
-# ----------------------------- Model Download -----------------------------
-echo "Downloading default model (Qwopus-GLM-18B-Healed)..."
-cd "$MODELS_DIR"
+# Model selection
+select_model
 
-if [[ ! -f "$DEFAULT_MODEL" ]]; then
-    # Replace with actual HF link when you have it
-    echo "Please download $DEFAULT_MODEL manually from Hugging Face and place it in $MODELS_DIR"
-    # Example: huggingface-cli download --local-dir . username/Qwopus-GLM-18B-Healed "$DEFAULT_MODEL"
-else
-    echo "Model already present: $DEFAULT_MODEL"
-fi
+# Setup HuggingFace
+setup_hf
 
-# ----------------------------- Create Modern Start Script -----------------------------
-cat > "$INSTALL_DIR/start-llm" << 'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
+# Download selected model
+download_model
 
-# Config
-GGUF="${1:-$HOME/llm-models/Qwopus-GLM-18B-Healed-Q4_K_M.gguf}"
-CTX="${CTX:-65536}"
-NGL="${NGL:-99}"
-PORT="${PORT:-8080}"
-BATCH="1024"
-UBATCH="512"
-CACHE_K="q8_0"
-CACHE_V="q8_0"
-THREADS="6"
-
-LLAMA_BIN="$HOME/llama.cpp/build/bin/llama-server"
-
-if [[ ! -x "$LLAMA_BIN" ]]; then
-    echo "ERROR: llama-server not found. Re-run installer."
-    exit 1
-fi
-
-# Kill existing instance
-EXISTING_PID=$(ss -tlnp 2>/dev/null | awk -v p=":$PORT" '$4 ~ p {match($0,/pid=([0-9]+)/,a); print a[1]}' | head -1 || true)
-[[ -n "$EXISTING_PID" ]] && kill "$EXISTING_PID" 2>/dev/null && sleep 2
-
-echo "🚀 Starting llama-server (latest build)"
-echo "Model   : $(basename "$GGUF")"
-echo "Context : $CTX"
-echo "GPU     : Full offload"
-
-"$LLAMA_BIN" \
-    -m "$GGUF" \
-    -ngl "$NGL" \
-    --flash-attn on \
-    -c "$CTX" \
-    -b "$BATCH" \
-    -ub "$UBATCH" \
-    --cache-type-k "$CACHE_K" \
-    --cache-type-v "$CACHE_V" \
-    --host 0.0.0.0 \
-    --port "$PORT" \
-    --jinja \
-    --threads "$THREADS" \
-    --threads-batch "$THREADS" \
-    --no-mmap &
-
-LLAMA_PID=$!
-echo "$LLAMA_PID" > /tmp/llama-server.pid
-
-# Readiness check
-for i in {1..90}; do
-    if curl -sf "http://localhost:$PORT/v1/models" &>/dev/null; then
-        echo "✅ Server ready at http://localhost:$PORT/v1"
-        break
-    fi
-    sleep 1
-done
-EOF
-
+# Create wrapper scripts
+create_start_script
 chmod +x "$INSTALL_DIR/start-llm"
-
-# Create helper commands (stop, restart, status, etc.)
-cat > "$INSTALL_DIR/stop-llm" << 'EOF'
-#!/usr/bin/env bash
-PID=$(cat /tmp/llama-server.pid 2>/dev/null || echo "")
-[[ -n "$PID" ]] && kill "$PID" && echo "Stopped llama-server"
-EOF
 chmod +x "$INSTALL_DIR/stop-llm"
+chmod +x "$INSTALL_DIR/llm-status"
 
-# Add more helpers: restart-llm, llm-status, vram, switch-model as needed
+# Setup Hermes agent
+read -rp "Install Hermes Agent? [Y/n]: " install_hermes
+if [[ ! "$install_hermes" =~ ^[Nn]$ ]]; then
+    setup_hermes
+fi
 
-echo "✅ Wrapper scripts installed to $INSTALL_DIR"
 echo ""
-echo "Usage examples:"
-echo "   start-llm                     # starts default model"
-echo "   start-llm /path/to/other.gguf # start different model"
-echo "   stop-llm"
+echo "✅ Installation completed!"
 echo ""
-echo "Don't forget to add $INSTALL_DIR to your PATH in ~/.bashrc:"
-echo 'export PATH="$HOME/.local/bin:$PATH"'
-
-echo "Installation completed! Rebuild llama.cpp anytime with: cd ~/llama.cpp && git pull && ./install.sh (or run the cmake steps manually)."
+echo "Commands available:"
+echo "   start-llm          # Start server with selected model"
+echo "   stop-llm           # Stop server"
+echo "   llm-status         # Show server status"
+if command -v hermes &>/dev/null; then
+    echo "   hermes             # Run Hermes Agent"
+fi
+echo ""
+echo "Add to ~/.bashrc: export PATH=\"\$HOME/.local/bin:\$PATH\""
+echo ""
+echo "To rebuild llama.cpp: cd ~/llama.cpp && git pull && rm -rf build && cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86 -DLLAMA_CURL=ON && cmake --build build --config Release -j8"
