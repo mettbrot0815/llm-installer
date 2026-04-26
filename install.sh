@@ -2544,5 +2544,6 @@ echo -e "\\n"
 echo -e " ${YLW}Note:${RST} source ~/.bashrc or open a new terminal.\\n"
 echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal.\\n"
 echo -e " ${GRN}Persistent:${RST} sudo loginctl enable-linger $USER\\n\\n"
+fi
 
 exit 0
