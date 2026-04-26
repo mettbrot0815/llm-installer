@@ -138,24 +138,6 @@ detect_cuda_root(){
   echo "${root}"
 }
 
-detect_nvcc_bin(){
-  local bin=""
-  if command -v nvcc >/dev/null 2>&1; then
-    bin="$(command -v nvcc)"
-    if "${bin}" --version 2>/dev/null | grep -qi 'Cuda compilation tools'; then
-      echo "${bin}"
-      return 0
-    fi
-  fi
-  for cand in /usr/local/cuda/bin/nvcc /usr/local/cuda-13.1/bin/nvcc /usr/local/cuda-13.0/bin/nvcc /usr/local/cuda-12.9/bin/nvcc /usr/local/cuda-12.8/bin/nvcc; do
-    if [[ -x "${cand}" ]] && "${cand}" --version 2>/dev/null | grep -qi 'Cuda compilation tools'; then
-      echo "${cand}"
-      return 0
-    fi
-  done
-  echo ""
-}
-
 ensure_cuda_toolkit(){
   [[ "${GPU_VENDOR}" == "nvidia" ]] || return 0
   step "Validating CUDA Toolkit for llama.cpp (CUDAToolkit + CUDA_CUDART)"
@@ -173,7 +155,7 @@ ensure_cuda_toolkit(){
 
   cuda_root="$(detect_cuda_root)"
   if [[ -z "${cuda_root}" || ! -f "${cuda_root}/include/cuda_runtime.h" ]] || ! compgen -G "${cuda_root}/lib64/libcudart.so*" >/dev/null; then
-    warn "CUDA toolkit still incomplete; CUDA build may fail, CPU fallback is armed"
+    warn "CUDA toolkit still incomplete; falling back to CPU build backend for reliability"
     GPU_VENDOR="cpu"
     GPU_GEN="cpu"
     return 0
@@ -202,9 +184,8 @@ build_llama_cpp(){
     git checkout master
     git reset --hard origin/master
 
-    local cmake_flags="-DGGML_NATIVE=ON -DGGML_OPENMP=ON -DGGML_CUDA=OFF -DGGML_VULKAN=OFF"
+    local cmake_flags="-DGGML_NATIVE=ON -DGGML_OPENMP=ON"
     local cuda_root=""
-    local nvcc_bin=""
     case "${GPU_VENDOR}" in
       nvidia)
         ensure_cuda_toolkit
@@ -213,16 +194,8 @@ build_llama_cpp(){
         else
           BUILD_BACKEND="cuda"
           cuda_root="$(detect_cuda_root)"
-          nvcc_bin="$(detect_nvcc_bin)"
-          if [[ -z "${nvcc_bin}" ]]; then
-            warn "No valid nvcc compiler detected; forcing CPU backend to avoid gcc CUDA flag errors"
-            BUILD_BACKEND="cpu"
-          else
-            cmake_flags+=" -DGGML_CUDA=ON"
-          fi
+          cmake_flags+=" -DGGML_CUDA=ON"
           [[ -n "${cuda_root}" ]] && cmake_flags+=" -DCUDAToolkit_ROOT=${cuda_root}"
-          [[ -n "${nvcc_bin}" ]] && cmake_flags+=" -DCMAKE_CUDA_COMPILER=${nvcc_bin}"
-          cmake_flags+=" -DCMAKE_CUDA_ARCHITECTURES=native"
         fi
         ;;
       amd)
@@ -234,7 +207,6 @@ build_llama_cpp(){
         ;;
     esac
 
-    rm -rf build
     if ! cmake -S . -B build ${cmake_flags}; then
       if [[ "${BUILD_BACKEND}" == "cuda" ]]; then
         warn "CUDA CMake configure failed (likely missing CUDA_CUDART). Retrying with CPU fallback."
@@ -244,17 +216,7 @@ build_llama_cpp(){
         die "CMake configure failed"
       fi
     fi
-    if ! cmake --build build -j"$(nproc)"; then
-      if [[ "${BUILD_BACKEND}" == "cuda" ]]; then
-        warn "CUDA build failed (e.g. nvcc/gcc flag mismatch such as -compress-mode=size). Retrying with CPU fallback."
-        rm -rf build
-        BUILD_BACKEND="cpu"
-        cmake -S . -B build -DGGML_NATIVE=ON -DGGML_OPENMP=ON
-        cmake --build build -j"$(nproc)"
-      else
-        die "Build failed"
-      fi
-    fi
+    cmake --build build -j"$(nproc)"
     _write_version llama_cpp_commit "${local_remote}"
   )
   [[ -x "${BIN_DIR}/llama-server" ]] || die "llama-server build failed"
