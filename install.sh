@@ -1719,6 +1719,39 @@ fi
 
 
 # =============================================================================
+# 13f. Open WebUI — with version checking
+# =============================================================================
+_get_openwebui_version() {
+  if command -v open-webui &>/dev/null; then
+    open-webui --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
+  fi
+}
+
+if $INSTALL_OPEN_WEBUI; then
+  step "Checking Open WebUI..."
+  CURRENT_OPENWEBUI=$(_get_openwebui_version)
+  INSTALLED_OPENWEBUI=$(_get_installed_version "open-webui")
+
+  if [[ -n "$CURRENT_OPENWEBUI" ]] && [[ "$CURRENT_OPENWEBUI" == "$INSTALLED_OPENWEBUI" ]]; then
+    skip "Open WebUI already up to date (${CURRENT_OPENWEBUI})"
+  else
+    if ! command -v uv &>/dev/null; then
+      step "Installing uv package manager..."
+      tmp=$(mktemp); register_tmp "$tmp"
+      curl -LsSf https://astral.sh/uv/install.sh > "$tmp" || die "curl download failed."
+      sh "$tmp" || die "uv install failed."
+      rm "$tmp"
+    fi
+    step "Installing/Updating Open WebUI..."
+    uv tool install open-webui || die "Open WebUI install failed."
+    NEW_OPENWEBUI=$(_get_openwebui_version)
+    _set_installed_version "open-webui" "${NEW_OPENWEBUI:-latest}"
+    mkdir -p ~/.open-webui
+    ok "Open WebUI installed/updated. Run with: DATA_DIR=~/.open-webui open-webui serve --port ${OPEN_WEBUI_PORT}"
+  fi
+fi
+
+# =============================================================================
 # 13e-codex. OpenAI Codex CLI — with version checking
 # =============================================================================
 _get_codex_version() {
