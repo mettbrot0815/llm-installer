@@ -319,12 +319,14 @@ elif [[ -f "$TOKEN_FILE" ]]; then
   [[ -n "$GITHUB_TOKEN" ]] && ok "GITHUB_TOKEN loaded from ${TOKEN_FILE}."
 fi
 
-if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
+if [[ -z "$GITHUB_TOKEN" ]] && [[ -z "$_SMO" ]]
+then
   warn "GitHub token not found in environment or ${TOKEN_FILE}."
   warn "Please set GITHUB_TOKEN or GH_TOKEN and re-run, or enter it below."
 fi
 
-if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
+if [[ -z "$GITHUB_TOKEN" ]] && [[ -z "$_SMO" ]]
+then
   if [[ -t 0 ]]; then
     step "Setting up GitHub CLI authentication..."
     gh auth login
@@ -333,6 +335,7 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
   else
     ok "Non-interactive — skipping GitHub CLI authentication."
   fi
+fi
 
 # =============================================================================
 # 3. System packages [SKIPPED by switch-model]
@@ -2544,6 +2547,5 @@ echo -e "\\n"
 echo -e " ${YLW}Note:${RST} source ~/.bashrc or open a new terminal.\\n"
 echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal.\\n"
 echo -e " ${GRN}Persistent:${RST} sudo loginctl enable-linger $USER\\n\\n"
-fi
 
 exit 0
