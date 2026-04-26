@@ -144,6 +144,9 @@ if ! sudo -n true 2>/dev/null; then
   die "Sudo access is required but not available. Please ensure you can run sudo commands."
 fi
 
+# Create version file directory after validations
+mkdir -p "$(dirname "$VERSION_FILE")"
+
 # Combined exit handler — both cleanup() and umask restore fire.
 _combined_exit_handler() {
   cleanup
