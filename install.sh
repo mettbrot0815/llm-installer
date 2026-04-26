@@ -94,7 +94,7 @@ need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1
 install_base_deps(){
   step "Installing base dependencies"
   sudo apt-get update -y
-  sudo apt-get install -y git curl ca-certificates build-essential cmake pkg-config jq bc lsof whiptail python3 python3-venv
+  sudo apt-get install -y git curl ca-certificates build-essential cmake pkg-config jq bc lsof whiptail python3 python3-venv software-properties-common
 }
 
 detect_hardware(){
@@ -122,6 +122,51 @@ detect_hardware(){
   ok "System RAM: ${SYS_RAM_GB}GB"
 }
 
+detect_cuda_root(){
+  local root=""
+  if command -v nvcc >/dev/null 2>&1; then
+    root="$(dirname "$(dirname "$(command -v nvcc)")")"
+  fi
+  if [[ -z "${root}" || ! -d "${root}/include" || ! -d "${root}/lib64" ]]; then
+    for cand in /usr/local/cuda /usr/local/cuda-13.1 /usr/local/cuda-13.0 /usr/local/cuda-12.9 /usr/local/cuda-12.8 /opt/cuda; do
+      if [[ -d "${cand}/include" && -d "${cand}/lib64" ]]; then
+        root="${cand}"
+        break
+      fi
+    done
+  fi
+  echo "${root}"
+}
+
+ensure_cuda_toolkit(){
+  [[ "${GPU_VENDOR}" == "nvidia" ]] || return 0
+  step "Validating CUDA Toolkit for llama.cpp (CUDAToolkit + CUDA_CUDART)"
+
+  local cuda_root
+  cuda_root="$(detect_cuda_root)"
+  if [[ -n "${cuda_root}" && -f "${cuda_root}/include/cuda_runtime.h" ]] && compgen -G "${cuda_root}/lib64/libcudart.so*" >/dev/null; then
+    ok "CUDA toolkit detected at ${cuda_root}"
+    return 0
+  fi
+
+  warn "CUDA runtime components not fully detected; installing CUDA toolkit packages (12.8+ preferred)"
+  sudo apt-get update -y
+  sudo apt-get install -y nvidia-cuda-toolkit || true
+
+  cuda_root="$(detect_cuda_root)"
+  if [[ -z "${cuda_root}" || ! -f "${cuda_root}/include/cuda_runtime.h" ]] || ! compgen -G "${cuda_root}/lib64/libcudart.so*" >/dev/null; then
+    warn "CUDA toolkit still incomplete; falling back to CPU build backend for reliability"
+    GPU_VENDOR="cpu"
+    GPU_GEN="cpu"
+    return 0
+  fi
+
+  if [[ ! -e /usr/local/cuda ]]; then
+    sudo ln -s "${cuda_root}" /usr/local/cuda || true
+  fi
+  ok "CUDA toolkit ready: ${cuda_root}"
+}
+
 build_llama_cpp(){
   step "Installing/Updating llama.cpp"
   if [[ ! -d "${LLAMA_DIR}/.git" ]]; then
@@ -140,10 +185,18 @@ build_llama_cpp(){
     git reset --hard origin/master
 
     local cmake_flags="-DGGML_NATIVE=ON -DGGML_OPENMP=ON"
+    local cuda_root=""
     case "${GPU_VENDOR}" in
       nvidia)
-        BUILD_BACKEND="cuda"
-        cmake_flags+=" -DGGML_CUDA=ON"
+        ensure_cuda_toolkit
+        if [[ "${GPU_VENDOR}" != "nvidia" ]]; then
+          BUILD_BACKEND="cpu"
+        else
+          BUILD_BACKEND="cuda"
+          cuda_root="$(detect_cuda_root)"
+          cmake_flags+=" -DGGML_CUDA=ON"
+          [[ -n "${cuda_root}" ]] && cmake_flags+=" -DCUDAToolkit_ROOT=${cuda_root}"
+        fi
         ;;
       amd)
         BUILD_BACKEND="vulkan"
@@ -154,7 +207,15 @@ build_llama_cpp(){
         ;;
     esac
 
-    cmake -S . -B build ${cmake_flags}
+    if ! cmake -S . -B build ${cmake_flags}; then
+      if [[ "${BUILD_BACKEND}" == "cuda" ]]; then
+        warn "CUDA CMake configure failed (likely missing CUDA_CUDART). Retrying with CPU fallback."
+        BUILD_BACKEND="cpu"
+        cmake -S . -B build -DGGML_NATIVE=ON -DGGML_OPENMP=ON
+      else
+        die "CMake configure failed"
+      fi
+    fi
     cmake --build build -j"$(nproc)"
     _write_version llama_cpp_commit "${local_remote}"
   )
