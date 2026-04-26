@@ -307,48 +307,14 @@ if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
 fi
 
 if [[ -z "$GITHUB_TOKEN" && -z "$_SMO" ]]; then
-  echo -e "\\n ${BLD}Why add a GitHub token?${RST}\\n"
-  echo -e " Higher API rate limits (5,000 vs 60) · access private repositories\\n"
-  echo -e " ${CYN}https://github.com/settings/tokens${RST} → Generate new token (classic)\\n"
-  echo -e " Required scopes: ${YLW}repo${RST}, ${YLW}read:org${RST} (optional)\\n\\n"
   if [[ -t 0 ]]; then
-    read -rp " Do you have a GitHub token to add? [y/N]: " gh_yn
-    if [[ "$gh_yn" =~ ^[Yy]$ ]]; then
-      read -rp " Paste your token (starts with ghp_): " GITHUB_TOKEN
-      GITHUB_TOKEN="${GITHUB_TOKEN//[[:space:]]/}"
-      if [[ "$GITHUB_TOKEN" =~ ^ghp_ ]]; then
-        ok "Token accepted."
-      else
-        warn "Token doesn't start with 'ghp_' — using anyway."
-      fi
-      _save_token_to_file "GITHUB_TOKEN" "$GITHUB_TOKEN"
-      ok "GITHUB_TOKEN saved to ${TOKEN_FILE} (mode 600)."
-    else
-      ok "Skipping — unauthenticated GitHub access (rate-limited)."
-    fi
-  else
-    ok "Non-interactive — skipping GitHub token prompt."
-  fi
-fi
-
-# GitHub token — use GH_TOKEN/GITHUB_TOKEN env var only
-if [[ -n "$GITHUB_TOKEN" ]]; then
-  export GITHUB_TOKEN
-  export GH_TOKEN="$GITHUB_TOKEN"
-elif [[ -n "$GH_TOKEN" ]]; then
-  export GITHUB_TOKEN="$GH_TOKEN"
-fi
-
-# Authenticate GitHub CLI and set up Git credentials if token is available
-if [[ -n "$GITHUB_TOKEN" ]]; then
-  step "Setting up GitHub CLI authentication and Git credentials..."
-  if gh auth login --with-token "$GITHUB_TOKEN" 2>/dev/null; then
+    step "Setting up GitHub CLI authentication..."
+    gh auth login
     gh auth setup-git 2>/dev/null || warn "gh auth setup-git failed — Git pushes may require manual auth"
-    ok "GitHub CLI and Git authentication configured."
+    ok "GitHub CLI authentication configured."
   else
-    warn "gh auth login failed — you may need to run it manually and then gh auth setup-git"
+    ok "Non-interactive — skipping GitHub CLI authentication."
   fi
-fi
 
 # =============================================================================
 # 3. System packages [SKIPPED by switch-model]
