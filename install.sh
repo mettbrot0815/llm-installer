@@ -32,15 +32,6 @@ unset SWITCH_MODEL_ONLY
 # ── Version tracking file ──────────────────────────────────────────────────────
 readonly VERSION_FILE="${HOME}/.llm-versions"
 
-# Validate HOME directory
-if [[ ! -d "$HOME" ]]; then
-  die "HOME directory '$HOME' does not exist or is not a directory."
-fi
-
-# Check sudo access
-if ! sudo -n true 2>/dev/null; then
-  die "Sudo access is required but not available. Please ensure you can run sudo commands."
-fi
 mkdir -p "$(dirname "$VERSION_FILE")"
 touch "$VERSION_FILE"
 
@@ -142,6 +133,16 @@ register_tmp() { TMPFILES+=("$1"); }
 
 # ── Save original umask ───────────────────────────────────────────────────────
 _ORIG_UMASK=$(umask)
+
+# Validate HOME directory
+if [[ ! -d "$HOME" ]]; then
+  die "HOME directory '$HOME' does not exist or is not a directory."
+fi
+
+# Check sudo access
+if ! sudo -n true 2>/dev/null; then
+  die "Sudo access is required but not available. Please ensure you can run sudo commands."
+fi
 
 # Combined exit handler — both cleanup() and umask restore fire.
 _combined_exit_handler() {
