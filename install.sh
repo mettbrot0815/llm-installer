@@ -140,8 +140,8 @@ if [[ ! -d "$HOME" ]]; then
 fi
 
 # Check sudo access
-if ! sudo -n true 2>/dev/null; then
-  die "Sudo access is required but not available. Please ensure you can run sudo commands."
+if ! sudo true; then
+  die "Sudo access is required. Please provide the correct password or ensure sudo is configured."
 fi
 
 # Create version file directory after validations
