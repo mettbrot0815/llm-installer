@@ -1410,14 +1410,15 @@ select_optional_components() {
   fi
 
   local choices
-  if ! choices=$(whiptail --title "Optional Components" --checklist \
-    "Select additional components to install (use SPACE to toggle, ENTER to confirm):" \
-    20 80 4 \
-    "goose" "Goose AI Agent (Rust CLI, 30k+ stars)" OFF \
-    "opencode" "OpenCode (Terminal TUI coding agent)" OFF \
-    "openclaude" "OpenClaude (Claude-compatible CLI)" OFF \
-    "codex" "OpenAI Codex CLI (openai/codex)" OFF \
-    3>&1 1>&2 2>&3); then
+   if ! choices=$(whiptail --title "Optional Components" --checklist \
+     "Select additional components to install (use SPACE to toggle, ENTER to confirm):" \
+     21 80 5 \
+     "goose" "Goose AI Agent (Rust CLI, 30k+ stars)" OFF \
+     "opencode" "OpenCode (Terminal TUI coding agent)" OFF \
+     "openclaude" "OpenClaude (Claude-compatible CLI)" OFF \
+     "codex" "OpenAI Codex CLI (openai/codex)" OFF \
+     "open-webui" "Open WebUI (Web interface for LLMs)" OFF \
+     3>&1 1>&2 2>&3); then
     echo ""
     ok "No optional components selected (user cancelled)."
     return 1
@@ -1433,27 +1434,30 @@ select_optional_components() {
     selected+=("$line")
   done < "$tmpfile"
 
-  INSTALL_GOOSE=false
-  INSTALL_OPENCODE=false
-  INSTALL_OPENCLAUDE=false
-  INSTALL_CODEX=false
+   INSTALL_GOOSE=false
+   INSTALL_OPENCODE=false
+   INSTALL_OPENCLAUDE=false
+   INSTALL_CODEX=false
+   INSTALL_OPEN_WEBUI=false
 
   for item in "${selected[@]}"; do
-    case "$item" in
-      goose) INSTALL_GOOSE=true ;;
-      opencode) INSTALL_OPENCODE=true ;;
-      openclaude) INSTALL_OPENCLAUDE=true ;;
-      codex) INSTALL_CODEX=true ;;
-      *) warn "Unknown component '$item' — skipped." ;;
-    esac
+     case "$item" in
+       goose) INSTALL_GOOSE=true ;;
+       opencode) INSTALL_OPENCODE=true ;;
+       openclaude) INSTALL_OPENCLAUDE=true ;;
+       codex) INSTALL_CODEX=true ;;
+       open-webui) INSTALL_OPEN_WEBUI=true ;;
+       *) warn "Unknown component '$item' — skipped." ;;
+     esac
   done
 
   echo ""
   local count=0
-  if $INSTALL_GOOSE; then echo " ✓ Goose"; count=$((count+1)); fi
-  if $INSTALL_OPENCODE; then echo " ✓ OpenCode"; count=$((count+1)); fi
-  if $INSTALL_OPENCLAUDE; then echo " ✓ OpenClaude"; count=$((count+1)); fi
-  if $INSTALL_CODEX; then echo " ✓ Codex"; count=$((count+1)); fi
+   if $INSTALL_GOOSE; then echo " ✓ Goose"; count=$((count+1)); fi
+   if $INSTALL_OPENCODE; then echo " ✓ OpenCode"; count=$((count+1)); fi
+   if $INSTALL_OPENCLAUDE; then echo " ✓ OpenClaude"; count=$((count+1)); fi
+   if $INSTALL_CODEX; then echo " ✓ Codex"; count=$((count+1)); fi
+   if $INSTALL_OPEN_WEBUI; then echo " ✓ Open WebUI"; count=$((count+1)); fi
 
   if [[ $count -eq 0 ]]; then
     ok "No optional components selected."
@@ -1801,6 +1805,24 @@ if $INSTALL_CODEX; then
       _configure_codex
     fi
   fi
+fi
+
+if $INSTALL_OPEN_WEBUI; then
+  step "Installing uv package manager..."
+  tmp=$(mktemp); register_tmp "$tmp"
+  curl -LsSf https://astral.sh/uv/install.sh > "$tmp" || die "curl download failed."
+  sh "$tmp" || die "uv install failed."
+  rm "$tmp"
+
+  step "Installing Open WebUI..."
+  uv tool install open-webui || die "Open WebUI install failed."
+
+  readonly OPEN_WEBUI_PORT=3000
+  if ss -tlnp 2>/dev/null | grep -q ":${OPEN_WEBUI_PORT} "; then
+    warn "Port ${OPEN_WEBUI_PORT} is already in use — Open WebUI may not start properly."
+  fi
+  mkdir -p ~/.open-webui
+  ok "Open WebUI installed. Run with: DATA_DIR=~/.open-webui open-webui serve --port ${OPEN_WEBUI_PORT}"
 fi
 
 # =============================================================================
