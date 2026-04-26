@@ -21,12 +21,26 @@ fi
 
 set -euo pipefail
 
+# Temporary files array for cleanup
+TMPFILES=()
+trap 'rm -f "${TMPFILES[@]}"' EXIT
+
 # ── SWITCH_MODEL_ONLY sentinel ─────────────────────────────────────────────────
 _SMO="${SWITCH_MODEL_ONLY:-}"
 unset SWITCH_MODEL_ONLY
 
 # ── Version tracking file ──────────────────────────────────────────────────────
 readonly VERSION_FILE="${HOME}/.llm-versions"
+
+# Validate HOME directory
+if [[ ! -d "$HOME" ]]; then
+  die "HOME directory '$HOME' does not exist or is not a directory."
+fi
+
+# Check sudo access
+if ! sudo -n true 2>/dev/null; then
+  die "Sudo access is required but not available. Please ensure you can run sudo commands."
+fi
 mkdir -p "$(dirname "$VERSION_FILE")"
 touch "$VERSION_FILE"
 
@@ -1315,7 +1329,9 @@ if [[ -z "$_SMO" ]]; then
       npm cache clean --force 2>/dev/null || true
       if ! npm --version >/dev/null 2>&1; then
         warn "npm appears broken after Hermes install — attempting reinstall"
-        curl -L https://www.npmjs.com/install.sh | sh 2>/dev/null || warn "npm reinstall failed — continuing anyway"
+        tmp=$(mktemp); register_tmp "$tmp"
+        curl -L https://www.npmjs.com/install.sh > "$tmp" || die "curl download failed."
+        sh "$tmp" 2>/dev/null || warn "npm reinstall failed — continuing anyway"
       fi
     fi
   fi
