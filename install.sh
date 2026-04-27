@@ -472,12 +472,17 @@ if [[ -z "$_SMO" && "$HAS_NVIDIA" == "true" ]]; then
     [[ -z "$CUDA_VERSION" ]] && CUDA_VERSION="unknown"
     INSTALLED_CUDA=$(_get_installed_version "cuda")
     if [[ -n "$CUDA_VERSION" && "$CUDA_VERSION" != "unknown" ]] && \
-      _version_compare "$CUDA_VERSION" "12.6" && \
-      [[ "$INSTALLED_CUDA" == "12.6" ]]; then
-      ok "CUDA 12.6 already installed (${CUDA_VERSION}) — skipping"
+      _version_compare "$CUDA_VERSION" "12.8" && \
+      [[ "$INSTALLED_CUDA" == "12.8" ]]; then
+      ok "CUDA 12.8 already installed (${CUDA_VERSION}) — skipping"
     else
       if [[ -n "$CUDA_VERSION" && "$CUDA_VERSION" != "unknown" ]]; then
-        _set_installed_version "cuda" "$CUDA_VERSION"
+        if _version_compare "$CUDA_VERSION" "12.8"; then
+          _set_installed_version "cuda" "12.8"
+          ok "CUDA ${CUDA_VERSION} >= 12.8 detected — recorded to version cache"
+        else
+          warn "CUDA ${CUDA_VERSION} < 12.8, may have compatibility issues"
+        fi
         ok "CUDA ${CUDA_VERSION} detected — recorded to version cache"
       else
         warn "CUDA version unknown, skipping install"
