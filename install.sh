@@ -1691,6 +1691,7 @@ if $INSTALL_OPENCLAUDE; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq npm
   fi
   # Actually install OpenClaude via npm
+  npm audit --audit-level=high 2>/dev/null || warn "npm audit check failed - proceeding anyway"
   step "Installing OpenClaude (@gitlawb/openclaude)..."
   if npm install -g @gitlawb/openclaude 2>&1; then
     ok "OpenClaude installed successfully."
