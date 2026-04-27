@@ -2049,6 +2049,7 @@ WRAPPER
   chmod +x "${HOME}/.local/bin/llama-server-wrapper"
 
   # FIX: Use unquoted heredoc delimiter to expand ${HOME} at write time.
+  mkdir -p "${HOME}/.config/systemd/user"
   cat >"${HOME}/.config/systemd/user/llama-server.service" <<SERVICE
 [Unit]
 Description=llama-server LLM inference (llama.cpp)
