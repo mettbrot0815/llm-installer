@@ -165,7 +165,7 @@ trap _combined_exit_handler EXIT INT TERM
 # If a hash mismatches, the installer will abort with an integrity error.
 # Set to "" to disable checking for a specific script (falls back to warn-only).
 declare -A INSTALLER_HASHES=(
-  ["hermes"]="251c1b97dda5db092d152d34afa315612fe27329e821c5414130f2a7e0c011e2"
+  ["hermes"]="784f918cb752eb6fb0196004a8e65bc00561177a677dd84585042a990a9fe4b2"
   ["goose"]="ef85145e8d0162106d9d9c8ef51dd51e9d0b6a3ee5edddb9f6658fa7f0f0a892"
   ["opencode"]="fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e"
 )
