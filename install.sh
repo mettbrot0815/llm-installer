@@ -2474,6 +2474,7 @@ if [[ -z "$_SMO" ]]; then
   $INSTALL_OPENCODE && echo -e " OpenCode → opencode (alias: oc)\\n"
   $INSTALL_OPENCLAUDE && echo -e " OpenClaude → openclaude\\n"
   $INSTALL_CODEX && echo -e " Codex CLI → codex\\n"
+  $INSTALL_OPEN_WEBUI && echo -e " Open WebUI → open-webui serve --port 3000\\n"
   echo -e "\\n"
 fi
 
@@ -2494,6 +2495,7 @@ $INSTALL_GOOSE && echo -e " ${CYN}goose${RST} Goose\\n"
 $INSTALL_OPENCODE && echo -e " ${CYN}opencode${RST} / ${CYN}oc${RST} OpenCode\\n"
 $INSTALL_OPENCLAUDE && echo -e " ${CYN}openclaude${RST} OpenClaude\\n"
 $INSTALL_CODEX && echo -e " ${CYN}codex${RST} Codex CLI\\n"
+$INSTALL_OPEN_WEBUI && echo -e " ${CYN}open-webui${RST} Open WebUI\\n"
 echo -e "\\n"
 echo -e " ${YLW}Note:${RST} source ~/.bashrc or open a new terminal.\\n"
 echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal.\\n"
