@@ -84,7 +84,7 @@ _version_compare() {
     v2="${v2//[^0-9]/}"
     v1="${v1:-0}"
     v2="${v2:-0}"
-    # Remove leading zeros for arithmetic
+    # Remove leading zeros for arithmetic (10# forces base 10 interpretation)
     v1=$((10#$v1))
     v2=$((10#$v2))
     if ((v1 > v2)); then
@@ -122,7 +122,6 @@ readonly LLAMA_PORT=8080
 
 
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
-TMPFILES=()
 cleanup() {
   local f
   for f in "${TMPFILES[@]}"; do
