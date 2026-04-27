@@ -292,15 +292,29 @@ if [[ -z "$HF_TOKEN" && -z "$_SMO" ]]; then
   if [[ -t 0 ]]; then
     read -rp " Do you have a HuggingFace token to add? [y/N]: " hf_yn
     if [[ "$hf_yn" =~ ^[Yy]$ ]]; then
-      read -rp " Paste your token (starts with hf_): " HF_TOKEN
-      HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
-      if [[ "$HF_TOKEN" =~ ^hf_ ]]; then
-        ok "Token accepted."
-      else
-        warn "Token doesn't start with 'hf_' — using anyway."
+      while true; do
+        read -rp " Paste your token (starts with hf_): " HF_TOKEN
+        HF_TOKEN="${HF_TOKEN//[[:space:]]/}"
+        if [[ "$HF_TOKEN" =~ ^hf_ ]]; then
+          ok "Token accepted."
+          break
+        else
+          warn "Token doesn't start with 'hf_'."
+          read -rp " Try again (t), continue anyway (c), or skip (N)? [t/c/N]: " choice
+          if [[ "$choice" =~ ^[Tt]$ ]]; then
+            continue
+          elif [[ "$choice" =~ ^[Cc]$ ]]; then
+            break
+          else
+            unset HF_TOKEN
+            break
+          fi
+        fi
+      done
+      if [[ -n "$HF_TOKEN" ]]; then
+        _save_token_to_file "HF_TOKEN" "$HF_TOKEN"
+        ok "HF_TOKEN saved to ${TOKEN_FILE} (mode 600)."
       fi
-      _save_token_to_file "HF_TOKEN" "$HF_TOKEN"
-      ok "HF_TOKEN saved to ${TOKEN_FILE} (mode 600)."
     else
       ok "Skipping — unauthenticated downloads (slower, rate-limited)."
     fi
@@ -1261,7 +1275,7 @@ else
       else
         cmake -B build -DGGML_CCACHE=ON
       fi
-      cmake --build build --config Release -j"$(nproc)"
+      time cmake --build build --config Release -j"$(nproc)"
       if sudo -n true 2>/dev/null; then
         sudo cmake --install build || warn "System install failed — using build directory."
       else
