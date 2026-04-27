@@ -21,9 +21,13 @@ fi
 
 set -euo pipefail
 
+# Check for WSL environment
+if ! grep -q "microsoft" /proc/version 2>/dev/null; then
+  warn "This script is optimized for WSL2. Running on non-WSL systems may have issues."
+fi
+
 # Temporary files array for cleanup
 TMPFILES=()
-trap 'rm -f "${TMPFILES[@]}"' EXIT
 
 # ── SWITCH_MODEL_ONLY sentinel ─────────────────────────────────────────────────
 _SMO="${SWITCH_MODEL_ONLY:-}"
@@ -150,6 +154,7 @@ mkdir -p "$(dirname "$VERSION_FILE")"
 _combined_exit_handler() {
   cleanup
   umask "$_ORIG_UMASK"
+  unset HF_TOKEN GITHUB_TOKEN 2>/dev/null || true
 }
 trap _combined_exit_handler EXIT INT TERM
 
@@ -1983,11 +1988,13 @@ LAUNCH_TEMPLATE
 # Assign PIDFILE_PATH first, THEN export
 # FIX: PIDFILE_PATH must NOT be registered for cleanup — it is baked into
 # start-llm.sh and must persist after the installer exits.
-PIDFILE_PATH=$(mktemp /tmp/llama-server.XXXXXX.pid) || die "Failed to create PID file"
+mkdir -p ~/.llm-run
+PIDFILE_PATH=$(mktemp ~/.llm-run/llama-server.XXXXXX.pid) || die "Failed to create PID file"
 export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA NGL_VAL BATCH_VAL UBATCH_VAL CACHE_K_VAL CACHE_V_VAL EXTRA_FLAGS PIDFILE_PATH LLAMA_PORT
 
 # Use envsubst if available, otherwise fallback to sed
 if command -v envsubst &>/dev/null; then
+  # shellcheck disable=SC2016  # Variables intentionally single-quoted for envsubst expansion
   envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${NGL_VAL} ${BATCH_VAL} ${UBATCH_VAL} ${CACHE_K_VAL} ${CACHE_V_VAL} ${EXTRA_FLAGS} ${PIDFILE_PATH} ${LLAMA_PORT}' \
     <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
 else
@@ -2589,5 +2596,4 @@ echo -e "\\n"
 echo -e " ${YLW}Note:${RST} source ~/.bashrc or open a new terminal.\\n"
 echo -e " ${YLW}Auto-start:${RST} llama-server starts automatically on new terminal.\\n"
 echo -e " ${GRN}Persistent:${RST} sudo loginctl enable-linger $USER\\n\\n"
-fi
 exit 0
