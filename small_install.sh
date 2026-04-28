@@ -3,13 +3,15 @@ set -euo pipefail
 
 echo "========================================"
 echo "🚀 Fresh Ubuntu 24.04 WSL2 + RTX 3060 12GB Installer"
-echo "   CUDA 12.6 + Optimized llama.cpp + Hermes Agent"
+echo "   CUDA 12.6 + Optimized llama.cpp + Hermes Agent + Open WebUI"
 echo "========================================"
 
 MODELS_DIR="/home/$USER/llm-models"
 LLAMA_DIR="/home/$USER/llama.cpp"
 HERMES_SCRIPT="/home/$USER/start-hermes.sh"
+WEBUI_DIR="/home/$USER/open-webui"
 PORT="8080"
+WEBUI_PORT="3000"
 
 # ====================== 1. FULL SYSTEM & CUDA SETUP ======================
 setup_fresh_system() {
@@ -98,7 +100,33 @@ build_llama() {
   echo "✅ llama.cpp built successfully for your RTX 3060!"
 }
 
-# ====================== 4. CREATE OPTIMIZED HERMES AGENT ======================
+# ====================== 4. INSTALL UV + OPEN WEBUI ======================
+install_openwebui() {
+  echo "→ Installing uv (Python package manager)..."
+
+  # Install uv via official installer
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+
+  # Make uv available in current session
+  export PATH="$HOME/.local/bin:$PATH"
+
+  echo "✅ uv installed: $(uv --version)"
+
+  echo "→ Installing Open WebUI via uv..."
+
+  mkdir -p "$WEBUI_DIR"
+  cd "$WEBUI_DIR"
+
+  # Create a virtual environment with uv and install open-webui
+  uv venv .venv --python 3.11
+  source .venv/bin/activate
+  uv pip install open-webui
+  deactivate
+
+  echo "✅ Open WebUI installed in ${WEBUI_DIR}/.venv"
+}
+
+# ====================== 5. CREATE OPTIMIZED HERMES AGENT ======================
 create_hermes_script() {
   auto_tune_settings
 
@@ -146,7 +174,90 @@ EOF
   echo "✅ Hermes Agent start script created."
 }
 
-# ====================== 5. MAIN MENU ======================
+# ====================== 6. SETUP WSL2 AUTOSTART ======================
+setup_autostart() {
+  echo "→ Setting up WSL2 autostart for llama-server and Open WebUI..."
+
+  # --- systemd service: llama-server ---
+  sudo tee /etc/systemd/system/llama-server.service > /dev/null << EOF
+[Unit]
+Description=llama.cpp server (Hermes Agent)
+After=network.target
+
+[Service]
+Type=simple
+User=${USER}
+WorkingDirectory=/home/${USER}
+Environment="PATH=/usr/local/cuda-12.6/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64"
+ExecStart=${LLAMA_DIR}/build/bin/llama-server \
+  -m ${MODELS_DIR}/Harmonic-Hermes-9B-Q5_K_M.gguf \
+  -ngl 94 \
+  -fa 1 \
+  -b 1024 \
+  -ub 512 \
+  -c 65536 \
+  --cache-type-k q8_0 \
+  --cache-type-v q4_0 \
+  --host 0.0.0.0 \
+  --port ${PORT} \
+  --jinja \
+  --no-mmap \
+  --defrag-thold 0.1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # --- systemd service: open-webui ---
+  sudo tee /etc/systemd/system/open-webui.service > /dev/null << EOF
+[Unit]
+Description=Open WebUI
+After=network.target llama-server.service
+
+[Service]
+Type=simple
+User=${USER}
+WorkingDirectory=${WEBUI_DIR}
+Environment="PATH=/home/${USER}/.local/bin:${WEBUI_DIR}/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="OPENAI_API_BASE_URL=http://localhost:${PORT}/v1"
+Environment="OPENAI_API_KEY=sk-placeholder"
+ExecStart=${WEBUI_DIR}/.venv/bin/open-webui serve --port ${WEBUI_PORT}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # Enable both services
+  sudo systemctl daemon-reload
+  sudo systemctl enable llama-server.service
+  sudo systemctl enable open-webui.service
+
+  # WSL2 does not run systemd by default — ensure it is enabled in wsl.conf
+  if ! grep -q "systemd=true" /etc/wsl.conf 2>/dev/null; then
+    echo "→ Enabling systemd in /etc/wsl.conf..."
+    sudo tee -a /etc/wsl.conf > /dev/null << EOF
+
+[boot]
+systemd=true
+EOF
+    echo "⚠️  systemd was just enabled. You must restart WSL2 once for autostart to take effect:"
+    echo "    Run in PowerShell: wsl --shutdown"
+    echo "    Then reopen WSL2."
+  else
+    echo "✅ systemd already enabled in /etc/wsl.conf."
+  fi
+
+  echo "✅ Autostart configured:"
+  echo "   llama-server → http://localhost:${PORT}/v1"
+  echo "   open-webui   → http://localhost:${WEBUI_PORT}"
+}
+
+# ====================== 7. MAIN MENU ======================
 main_menu() {
   while true; do
     echo ""
@@ -156,9 +267,12 @@ main_menu() {
     echo "1) Rebuild llama.cpp"
     echo "2) Download Harmonic-Hermes-9B-Q5_K_M.gguf"
     echo "3) Create/Update Hermes Agent script"
-    echo "4) Start Hermes Agent"
-    echo "5) Exit"
-    read -rp "Choose [1-5]: " option
+    echo "4) Start Hermes Agent (manual)"
+    echo "5) Install / Update Open WebUI"
+    echo "6) Setup autostart (llama-server + Open WebUI)"
+    echo "7) Show service status"
+    echo "8) Exit"
+    read -rp "Choose [1-8]: " option
 
     case $option in
       1) build_llama ;;
@@ -177,7 +291,16 @@ main_menu() {
           echo "Please run option 3 first."
         fi
         ;;
-      5) echo "Goodbye!"; exit 0 ;;
+      5) install_openwebui ;;
+      6) setup_autostart ;;
+      7)
+        echo "--- llama-server ---"
+        sudo systemctl status llama-server.service --no-pager || true
+        echo ""
+        echo "--- open-webui ---"
+        sudo systemctl status open-webui.service --no-pager || true
+        ;;
+      8) echo "Goodbye!"; exit 0 ;;
       *) echo "Invalid option." ;;
     esac
   done
@@ -190,15 +313,20 @@ mkdir -p "$MODELS_DIR"
 
 build_llama
 create_hermes_script
+install_openwebui
+setup_autostart
 
 echo ""
 echo "========================================"
 echo "✅ Installation Completed Successfully!"
 echo ""
+echo "Services will autostart on next WSL2 boot."
+echo "If systemd was just enabled, run in PowerShell: wsl --shutdown"
+echo ""
 echo "Next steps:"
 echo "   1. Download model     → Press 2"
-echo "   2. Create start script → Press 3"
-echo "   3. Start server       → Press 4"
+echo "   2. Open WebUI         → http://localhost:${WEBUI_PORT}"
+echo "   3. llama-server API   → http://localhost:${PORT}/v1"
 echo ""
 echo "Your RTX 3060 12GB is now optimized (65k context recommended)."
 main_menu
