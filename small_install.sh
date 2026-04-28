@@ -261,7 +261,7 @@ Environment="PORT=${WEBUI_PORT}"
 Environment="DATA_DIR=/home/${USER}/.open-webui"
 Environment="OPENAI_API_BASE_URL=http://localhost:${PORT}/v1"
 Environment="OPENAI_API_KEY=sk-placeholder"
-ExecStart=${WEBUI_DIR}/.venv/bin/python -m open_webui serve
+ExecStart=${WEBUI_DIR}/.venv/bin/open-webui serve
 Restart=on-failure
 RestartSec=5
 
