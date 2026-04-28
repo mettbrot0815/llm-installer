@@ -12,7 +12,7 @@ PORT="8080"
 
 # ====================== INSTALL DEPENDENCIES ======================
 install_dependencies() {
-  echo "→ Installing required packages (cmake, build tools, etc.)..."
+  echo "→ Installing required packages (cmake, build tools, git, etc.)..."
   sudo apt-get update -qq
   sudo apt-get install -y build-essential cmake git curl wget python3 python3-pip
   echo "✅ Dependencies installed."
@@ -32,17 +32,17 @@ detect_vram() {
 
 auto_tune_settings() {
   detect_vram
-  # Best settings for RTX 3060 12GB + limited system RAM
+  # Best stable settings for RTX 3060 12GB + limited system RAM
   CTX="65536"
   NGL="95"
   BATCH="1024"
   UBATCH="512"
-  echo "→ Tuned for your hardware: 65k context, 95 layers, balanced batch"
+  echo "→ Tuned for your hardware: 65k context, 95 layers, balanced batch sizes"
 }
 
-# ====================== BUILD LLAMA.CPP ======================
+# ====================== BUILD LLAMA.CPP (Clean & Optimized) ======================
 build_llama() {
-  echo "→ Building/updating llama.cpp (RTX 3060 optimized)..."
+  echo "→ Building/updating llama.cpp with RTX 3060 optimizations..."
 
   cd /home/"$USER" || exit
 
@@ -64,15 +64,15 @@ build_llama() {
     -DGGML_CUDA_GRAPHS=ON \
     -DGGML_NATIVE=ON \
     -DCMAKE_CUDA_ARCHITECTURES="86" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DLLAMA_CURL=ON
+    -DCMAKE_BUILD_TYPE=Release
 
+  echo "→ Starting build (this may take 5-15 minutes)..."
   cmake --build build --config Release -j "$(nproc)"
 
   echo "✅ llama.cpp built successfully for your RTX 3060!"
 }
 
-# ====================== CREATE HERMES SCRIPT ======================
+# ====================== CREATE HERMES AGENT SCRIPT ======================
 create_hermes_script() {
   auto_tune_settings
 
@@ -95,7 +95,7 @@ FLASH_ATTN="1"
 
 EXTRA_FLAGS="--no-mmap --defrag-thold 0.1"
 
-echo "🚀 Starting Hermes Agent (65k ctx | 95 layers | tuned for 3060 12GB)"
+echo "🚀 Starting Hermes Agent (65k ctx | 95 layers | tuned for RTX 3060 12GB)"
 
 "\$LLAMA_BIN" \
   -m "\$GGUF" \
@@ -112,11 +112,11 @@ echo "🚀 Starting Hermes Agent (65k ctx | 95 layers | tuned for 3060 12GB)"
   \${EXTRA_FLAGS} &
 
 echo "✅ Server ready at http://localhost:\${PORT}/v1"
-echo "   Monitor VRAM: watch -n 0.5 nvidia-smi"
+echo "   Monitor VRAM usage: watch -n 0.5 nvidia-smi"
 EOF
 
   chmod +x "$HERMES_SCRIPT"
-  echo "✅ Hermes Agent script created with your hardware settings."
+  echo "✅ Hermes Agent script created/updated."
 }
 
 # ====================== MAIN MENU ======================
@@ -130,7 +130,7 @@ main_menu() {
     echo "2) Download Model"
     echo "3) Create/Update Hermes Agent script"
     echo "4) Start Hermes Agent"
-    echo "5) Show tuned settings"
+    echo "5) Show current tuned settings"
     echo "6) Exit"
     read -rp "Choose [1-6]: " option
 
@@ -138,17 +138,19 @@ main_menu() {
       1) build_llama ;;
       2)
         mkdir -p "$MODELS_DIR"
+        echo ""
         echo "1) Harmonic-Hermes-9B-Q5_K_M.gguf (recommended)"
         echo "2) Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"
-        echo "3) Custom URL"
+        echo "3) Custom GGUF URL"
         read -rp "Choose [1-3]: " mc
         case $mc in
           1) URL="https://huggingface.co/mradermacher/Harmonic-Hermes-9B-GGUF/resolve/main/Harmonic-Hermes-9B-Q5_K_M.gguf"; NAME="Harmonic-Hermes-9B-Q5_K_M.gguf" ;;
           2) URL="https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"; NAME="Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf" ;;
-          3) read -rp "Full GGUF URL: " URL; NAME=$(basename "$URL") ;;
-          *) echo "Invalid"; continue ;;
+          3) read -rp "Enter full GGUF URL: " URL; NAME=$(basename "$URL") ;;
+          *) echo "Invalid choice."; continue ;;
         esac
         if [[ ! -f "${MODELS_DIR}/$NAME" ]]; then
+          echo "→ Downloading..."
           wget --show-progress -O "${MODELS_DIR}/$NAME" "$URL"
         else
           echo "Model already exists."
@@ -164,7 +166,7 @@ main_menu() {
         ;;
       5)
         auto_tune_settings
-        echo "Current: Context=${CTX} | Layers=${NGL} | Batch=${BATCH}"
+        echo "Current tuned settings → Context: ${CTX} | Layers: ${NGL} | Batch: ${BATCH}"
         ;;
       6) echo "Goodbye!"; exit 0 ;;
       *) echo "Invalid option." ;;
@@ -172,13 +174,13 @@ main_menu() {
   done
 }
 
-# ====================== START ======================
+# ====================== RUN SETUP ======================
 install_dependencies
-echo "→ Initial setup for RTX 3060 12GB..."
+echo "→ Starting initial setup for your RTX 3060..."
 mkdir -p "$MODELS_DIR"
 build_llama
 create_hermes_script
 
 echo ""
-echo "✅ Setup finished! Use the menu below."
+echo "✅ Initial setup completed! Use the menu to manage everything."
 main_menu
