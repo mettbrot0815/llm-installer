@@ -17,8 +17,7 @@ WEBUI_PORT="3000"
 setup_fresh_system() {
   echo "→ Updating system and installing all dependencies..."
 
-  sudo apt-get update -qq
-  sudo apt-get upgrade -y -qq
+  sudo apt-get update
 
   echo "→ Installing build tools and dependencies..."
   sudo apt-get install -y \
