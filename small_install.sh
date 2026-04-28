@@ -58,16 +58,26 @@ auto_tune_settings() {
 
 # ====================== 3. BUILD LLAMA.CPP ======================
 build_llama() {
-  echo "→ Cloning and building latest llama.cpp with CUDA 12.6..."
+  echo "→ Cloning/updating llama.cpp with CUDA 12.6..."
 
   cd /home/"$USER" || exit
 
   if [[ -d "$LLAMA_DIR" ]]; then
     cd "$LLAMA_DIR"
+    OLD_COMMIT=$(git rev-parse HEAD)
     git pull --ff-only
+    NEW_COMMIT=$(git rev-parse HEAD)
+
+    if [[ "$OLD_COMMIT" == "$NEW_COMMIT" ]] && [[ -f "build/bin/llama-server" ]]; then
+      echo "✅ llama.cpp is already up to date (commit: ${NEW_COMMIT:0:7}). Skipping rebuild."
+      return 0
+    fi
+
+    echo "→ Update detected (${OLD_COMMIT:0:7} → ${NEW_COMMIT:0:7}). Rebuilding..."
   else
     git clone https://github.com/ggerganov/llama.cpp.git "$LLAMA_DIR"
     cd "$LLAMA_DIR"
+    echo "→ Fresh clone. Building..."
   fi
 
   rm -rf build
