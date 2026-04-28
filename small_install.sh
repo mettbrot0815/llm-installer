@@ -3,13 +3,20 @@ set -euo pipefail
 
 echo "========================================"
 echo "🚀 Optimized llama.cpp Installer for RTX 3060 12GB + 16GB RAM"
-echo "   Auto VRAM Detection + Smart Tuning"
 echo "========================================"
 
 MODELS_DIR="/home/$USER/llm-models"
 LLAMA_DIR="/home/$USER/llama.cpp"
 HERMES_SCRIPT="/home/$USER/start-hermes.sh"
 PORT="8080"
+
+# ====================== INSTALL DEPENDENCIES ======================
+install_dependencies() {
+  echo "→ Installing required packages (cmake, build tools, etc.)..."
+  sudo apt-get update -qq
+  sudo apt-get install -y build-essential cmake git curl wget python3 python3-pip
+  echo "✅ Dependencies installed."
+}
 
 # ====================== AUTO DETECTION & TUNING ======================
 detect_vram() {
@@ -18,34 +25,24 @@ detect_vram() {
     VRAM_GB=12
     return
   fi
-
   VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1)
   VRAM_GB=$((VRAM_MB / 1024))
-  echo "✅ Detected GPU VRAM: ${VRAM_GB} GB (System RAM: 16GB)"
+  echo "✅ Detected GPU VRAM: ${VRAM_GB} GB"
 }
 
 auto_tune_settings() {
   detect_vram
-
-  # Optimized for 12GB VRAM + low system RAM
-  if [[ $VRAM_GB -ge 12 ]]; then
-    CTX="65536"      # Safe 65k context with good KV cache headroom
-    NGL="95"         # Near full offload (leave a few layers for stability)
-    BATCH="1024"
-    UBATCH="512"
-    echo "→ 12GB VRAM mode: 65k context, 95 layers (balanced & stable)"
-  else
-    CTX="32768"
-    NGL="80"
-    BATCH="512"
-    UBATCH="256"
-    echo "→ Low VRAM fallback: 32k context"
-  fi
+  # Best settings for RTX 3060 12GB + limited system RAM
+  CTX="65536"
+  NGL="95"
+  BATCH="1024"
+  UBATCH="512"
+  echo "→ Tuned for your hardware: 65k context, 95 layers, balanced batch"
 }
 
-# ====================== ADVANCED BUILD (RTX 3060 Optimized) ======================
+# ====================== BUILD LLAMA.CPP ======================
 build_llama() {
-  echo "→ Building/updating llama.cpp with RTX 3060-tuned CUDA flags..."
+  echo "→ Building/updating llama.cpp (RTX 3060 optimized)..."
 
   cd /home/"$USER" || exit
 
@@ -63,21 +60,19 @@ build_llama() {
     -DGGML_CUDA=ON \
     -DGGML_CUDA_FA=ON \
     -DGGML_CUDA_FA_ALL_QUANTS=ON \
-    -DGGML_CUDA_F16=ON \
     -DGGML_CUDA_MMQ=ON \
     -DGGML_CUDA_GRAPHS=ON \
     -DGGML_NATIVE=ON \
-    -DCMAKE_CUDA_ARCHITECTURES="86" \   # Ada Lovelace (RTX 30-series)
+    -DCMAKE_CUDA_ARCHITECTURES="86" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DLLAMA_CURL=ON \
-    -DGGML_LTO=ON
+    -DLLAMA_CURL=ON
 
   cmake --build build --config Release -j "$(nproc)"
 
-  echo "✅ Build completed for RTX 3060!"
+  echo "✅ llama.cpp built successfully for your RTX 3060!"
 }
 
-# ====================== CREATE HERMES START SCRIPT ======================
+# ====================== CREATE HERMES SCRIPT ======================
 create_hermes_script() {
   auto_tune_settings
 
@@ -100,7 +95,7 @@ FLASH_ATTN="1"
 
 EXTRA_FLAGS="--no-mmap --defrag-thold 0.1"
 
-echo "🚀 Starting Hermes Agent (RTX 3060 tuned: \${CTX} ctx, \${NGL} layers)"
+echo "🚀 Starting Hermes Agent (65k ctx | 95 layers | tuned for 3060 12GB)"
 
 "\$LLAMA_BIN" \
   -m "\$GGUF" \
@@ -116,13 +111,12 @@ echo "🚀 Starting Hermes Agent (RTX 3060 tuned: \${CTX} ctx, \${NGL} layers)"
   --jinja \
   \${EXTRA_FLAGS} &
 
-echo "✅ Server running → http://localhost:\${PORT}/v1"
-echo "   Monitor: watch -n 0.5 nvidia-smi"
-echo "   Tip: If OOM occurs, edit start-hermes.sh and lower CTX or NGL"
+echo "✅ Server ready at http://localhost:\${PORT}/v1"
+echo "   Monitor VRAM: watch -n 0.5 nvidia-smi"
 EOF
 
   chmod +x "$HERMES_SCRIPT"
-  echo "✅ Hermes Agent script created/updated with your hardware settings"
+  echo "✅ Hermes Agent script created with your hardware settings."
 }
 
 # ====================== MAIN MENU ======================
@@ -130,25 +124,23 @@ main_menu() {
   while true; do
     echo ""
     echo "========================================"
-    echo "          RTX 3060 Installer Menu"
+    echo "          RTX 3060 Menu"
     echo "========================================"
     echo "1) Build / Update llama.cpp"
-    echo "2) Download Model (Harmonic-Hermes or others)"
-    echo "3) Create/Update Hermes Agent script (auto-tuned)"
+    echo "2) Download Model"
+    echo "3) Create/Update Hermes Agent script"
     echo "4) Start Hermes Agent"
-    echo "5) Show current tuned settings"
+    echo "5) Show tuned settings"
     echo "6) Exit"
-    echo "========================================"
     read -rp "Choose [1-6]: " option
 
     case $option in
       1) build_llama ;;
       2)
         mkdir -p "$MODELS_DIR"
-        echo ""
-        echo "1) Harmonic-Hermes-9B-Q5_K_M.gguf (recommended for 12GB)"
+        echo "1) Harmonic-Hermes-9B-Q5_K_M.gguf (recommended)"
         echo "2) Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"
-        echo "3) Custom GGUF URL"
+        echo "3) Custom URL"
         read -rp "Choose [1-3]: " mc
         case $mc in
           1) URL="https://huggingface.co/mradermacher/Harmonic-Hermes-9B-GGUF/resolve/main/Harmonic-Hermes-9B-Q5_K_M.gguf"; NAME="Harmonic-Hermes-9B-Q5_K_M.gguf" ;;
@@ -167,12 +159,12 @@ main_menu() {
         if [[ -x "$HERMES_SCRIPT" ]]; then
           "$HERMES_SCRIPT"
         else
-          echo "Run option 3 first."
+          echo "Please run option 3 first."
         fi
         ;;
       5)
         auto_tune_settings
-        echo "Current settings → Context: ${CTX} | Layers: ${NGL} | Batch: ${BATCH}"
+        echo "Current: Context=${CTX} | Layers=${NGL} | Batch=${BATCH}"
         ;;
       6) echo "Goodbye!"; exit 0 ;;
       *) echo "Invalid option." ;;
@@ -180,13 +172,13 @@ main_menu() {
   done
 }
 
-# ====================== FIRST RUN ======================
-echo "→ Performing initial setup for your RTX 3060 12GB..."
+# ====================== START ======================
+install_dependencies
+echo "→ Initial setup for RTX 3060 12GB..."
 mkdir -p "$MODELS_DIR"
 build_llama
 create_hermes_script
 
 echo ""
-echo "✅ Setup complete! Your system is now tuned for 12GB VRAM + 16GB RAM."
-echo "Recommended: Use option 4 to start the server."
+echo "✅ Setup finished! Use the menu below."
 main_menu
