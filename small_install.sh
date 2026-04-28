@@ -2,8 +2,8 @@
 set -euo pipefail
 
 echo "========================================"
-echo "🚀 Advanced One-Command llama.cpp Installer"
-echo "   Auto VRAM Detection + Interactive Menu"
+echo "🚀 Optimized llama.cpp Installer for RTX 3060 12GB + 16GB RAM"
+echo "   Auto VRAM Detection + Smart Tuning"
 echo "========================================"
 
 MODELS_DIR="/home/$USER/llm-models"
@@ -11,46 +11,41 @@ LLAMA_DIR="/home/$USER/llama.cpp"
 HERMES_SCRIPT="/home/$USER/start-hermes.sh"
 PORT="8080"
 
-# ====================== AUTO VRAM DETECTION ======================
+# ====================== AUTO DETECTION & TUNING ======================
 detect_vram() {
   if ! command -v nvidia-smi >/dev/null 2>&1; then
-    echo "Warning: nvidia-smi not found. Defaulting to conservative settings (12GB)."
+    echo "Warning: nvidia-smi not found. Using conservative 12GB settings."
     VRAM_GB=12
     return
   fi
 
   VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1)
   VRAM_GB=$((VRAM_MB / 1024))
-
-  echo "✅ Detected GPU VRAM: ${VRAM_GB} GB"
+  echo "✅ Detected GPU VRAM: ${VRAM_GB} GB (System RAM: 16GB)"
 }
 
-# Auto-tune CTX and NGL based on VRAM (conservative but performant)
 auto_tune_settings() {
   detect_vram
 
-  if [[ $VRAM_GB -ge 24 ]]; then
-    CTX="131072"
-    NGL="99"
-    echo "→ High VRAM mode: 131k context, full offload"
-  elif [[ $VRAM_GB -ge 16 ]]; then
-    CTX="131072"
-    NGL="99"
-    echo "→ Good VRAM mode: 131k context, full offload"
-  elif [[ $VRAM_GB -ge 12 ]]; then
-    CTX="65536"
-    NGL="95"
-    echo "→ Medium VRAM mode: 65k context, near-full offload"
+  # Optimized for 12GB VRAM + low system RAM
+  if [[ $VRAM_GB -ge 12 ]]; then
+    CTX="65536"      # Safe 65k context with good KV cache headroom
+    NGL="95"         # Near full offload (leave a few layers for stability)
+    BATCH="1024"
+    UBATCH="512"
+    echo "→ 12GB VRAM mode: 65k context, 95 layers (balanced & stable)"
   else
     CTX="32768"
     NGL="80"
-    echo "→ Low VRAM mode: 32k context, reduced offload"
+    BATCH="512"
+    UBATCH="256"
+    echo "→ Low VRAM fallback: 32k context"
   fi
 }
 
-# ====================== ADVANCED BUILD ======================
+# ====================== ADVANCED BUILD (RTX 3060 Optimized) ======================
 build_llama() {
-  echo "→ Building/updating llama.cpp with advanced CUDA optimizations..."
+  echo "→ Building/updating llama.cpp with RTX 3060-tuned CUDA flags..."
 
   cd /home/"$USER" || exit
 
@@ -71,16 +66,15 @@ build_llama() {
     -DGGML_CUDA_F16=ON \
     -DGGML_CUDA_MMQ=ON \
     -DGGML_CUDA_GRAPHS=ON \
-    -DGGML_CUDA_ENABLE_UNIFIED_MEMORY=ON \
     -DGGML_NATIVE=ON \
-    -DCMAKE_CUDA_ARCHITECTURES="native" \
+    -DCMAKE_CUDA_ARCHITECTURES="86" \   # Ada Lovelace (RTX 30-series)
     -DCMAKE_BUILD_TYPE=Release \
     -DLLAMA_CURL=ON \
     -DGGML_LTO=ON
 
   cmake --build build --config Release -j "$(nproc)"
 
-  echo "✅ Advanced build completed!"
+  echo "✅ Build completed for RTX 3060!"
 }
 
 # ====================== CREATE HERMES START SCRIPT ======================
@@ -97,8 +91,8 @@ PORT="${PORT}"
 
 CTX="${CTX}"
 NGL="${NGL}"
-BATCH="2048"
-UBATCH="1024"
+BATCH="${BATCH}"
+UBATCH="${UBATCH}"
 
 CACHE_K="q8_0"
 CACHE_V="q4_0"
@@ -106,9 +100,7 @@ FLASH_ATTN="1"
 
 EXTRA_FLAGS="--no-mmap --defrag-thold 0.1"
 
-export GGML_CUDA_GRAPH_OPT=1
-
-echo "🚀 Starting Hermes Agent (Auto-tuned: \${CTX} ctx, \${NGL} layers)"
+echo "🚀 Starting Hermes Agent (RTX 3060 tuned: \${CTX} ctx, \${NGL} layers)"
 
 "\$LLAMA_BIN" \
   -m "\$GGUF" \
@@ -124,12 +116,13 @@ echo "🚀 Starting Hermes Agent (Auto-tuned: \${CTX} ctx, \${NGL} layers)"
   --jinja \
   \${EXTRA_FLAGS} &
 
-echo "✅ Running on http://localhost:\${PORT}/v1"
+echo "✅ Server running → http://localhost:\${PORT}/v1"
 echo "   Monitor: watch -n 0.5 nvidia-smi"
+echo "   Tip: If OOM occurs, edit start-hermes.sh and lower CTX or NGL"
 EOF
 
   chmod +x "$HERMES_SCRIPT"
-  echo "✅ Hermes start script updated with auto-tuned settings"
+  echo "✅ Hermes Agent script created/updated with your hardware settings"
 }
 
 # ====================== MAIN MENU ======================
@@ -137,90 +130,63 @@ main_menu() {
   while true; do
     echo ""
     echo "========================================"
-    echo "          LLM Installer Menu"
+    echo "          RTX 3060 Installer Menu"
     echo "========================================"
-    echo "1) Build / Update llama.cpp (advanced CUDA)"
-    echo "2) Download / Select Model"
-    echo "3) Create/Update Hermes Agent script (auto VRAM tune)"
-    echo "4) Start Hermes Agent now"
-    echo "5) Show current auto-tuned settings"
+    echo "1) Build / Update llama.cpp"
+    echo "2) Download Model (Harmonic-Hermes or others)"
+    echo "3) Create/Update Hermes Agent script (auto-tuned)"
+    echo "4) Start Hermes Agent"
+    echo "5) Show current tuned settings"
     echo "6) Exit"
     echo "========================================"
-    read -rp "Choose an option [1-6]: " option
+    read -rp "Choose [1-6]: " option
 
     case $option in
-      1)
-        build_llama
-        ;;
+      1) build_llama ;;
       2)
         mkdir -p "$MODELS_DIR"
         echo ""
-        echo "Model Selector:"
-        echo "1) Harmonic-Hermes-9B-Q5_K_M.gguf (recommended)"
+        echo "1) Harmonic-Hermes-9B-Q5_K_M.gguf (recommended for 12GB)"
         echo "2) Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"
         echo "3) Custom GGUF URL"
-        read -rp "Choose [1-3]: " model_choice
-
-        case $model_choice in
-          1)
-            URL="https://huggingface.co/mradermacher/Harmonic-Hermes-9B-GGUF/resolve/main/Harmonic-Hermes-9B-Q5_K_M.gguf"
-            NAME="Harmonic-Hermes-9B-Q5_K_M.gguf"
-            ;;
-          2)
-            URL="https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"
-            NAME="Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"
-            ;;
-          3)
-            read -rp "Enter full GGUF URL: " URL
-            NAME=$(basename "$URL")
-            ;;
-          *)
-            echo "Invalid choice."
-            continue
-            ;;
+        read -rp "Choose [1-3]: " mc
+        case $mc in
+          1) URL="https://huggingface.co/mradermacher/Harmonic-Hermes-9B-GGUF/resolve/main/Harmonic-Hermes-9B-Q5_K_M.gguf"; NAME="Harmonic-Hermes-9B-Q5_K_M.gguf" ;;
+          2) URL="https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"; NAME="Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf" ;;
+          3) read -rp "Full GGUF URL: " URL; NAME=$(basename "$URL") ;;
+          *) echo "Invalid"; continue ;;
         esac
-
         if [[ ! -f "${MODELS_DIR}/$NAME" ]]; then
-          echo "→ Downloading $NAME ..."
           wget --show-progress -O "${MODELS_DIR}/$NAME" "$URL"
         else
-          echo "→ Model already exists."
+          echo "Model already exists."
         fi
         ;;
-      3)
-        create_hermes_script
-        ;;
+      3) create_hermes_script ;;
       4)
         if [[ -x "$HERMES_SCRIPT" ]]; then
           "$HERMES_SCRIPT"
         else
-          echo "Hermes script not found. Please run option 3 first."
+          echo "Run option 3 first."
         fi
         ;;
       5)
         auto_tune_settings
-        echo "Current auto-tuned settings:"
-        echo "   Context : ${CTX} tokens"
-        echo "   Layers  : ${NGL}"
+        echo "Current settings → Context: ${CTX} | Layers: ${NGL} | Batch: ${BATCH}"
         ;;
-      6)
-        echo "Goodbye!"
-        exit 0
-        ;;
-      *)
-        echo "Invalid option."
-        ;;
+      6) echo "Goodbye!"; exit 0 ;;
+      *) echo "Invalid option." ;;
     esac
   done
 }
 
-# ====================== INITIAL SETUP ======================
-echo "→ Running first-time setup..."
+# ====================== FIRST RUN ======================
+echo "→ Performing initial setup for your RTX 3060 12GB..."
 mkdir -p "$MODELS_DIR"
 build_llama
 create_hermes_script
 
 echo ""
-echo "✅ Initial setup completed!"
-echo "You can now use the menu for further actions."
+echo "✅ Setup complete! Your system is now tuned for 12GB VRAM + 16GB RAM."
+echo "Recommended: Use option 4 to start the server."
 main_menu
