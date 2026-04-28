@@ -31,11 +31,17 @@ setup_fresh_system() {
     linux-headers-generic
 
   # Install CUDA 12.6 for WSL2 (recommended for RTX 3060)
-  echo "→ Installing CUDA Toolkit 12.6..."
-  wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-  sudo dpkg -i cuda-keyring_1.1-1_all.deb
-  sudo apt-get update -qq
-  sudo apt-get install -y cuda-toolkit-12-6
+  if dpkg -s cuda-keyring &>/dev/null && dpkg -s cuda-toolkit-12-6 &>/dev/null; then
+    echo "✅ CUDA 12.6 already installed, skipping."
+  else
+    echo "→ Installing CUDA Toolkit 12.6..."
+    local keyring_deb="/tmp/cuda-keyring_1.1-1_all.deb"
+    wget -q -O "$keyring_deb" https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i "$keyring_deb"
+    rm -f "$keyring_deb"
+    sudo apt-get update -qq
+    sudo apt-get install -y cuda-toolkit-12-6
+  fi
 
   # Set CUDA environment permanently
   cat << EOF | sudo tee /etc/profile.d/cuda.sh > /dev/null
