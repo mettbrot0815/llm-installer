@@ -10,7 +10,7 @@ MODELS_DIR="/home/$USER/llm-models"
 LLAMA_DIR="/home/$USER/llama.cpp"
 HERMES_SCRIPT="/home/$USER/start-hermes.sh"
 WEBUI_DIR="/home/$USER/open-webui"
-PORT="8081"       # llama-server API port
+PORT="8082"       # llama-server API port
 WEBUI_PORT="3000"  # Open WebUI port
 
 # ====================== 1. FULL SYSTEM & CUDA SETUP ======================
@@ -255,7 +255,7 @@ WorkingDirectory=${WEBUI_DIR}
 Environment="PATH=/home/${USER}/.local/bin:${WEBUI_DIR}/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # PORT must be set as env var — open-webui reads this before uvicorn binds.
 # Relying solely on --port is unreliable on bare-metal pip installs and would
-# conflict with llama-server already holding port 8081.
+# conflict with llama-server already holding port 8082.
 Environment="PORT=${WEBUI_PORT}"
 # DATA_DIR keeps webui.db outside the venv so it survives uv reinstalls/upgrades.
 Environment="DATA_DIR=/home/${USER}/.open-webui"
@@ -300,7 +300,7 @@ echo "│    start:   sudo systemctl start llama-server  │"
 echo "│    stop:    sudo systemctl stop llama-server   │"
 echo "│    status:  sudo systemctl status llama-server │"
 echo "│    logs:    journalctl -u llama-server -f      │"
-echo "│    API:     http://localhost:8081/v1           │"
+echo "│    API:     http://localhost:8082/v1           │"
 echo "├─────────────────────────────────────────────┤"
 echo "│  Open WebUI                                 │"
 echo "│    start:   sudo systemctl start open-webui    │"
