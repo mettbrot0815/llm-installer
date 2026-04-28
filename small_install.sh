@@ -10,8 +10,8 @@ MODELS_DIR="/home/$USER/llm-models"
 LLAMA_DIR="/home/$USER/llama.cpp"
 HERMES_SCRIPT="/home/$USER/start-hermes.sh"
 WEBUI_DIR="/home/$USER/open-webui"
-PORT="8080"
-WEBUI_PORT="3000"
+PORT="8081"       # llama-server API port
+WEBUI_PORT="3000"  # Open WebUI port
 
 # ====================== 1. FULL SYSTEM & CUDA SETUP ======================
 setup_fresh_system() {
@@ -261,7 +261,7 @@ Environment="PORT=${WEBUI_PORT}"
 Environment="DATA_DIR=/home/${USER}/.open-webui"
 Environment="OPENAI_API_BASE_URL=http://localhost:${PORT}/v1"
 Environment="OPENAI_API_KEY=sk-placeholder"
-ExecStart=${WEBUI_DIR}/.venv/bin/open-webui serve
+ExecStart=${WEBUI_DIR}/.venv/bin/open-webui serve --port ${WEBUI_PORT}
 Restart=on-failure
 RestartSec=5
 
