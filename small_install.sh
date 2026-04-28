@@ -263,6 +263,30 @@ EOF
     echo "✅ systemd already enabled in /etc/wsl.conf."
   fi
 
+  # --- /etc/profile.d/ hint shown on every new terminal ---
+  sudo tee /etc/profile.d/llm-hint.sh > /dev/null << 'HINT'
+echo ""
+echo "┌─────────────────────────────────────────────┐"
+echo "│           LLM Stack Quick Reference         │"
+echo "├─────────────────────────────────────────────┤"
+echo "│  Hermes Agent (llama-server)                │"
+echo "│    start:   sudo systemctl start llama-server  │"
+echo "│    stop:    sudo systemctl stop llama-server   │"
+echo "│    status:  sudo systemctl status llama-server │"
+echo "│    logs:    journalctl -u llama-server -f      │"
+echo "│    API:     http://localhost:8080/v1           │"
+echo "├─────────────────────────────────────────────┤"
+echo "│  Open WebUI                                 │"
+echo "│    start:   sudo systemctl start open-webui    │"
+echo "│    stop:    sudo systemctl stop open-webui     │"
+echo "│    status:  sudo systemctl status open-webui   │"
+echo "│    logs:    journalctl -u open-webui -f        │"
+echo "│    UI:      http://localhost:3000              │"
+echo "└─────────────────────────────────────────────┘"
+echo ""
+HINT
+  sudo chmod +x /etc/profile.d/llm-hint.sh
+
   echo "✅ Autostart configured:"
   echo "   llama-server → http://localhost:${PORT}/v1"
   echo "   open-webui   → http://localhost:${WEBUI_PORT}"
