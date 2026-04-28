@@ -222,9 +222,15 @@ Type=simple
 User=${USER}
 WorkingDirectory=${WEBUI_DIR}
 Environment="PATH=/home/${USER}/.local/bin:${WEBUI_DIR}/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# PORT must be set as env var — open-webui reads this before uvicorn binds.
+# Relying solely on --port is unreliable on bare-metal pip installs and would
+# conflict with llama-server already holding port 8080.
+Environment="PORT=${WEBUI_PORT}"
+# DATA_DIR keeps webui.db outside the venv so it survives uv reinstalls/upgrades.
+Environment="DATA_DIR=/home/${USER}/.open-webui"
 Environment="OPENAI_API_BASE_URL=http://localhost:${PORT}/v1"
 Environment="OPENAI_API_KEY=sk-placeholder"
-ExecStart=${WEBUI_DIR}/.venv/bin/open-webui serve --port ${WEBUI_PORT}
+ExecStart=${WEBUI_DIR}/.venv/bin/python -m open_webui serve
 Restart=on-failure
 RestartSec=5
 
