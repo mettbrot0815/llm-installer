@@ -2,8 +2,8 @@
 set -euo pipefail
 
 echo "========================================"
-echo "🚀 Fresh Ubuntu 24.04 WSL2 + RTX 3060 Installer"
-echo "   Full CUDA + llama.cpp + Hermes Agent"
+echo "🚀 Fresh Ubuntu 24.04 WSL2 + RTX 3060 12GB Installer"
+echo "   CUDA 12.6 + Optimized llama.cpp + Hermes Agent"
 echo "========================================"
 
 MODELS_DIR="/home/$USER/llm-models"
@@ -11,14 +11,14 @@ LLAMA_DIR="/home/$USER/llama.cpp"
 HERMES_SCRIPT="/home/$USER/start-hermes.sh"
 PORT="8080"
 
-# ====================== 1. FULL DEPENDENCIES & CUDA SETUP (WSL2) ======================
+# ====================== 1. FULL SYSTEM & CUDA SETUP ======================
 setup_fresh_system() {
-  echo "→ Updating system and installing ALL required dependencies..."
+  echo "→ Updating system and installing all dependencies..."
 
   sudo apt-get update -qq
   sudo apt-get upgrade -y -qq
 
-  echo "→ Installing build tools, git, wget, and NVIDIA CUDA for WSL2..."
+  echo "→ Installing build tools and dependencies..."
   sudo apt-get install -y \
     build-essential \
     cmake \
@@ -29,8 +29,8 @@ setup_fresh_system() {
     python3-pip \
     linux-headers-generic
 
-  # Install CUDA Toolkit for WSL2 (Ubuntu 24.04)
-  echo "→ Installing CUDA Toolkit 12.6 (best stable for RTX 3060 on WSL2)..."
+  # Install CUDA 12.6 for WSL2 (recommended for RTX 3060)
+  echo "→ Installing CUDA Toolkit 12.6..."
   wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
   sudo dpkg -i cuda-keyring_1.1-1_all.deb
   sudo apt-get update -qq
@@ -44,13 +44,13 @@ EOF
 
   source /etc/profile.d/cuda.sh
 
-  echo "✅ CUDA 12.6 + all dependencies installed."
+  echo "✅ CUDA 12.6 and all dependencies installed successfully."
 }
 
-# ====================== 2. AUTO TUNING FOR RTX 3060 12GB + 16GB RAM ======================
+# ====================== 2. AUTO TUNING FOR YOUR HARDWARE ======================
 auto_tune_settings() {
-  CTX="65536"      # Safe and performant on 12GB
-  NGL="94"         # 94 layers = very good speed, leaves headroom
+  CTX="65536"      # Safe & good performance on 12GB VRAM
+  NGL="94"         # 94 layers = excellent speed with headroom
   BATCH="1024"
   UBATCH="512"
   echo "→ Auto-tuned for RTX 3060 12GB + 16GB RAM: 65k context, 94 layers"
@@ -58,7 +58,7 @@ auto_tune_settings() {
 
 # ====================== 3. BUILD LLAMA.CPP ======================
 build_llama() {
-  echo "→ Cloning and building latest llama.cpp with CUDA..."
+  echo "→ Cloning and building latest llama.cpp with CUDA 12.6..."
 
   cd /home/"$USER" || exit
 
@@ -82,28 +82,28 @@ build_llama() {
     -DCMAKE_CUDA_ARCHITECTURES="86" \
     -DCMAKE_BUILD_TYPE=Release
 
-  echo "→ Building (this will take 8-15 minutes)..."
+  echo "→ Building llama.cpp (this may take 8-15 minutes)..."
   cmake --build build --config Release -j "$(nproc)"
 
-  echo "✅ llama.cpp built successfully!"
+  echo "✅ llama.cpp built successfully for your RTX 3060!"
 }
 
 # ====================== 4. CREATE OPTIMIZED HERMES AGENT ======================
 create_hermes_script() {
   auto_tune_settings
 
-  cat > "$HERMES_SCRIPT" << 'EOF'
+  cat > "$HERMES_SCRIPT" << EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-GGUF="/home/$USER/llm-models/Harmonic-Hermes-9B-Q5_K_M.gguf"
-LLAMA_BIN="/home/$USER/llama.cpp/build/bin/llama-server"
-PORT="8080"
+GGUF="${MODELS_DIR}/Harmonic-Hermes-9B-Q5_K_M.gguf"
+LLAMA_BIN="${LLAMA_DIR}/build/bin/llama-server"
+PORT="${PORT}"
 
-CTX="65536"
-NGL="94"
-BATCH="1024"
-UBATCH="512"
+CTX="${CTX}"
+NGL="${NGL}"
+BATCH="${BATCH}"
+UBATCH="${UBATCH}"
 
 CACHE_K="q8_0"
 CACHE_V="q4_0"
@@ -113,22 +113,22 @@ EXTRA_FLAGS="--no-mmap --defrag-thold 0.1"
 
 echo "🚀 Starting Hermes Agent (65k ctx | 94 layers | Optimized for RTX 3060 12GB)"
 
-"$LLAMA_BIN" \
-  -m "$GGUF" \
-  -ngl "$NGL" \
-  -fa "$FLASH_ATTN" \
-  -b "$BATCH" \
-  -ub "$UBATCH" \
-  -c "$CTX" \
-  --cache-type-k "$CACHE_K" \
-  --cache-type-v "$CACHE_V" \
+"\$LLAMA_BIN" \
+  -m "\$GGUF" \
+  -ngl "\$NGL" \
+  -fa "\$FLASH_ATTN" \
+  -b "\$BATCH" \
+  -ub "\$UBATCH" \
+  -c "\$CTX" \
+  --cache-type-k "\$CACHE_K" \
+  --cache-type-v "\$CACHE_V" \
   --host 0.0.0.0 \
-  --port "$PORT" \
+  --port "\$PORT" \
   --jinja \
-  ${EXTRA_FLAGS} &
+  \${EXTRA_FLAGS} &
 
-echo "✅ Hermes Agent is running!"
-echo "   OpenAI-compatible endpoint: http://localhost:8080/v1"
+echo "✅ Hermes Agent running!"
+echo "   Endpoint: http://localhost:\${PORT}/v1"
 echo "   Monitor VRAM: watch -n 0.5 nvidia-smi"
 EOF
 
@@ -141,7 +141,7 @@ main_menu() {
   while true; do
     echo ""
     echo "========================================"
-    echo "          Fresh WSL2 Menu"
+    echo "          RTX 3060 WSL2 Menu"
     echo "========================================"
     echo "1) Rebuild llama.cpp"
     echo "2) Download Harmonic-Hermes-9B-Q5_K_M.gguf"
@@ -154,10 +154,10 @@ main_menu() {
       1) build_llama ;;
       2)
         mkdir -p "$MODELS_DIR"
-        echo "→ Downloading Harmonic-Hermes-9B-Q5_K_M.gguf (best for 12GB)..."
+        echo "→ Downloading Harmonic-Hermes-9B-Q5_K_M.gguf..."
         wget --show-progress -O "${MODELS_DIR}/Harmonic-Hermes-9B-Q5_K_M.gguf" \
           https://huggingface.co/mradermacher/Harmonic-Hermes-9B-GGUF/resolve/main/Harmonic-Hermes-9B-Q5_K_M.gguf
-        echo "✅ Model downloaded."
+        echo "✅ Model downloaded to ${MODELS_DIR}"
         ;;
       3) create_hermes_script ;;
       4)
@@ -173,8 +173,8 @@ main_menu() {
   done
 }
 
-# ====================== START EXECUTION ======================
-echo "→ This is a fresh Ubuntu 24.04 WSL2 setup. Installing everything..."
+# ====================== EXECUTION STARTS HERE ======================
+echo "→ Starting fresh installation on Ubuntu 24.04 WSL2..."
 setup_fresh_system
 mkdir -p "$MODELS_DIR"
 
@@ -183,12 +183,12 @@ create_hermes_script
 
 echo ""
 echo "========================================"
-echo "✅ Installation Complete!"
+echo "✅ Installation Completed Successfully!"
 echo ""
-echo "Recommended next steps:"
-echo "   1. Download the model     → Menu option 2"
-echo "   2. Create start script    → Menu option 3"
-echo "   3. Start the server       → Menu option 4"
+echo "Next steps:"
+echo "   1. Download model     → Press 2"
+echo "   2. Create start script → Press 3"
+echo "   3. Start server       → Press 4"
 echo ""
-echo "Your system is now fully optimized for RTX 3060 12GB."
+echo "Your RTX 3060 12GB is now optimized (65k context recommended)."
 main_menu
