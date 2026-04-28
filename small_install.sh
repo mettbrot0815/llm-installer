@@ -107,25 +107,46 @@ build_llama() {
 
 # ====================== 4. INSTALL UV + OPEN WEBUI ======================
 install_openwebui() {
-  echo "→ Installing uv (Python package manager)..."
-
-  # Install uv via official installer
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-
-  # Make uv available in current session
+  # Install uv if not already present
   export PATH="$HOME/.local/bin:$PATH"
-
-  echo "✅ uv installed: $(uv --version)"
-
-  echo "→ Installing Open WebUI via uv..."
+  if ! command -v uv &>/dev/null; then
+    echo "→ Installing uv (Python package manager)..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+    echo "✅ uv installed: $(uv --version)"
+  else
+    echo "✅ uv already installed: $(uv --version)"
+  fi
 
   mkdir -p "$WEBUI_DIR"
   cd "$WEBUI_DIR"
 
-  # Create a virtual environment with uv and install open-webui
-  uv venv .venv --python 3.11
+  # Check installed version safely — never let version detection abort the script
+  INSTALLED=""
+  if [[ -f ".venv/bin/python" ]]; then
+    INSTALLED=$(.venv/bin/python -m pip show open-webui 2>/dev/null | awk '/^Version:/ {print $2}' || true)
+  fi
+
+  # Get latest version from PyPI safely
+  LATEST=$(curl -fsSL https://pypi.org/pypi/open-webui/json 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+
+  if [[ -n "$INSTALLED" && -n "$LATEST" && "$INSTALLED" == "$LATEST" ]]; then
+    echo "✅ Open WebUI already up to date (${INSTALLED}). Skipping install."
+    return 0
+  fi
+
+  if [[ -n "$INSTALLED" ]]; then
+    echo "→ Updating Open WebUI ${INSTALLED} → ${LATEST:-unknown}..."
+  else
+    echo "→ Installing Open WebUI via uv..."
+    # Only create venv if it does not already exist
+    if [[ ! -f ".venv/bin/python" ]]; then
+      uv venv .venv --python 3.11
+    fi
+  fi
+
   source .venv/bin/activate
-  uv pip install open-webui
+  uv pip install --upgrade open-webui
   deactivate
 
   echo "✅ Open WebUI installed in ${WEBUI_DIR}/.venv"
@@ -134,6 +155,11 @@ install_openwebui() {
 # ====================== 5. CREATE OPTIMIZED HERMES AGENT ======================
 create_hermes_script() {
   auto_tune_settings
+
+  if [[ -f "$HERMES_SCRIPT" ]]; then
+    echo "✅ Hermes Agent script already exists. Skipping."
+    return 0
+  fi
 
   cat > "$HERMES_SCRIPT" << EOF
 #!/usr/bin/env bash
