@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# shellcheck disable=SC2317,SC2129
 # =============================================================================
 # install.sh – Ubuntu WSL2 · llama.cpp + Hermes + Goose + OpenCode + OpenClaude + Codex
 # Version: production-hardened (audited revision)
@@ -33,19 +34,17 @@ touch "$VERSION_FILE"
 _get_installed_version() {
   local component="$1"
   if [[ -f "$VERSION_FILE" ]]; then
-    # Use grep -F (fixed-string) to avoid regex '.' matching any char
-    # Add '|| true' to prevent pipefail exit on empty file
-    grep -F "${component}=" "$VERSION_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- || true
+    # Match the complete key, not a substring (e.g. "cuda" must not match "mycuda").
+    awk -F= -v key="$component" '$1 == key { $1=""; sub(/^=/, ""); print; exit }' "$VERSION_FILE" 2>/dev/null || true
   fi
 }
 
 _set_installed_version() {
   local component="$1" version="$2"
-  # Use grep -F for consistent fixed-string matching
-  if [[ -f "$VERSION_FILE" ]] && grep -qF "${component}=" "$VERSION_FILE" 2>/dev/null; then
+  if [[ -f "$VERSION_FILE" ]] && awk -F= -v key="$component" '$1 == key { found=1; exit } END { exit !found }' "$VERSION_FILE" 2>/dev/null; then
     local tmp
     tmp=$(mktemp "${VERSION_FILE}.XXXXXX") || die "Failed to create temp file for version update"
-  register_tmp "$tmp"
+    register_tmp "$tmp"
     while IFS= read -r line; do
       if [[ "$line" == "${component}="* ]]; then
         echo "${component}=${version}"
@@ -116,6 +115,7 @@ skip() { echo -e "${CYN}[~] $*${RST}"; }
 readonly LLAMA_PORT=8080
 
 
+# shellcheck disable=SC2317
 # ── Temp file cleanup ──────────────────────────────────────────────────────────
 TMPFILES=()
 cleanup() {
@@ -143,22 +143,34 @@ trap _combined_exit_handler EXIT INT TERM
 # If a hash mismatches, the installer will abort with an integrity error.
 # Set to "" to disable checking for a specific script (falls back to warn-only).
 declare -A INSTALLER_HASHES=(
-  ["hermes"]="251c1b97dda5db092d152d34afa315612fe27329e821c5414130f2a7e0c011e2"
-  ["goose"]="ef85145e8d0162106d9d9c8ef51dd51e9d0b6a3ee5edddb9f6658fa7f0f0a892"
-  ["opencode"]="fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e"
+  # Upstream installer URLs below are mutable (latest/stable/main). A fixed
+  # digest for mutable content causes false failures when upstream publishes a
+  # legitimate update. Leave empty unless the URL is pinned to an immutable tag
+  # or commit, and rely on HTTPS plus content sanity checks for mutable URLs.
+  ["hermes"]=""
+  ["goose"]=""
+  ["opencode"]=""
+  ["nodesource"]=""
 )
 
 _verify_script_integrity() {
   local script_path="$1" script_name="$2"
   local expected_hash="${INSTALLER_HASHES[$script_name]:-}"
   
-  # If no known hash, allow with warning (first-time download)
+  if [[ ! -s "$script_path" ]]; then
+    die "Downloaded installer for '$script_name' is empty: $script_path"
+  fi
+
+  if ! head -n 5 "$script_path" | grep -qE '(^#!|/bin/(env )?(ba)?sh|node|npm|install|source)'; then
+    die "Downloaded installer for '$script_name' does not look like an installer script: $script_path"
+  fi
+
+  # If no known hash, allow with warning for mutable upstream installer URLs.
   if [[ -z "$expected_hash" ]]; then
-    warn "No known hash for '$script_name' — skipping integrity verification"
-    warn "Consider adding hash to INSTALLER_HASHES after verifying authenticity"
+    warn "No pinned hash for mutable installer '$script_name' — verified non-empty script content only"
     return 0
   fi
-  
+
   local actual_hash
   actual_hash=$(sha256sum "$script_path" | cut -d' ' -f1)
   
@@ -220,13 +232,13 @@ _load_token_from_file() {
   local key="$1"
   if [[ -f "$TOKEN_FILE" ]]; then
     # Use grep -F for fixed-string matching, || true for pipefail safety
-    grep -F "${key}=" "$TOKEN_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- || true
+    awk -F= -v key="$key" '$1 == key { $1=""; sub(/^=/, ""); print; exit }' "$TOKEN_FILE" 2>/dev/null || true
   fi
 }
 
 _save_token_to_file() {
   local key="$1" val="$2"
-  if [[ -f "$TOKEN_FILE" ]] && grep -qF "${key}=" "$TOKEN_FILE" 2>/dev/null; then
+  if [[ -f "$TOKEN_FILE" ]] && awk -F= -v key="$key" '$1 == key { found=1; exit } END { exit !found }' "$TOKEN_FILE" 2>/dev/null; then
     local tmp
     tmp=$(mktemp "${TOKEN_FILE}.XXXXXX") || die "Failed to create temp file for token file update"
     register_tmp "$tmp"
@@ -339,16 +351,26 @@ elif [[ -n "$GH_TOKEN" ]]; then
   export GITHUB_TOKEN="$GH_TOKEN"
 fi
 
-# Authenticate GitHub CLI and set up Git credentials if token is available
-if [[ -n "$GITHUB_TOKEN" ]]; then
+# Authenticate GitHub CLI and set up Git credentials if token is available.
+# gh may not be installed until the system-package phase, so this helper is
+# called both before and after the gh installation check.
+_configure_github_auth() {
+  [[ -z "${GITHUB_TOKEN:-}" ]] && return 0
+  if ! command -v gh &>/dev/null; then
+    skip "GitHub CLI not installed yet — deferring GitHub authentication."
+    return 0
+  fi
+
   step "Setting up GitHub CLI authentication and Git credentials..."
-  if gh auth login --with-token "$GITHUB_TOKEN" 2>/dev/null; then
+  if printf '%s\n' "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null; then
     gh auth setup-git 2>/dev/null || warn "gh auth setup-git failed — Git pushes may require manual auth"
     ok "GitHub CLI and Git authentication configured."
   else
     warn "gh auth login failed — you may need to run it manually and then gh auth setup-git"
   fi
-fi
+}
+
+_configure_github_auth
 
 # =============================================================================
 # 3. System packages [SKIPPED by switch-model]
@@ -386,6 +408,7 @@ if [[ -z "$_SMO" ]]; then
   else
     ok "GitHub CLI (gh) already installed."
   fi
+  _configure_github_auth
 
   step "Checking Python version..."
   if python3 --version 2>&1 | grep -qE '3\.(1[0-9]|[2-9][0-9])'; then
@@ -601,7 +624,7 @@ apply_model_settings() {
   case "$gguf" in
 
 
-    *Qwen3.5-9B* | *Carnice* | *Hermes*)
+    *Qwen3.5-9B* | *Carnice*)
       SAFE_CTX=262144
       USE_JINJA="--jinja"
       # 9B Q4_K_M ~5.3GB weights → ~6.7GB with q8_0 KV at 8K; fits 12GB fine
@@ -685,7 +708,7 @@ apply_model_settings() {
     # KV headroom at longer contexts.
     # --jinja is REQUIRED: Hermes sends a tools param which llama-server
     # rejects with HTTP 500 if Jinja is disabled. Gemma 4 supports Jinja.
-    *google_gemma-4* | *gemma-4* | *gemma-4-26B*)
+    *google_gemma-4* | *gemma-4*)
       SAFE_CTX=131072
       USE_JINJA="--jinja"
       EXTRA_FLAGS="-ot exps=CPU --threads ${CPUS}"
@@ -711,7 +734,7 @@ ok "Qwopus-GLM 18B: 64K ctx, 57 layers GPU, q4_0/q4_0 KV, no-mmap"
 
     # ── Harmonic Hermes 9B Q5_K_M ───────────────────────────────────────────
     # Q5_K_M is ~6.5GB; fits fine in 12GB.
-    *Harmonic* | *Harmonic-Hermes*)
+    *Harmonic*)
       SAFE_CTX=262144
       USE_JINJA="--jinja"
       CACHE_K_VAL="q8_0"
@@ -946,18 +969,19 @@ if [[ ! -x "$HF_CLI_A" && ! -x "$HF_CLI_B" ]]; then
   pip3 install --quiet --user huggingface_hub 2>/dev/null || \
     pip3 install --quiet --user --break-system-packages huggingface_hub || \
     die "Failed to install huggingface_hub"
-  _set_installed_version "huggingface_hub" "$(pip3 show huggingface_hub 2>/dev/null | grep Version | awk '{print $2}' || true)"
+  _set_installed_version "huggingface_hub" "$(pip3 show huggingface_hub 2>/dev/null | awk '/^Version:/ {print $2; exit}' || true)"
 else
-  CURRENT_HF_VER=$(pip3 show huggingface_hub 2>/dev/null | grep Version | awk '{print $2}' || true)
+  CURRENT_HF_VER=$(pip3 show huggingface_hub 2>/dev/null | awk '/^Version:/ {print $2; exit}' || true)
   INSTALLED_HF_VER=$(_get_installed_version "huggingface_hub")
   if [[ -n "$CURRENT_HF_VER" ]] && [[ "$CURRENT_HF_VER" != "$INSTALLED_HF_VER" ]]; then
-    warn "huggingface_hub version mismatch (installed: $INSTALLED_HF_VER, current: $CURRENT_HF_VER)"
+    warn "huggingface_hub version mismatch (cache: ${INSTALLED_HF_VER:-none}, current: $CURRENT_HF_VER)"
     step "Upgrading huggingface_hub..."
     pip3 install --quiet --user --upgrade huggingface_hub 2>/dev/null || \
       pip3 install --quiet --user --break-system-packages --upgrade huggingface_hub
-    _set_installed_version "huggingface_hub" "$CURRENT_HF_VER"
+    CURRENT_HF_VER=$(pip3 show huggingface_hub 2>/dev/null | awk '/^Version:/ {print $2; exit}' || true)
+    _set_installed_version "huggingface_hub" "${CURRENT_HF_VER:-latest}"
   else
-    skip "huggingface_hub already up to date (${CURRENT_HF_VER})"
+    skip "huggingface_hub already up to date (${CURRENT_HF_VER:-unknown})"
   fi
 fi
 
@@ -981,7 +1005,7 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
   else
     ok "HF token ready (may be cached)."
   fi
-  if "$HF_CLI" auth whoami 2>/dev/null | grep -q 'Token:'; then
+  if "$HF_CLI" auth whoami &>/dev/null || "$HF_CLI" whoami &>/dev/null; then
     ok "HF login verified."
   else
     warn "HF login could not be verified — downloads may be unauthenticated."
@@ -1209,7 +1233,6 @@ else
   _rebuild_llama=false
   if [[ -n "$LLAMA_SERVER_BIN" ]]; then
     CURRENT_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
-    INSTALLED_VER=$(_get_installed_version "llama.cpp")
     if _version_compare "${CURRENT_VER:-0}" "1.0"; then
       ok "llama-server ${CURRENT_VER} already installed — skipping build"
     else
@@ -1223,7 +1246,7 @@ else
 
   if [[ "$_rebuild_llama" == "true" ]]; then
     LLAMA_DIR="${HOME}/llama.cpp"
-    if needs_update "$LLAMA_DIR" "master"; then
+    if [[ ! -d "$LLAMA_DIR/.git" ]] || needs_update "$LLAMA_DIR" "master" || [[ -z "${LLAMA_SERVER_BIN:-}" ]]; then
       step "Building/updating llama.cpp..."
       if [[ -d "$LLAMA_DIR/.git" ]]; then
         git -C "$LLAMA_DIR" fetch origin
@@ -1268,6 +1291,8 @@ else
       fi
       cd -- "$HOME"
 
+      LLAMA_SERVER_BIN=$(find_llama_server || true)
+      [[ -n "$LLAMA_SERVER_BIN" ]] || die "llama-server not found after build."
       NEW_VER=$(_get_llama_version "$LLAMA_SERVER_BIN")
       _set_installed_version "llama.cpp" "${NEW_VER:-latest}"
       ok "llama.cpp built successfully"
@@ -1611,6 +1636,7 @@ if $INSTALL_OPENCODE; then
     step "Configuring OpenCode with local model..."
     mkdir -p "${HOME}/.config/opencode"
     # Safely write config using printf for variable escaping
+    # shellcheck disable=SC2016
     printf '%s\n' '{' \
       '  "$schema": "https://opencode.ai/config.json",' \
       '  "provider": {' \
@@ -1739,6 +1765,7 @@ _install_codex() {
       --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 \
       https://deb.nodesource.com/setup_22.x -o "$node_setup" || \
       die "Failed to download Node.js setup script"
+    _verify_script_integrity "$node_setup" "nodesource"
     if ! grep -qiE 'nodesource|nodejs' "$node_setup"; then
       die "Node.js setup script content looks wrong — aborting. Inspect: ${node_setup}"
     fi
@@ -1797,7 +1824,7 @@ Fetch and follow instructions from https://raw.githubusercontent.com/obra/superp
 SUPERPOWERS_AGENTS
     ok "Superpowers injected into ~/.codex/AGENTS.md"
   else
-    ok "~/.codex/AGENTS.md already exists — Superpowers not overwritten."
+    ok "$HOME/.codex/AGENTS.md already exists — Superpowers not overwritten."
   fi
 }
 
@@ -1818,43 +1845,51 @@ if $INSTALL_CODEX; then
 fi
 
 # =============================================================================
-# 14. Create ~/start-llm.sh (always runs) with envsubst fallback
+# 14. Create ~/start-llm.sh (always runs)
 # IMPROVED PID TRACKING: Uses port-based detection instead of process hierarchy
 # =============================================================================
 step "Generating ~/start-llm.sh..."
 LAUNCH_SCRIPT="${HOME}/start-llm.sh"
+PIDFILE_PATH="/tmp/llama-server-${USER}.pid"
 
-cat >"${LAUNCH_SCRIPT}.template" <<'LAUNCH_TEMPLATE'
+_shell_quote() {
+  printf '%q' "$1"
+}
+
+{
+  cat <<'LAUNCH_HEADER'
 #!/usr/bin/env bash
 set -euo pipefail
-GGUF="${GGUF_PATH}"
-MODEL_NAME="${SEL_NAME}"
-LLAMA_BIN="${LLAMA_SERVER_BIN}"
-SAFE_CTX="${SAFE_CTX}"
-LLAMA_PORT="8080"
-USE_JINJA="${USE_JINJA}"
-NGL="${NGL_VAL}"
-BATCH="${BATCH_VAL}"
-UBATCH="${UBATCH_VAL}"
-CACHE_K="${CACHE_K_VAL}"
-CACHE_V="${CACHE_V_VAL}"
-EXTRA_FLAGS="${EXTRA_FLAGS}"
-PIDFILE="${PIDFILE_PATH}"
+LAUNCH_HEADER
+  printf 'GGUF=%s\n' "$(_shell_quote "$GGUF_PATH")"
+  printf 'MODEL_NAME=%s\n' "$(_shell_quote "$SEL_NAME")"
+  printf 'LLAMA_BIN=%s\n' "$(_shell_quote "$LLAMA_SERVER_BIN")"
+  printf 'SAFE_CTX=%s\n' "$(_shell_quote "$SAFE_CTX")"
+  printf 'LLAMA_PORT=%s\n' "$(_shell_quote "$LLAMA_PORT")"
+  printf 'USE_JINJA=%s\n' "$(_shell_quote "$USE_JINJA")"
+  printf 'NGL=%s\n' "$(_shell_quote "$NGL_VAL")"
+  printf 'BATCH=%s\n' "$(_shell_quote "$BATCH_VAL")"
+  printf 'UBATCH=%s\n' "$(_shell_quote "$UBATCH_VAL")"
+  printf 'CACHE_K=%s\n' "$(_shell_quote "$CACHE_K_VAL")"
+  printf 'CACHE_V=%s\n' "$(_shell_quote "$CACHE_V_VAL")"
+  printf 'EXTRA_FLAGS=%s\n' "$(_shell_quote "$EXTRA_FLAGS")"
+  printf 'PIDFILE=%s\n' "$(_shell_quote "$PIDFILE_PATH")"
+  cat <<'LAUNCH_BODY'
 
 if [[ ! -x "$LLAMA_BIN" ]]; then
   echo "ERROR: llama-server binary not found or not executable: $LLAMA_BIN"
   exit 1
 fi
 
-# Check for existing process using port-based detection
+EXISTING_PID=""
 if command -v ss &>/dev/null; then
-  EXISTING_PID=$(ss -tlnp 2>/dev/null | awk -v port=":${LLAMA_PORT}" '$4 ~ port {match($0, /pid=([0-9]+)/, arr); print arr[1]}' | head -1 || true)
+  EXISTING_PID=$(ss -tlnp 2>/dev/null | awk -v port=":${LLAMA_PORT}" '$4 ~ port {print}' | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1 || true)
 elif command -v netstat &>/dev/null; then
   EXISTING_PID=$(netstat -tlnp 2>/dev/null | awk -v port=":${LLAMA_PORT}" '$4 ~ port {split($7, arr, "/"); print arr[1]}' | head -1 || true)
 fi
 
 if [[ -n "$EXISTING_PID" ]]; then
-  echo -e "\\n llama-server already running (PID: $EXISTING_PID)"
+  echo -e "\n llama-server already running (PID: $EXISTING_PID)"
   if [[ -t 0 ]]; then
     read -rp " Restart? [y/N]: " kill_choice
   else
@@ -1879,7 +1914,7 @@ echo " Batch  : -b ${BATCH} -ub ${UBATCH}"
 echo " KV     : K=${CACHE_K}  V=${CACHE_V}"
 echo " Jinja  : ${USE_JINJA}"
 [[ -n "${EXTRA_FLAGS}" ]] && echo " Extras : ${EXTRA_FLAGS}"
-echo " API    : http://localhost:8080/v1"
+echo " API    : http://localhost:${LLAMA_PORT}/v1"
 echo ""
 
 # shellcheck disable=SC2086
@@ -1903,7 +1938,7 @@ echo "$LLAMA_PID" > "$PIDFILE"
 
 ready=false
 for _ in {1..60}; do
-  if curl -sf http://localhost:${LLAMA_PORT}/v1/models &>/dev/null; then
+  if curl -sf "http://localhost:${LLAMA_PORT}/v1/models" &>/dev/null; then
     echo " llama-server ready (PID: $LLAMA_PID)"
     echo " Run: hermes ← Hermes Agent"
     echo " Run: goose ← Goose (if installed)"
@@ -1912,7 +1947,7 @@ for _ in {1..60}; do
     break
   fi
   if ! kill -0 "$LLAMA_PID" 2>/dev/null; then
-    echo " ERROR: llama-server process died unexpectedly. Check log."
+    echo " ERROR: llama-server process died unexpectedly. Check /tmp/llama-server.log."
     exit 1
   fi
   sleep 1
@@ -1925,36 +1960,8 @@ if [[ "$ready" != "true" ]]; then
 fi
 
 wait "$LLAMA_PID"
-LAUNCH_TEMPLATE
-
-# Assign PIDFILE_PATH first, THEN export
-# FIX: PIDFILE_PATH must NOT be registered for cleanup — it is baked into
-# start-llm.sh and must persist after the installer exits.
-PIDFILE_PATH=$(mktemp /tmp/llama-server.XXXXXX.pid) || die "Failed to create PID file"
-export GGUF_PATH SEL_NAME LLAMA_SERVER_BIN SAFE_CTX USE_JINJA NGL_VAL BATCH_VAL UBATCH_VAL CACHE_K_VAL CACHE_V_VAL EXTRA_FLAGS PIDFILE_PATH LLAMA_PORT
-
-# Use envsubst if available, otherwise fallback to sed
-if command -v envsubst &>/dev/null; then
-  envsubst '${GGUF_PATH} ${SEL_NAME} ${LLAMA_SERVER_BIN} ${SAFE_CTX} ${USE_JINJA} ${NGL_VAL} ${BATCH_VAL} ${UBATCH_VAL} ${CACHE_K_VAL} ${CACHE_V_VAL} ${EXTRA_FLAGS} ${PIDFILE_PATH} ${LLAMA_PORT}' \
-    <"${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
-else
-  warn "envsubst not found; using sed fallback (slower)."
-  sed -e "s|\${GGUF_PATH}|${GGUF_PATH}|g" \
-    -e "s|\${SEL_NAME}|${SEL_NAME}|g" \
-    -e "s|\${LLAMA_SERVER_BIN}|${LLAMA_SERVER_BIN}|g" \
-    -e "s|\${SAFE_CTX}|${SAFE_CTX}|g" \
-    -e "s|\${USE_JINJA}|${USE_JINJA}|g" \
-    -e "s|\${NGL_VAL}|${NGL_VAL}|g" \
-    -e "s|\${BATCH_VAL}|${BATCH_VAL}|g" \
-    -e "s|\${UBATCH_VAL}|${UBATCH_VAL}|g" \
-    -e "s|\${CACHE_K_VAL}|${CACHE_K_VAL}|g" \
-    -e "s|\${CACHE_V_VAL}|${CACHE_V_VAL}|g" \
-    -e "s|\${EXTRA_FLAGS}|${EXTRA_FLAGS}|g" \
-    -e "s|\${PIDFILE_PATH}|${PIDFILE_PATH}|g" \
-    -e "s|\${LLAMA_PORT}|${LLAMA_PORT}|g" \
-    "${LAUNCH_SCRIPT}.template" >"$LAUNCH_SCRIPT"
-fi
-rm -f "${LAUNCH_SCRIPT}.template"
+LAUNCH_BODY
+} > "$LAUNCH_SCRIPT"
 chmod +x "$LAUNCH_SCRIPT"
 ok "Launch script: ~/start-llm.sh"
 
@@ -1963,7 +1970,7 @@ ok "Launch script: ~/start-llm.sh"
 # =============================================================================
 if [[ -z "$_SMO" ]]; then
   step "Creating systemd user service for llama-server..."
-  mkdir -p "${HOME}/.local/bin"
+  mkdir -p "${HOME}/.local/bin" "${HOME}/.config/systemd/user"
   cat >"${HOME}/.local/bin/llama-server-wrapper" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1992,6 +1999,7 @@ WantedBy=default.target
 SERVICE
 
   if systemctl --user is-system-running &>/dev/null; then
+    systemctl --user daemon-reload 2>/dev/null || true
     systemctl --user enable llama-server.service 2>/dev/null || true
     ok "llama-server systemd service enabled."
     echo " Persistent auto-start: sudo loginctl enable-linger $USER"
@@ -2009,6 +2017,7 @@ sleep 1
 # Start via the generated launch script
 nohup bash "$LAUNCH_SCRIPT" >/tmp/llama-server.log 2>&1 &
 LAUNCH_PID=$!
+skip "Launcher process started (PID: ${LAUNCH_PID})"
 
 READY=false
 for _ in {1..60}; do
