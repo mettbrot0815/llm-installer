@@ -11,7 +11,7 @@ LLAMA_DIR="/home/$USER/llama.cpp"
 START_SCRIPT="/home/$USER/start-carnice.sh"
 PORT="8082"
 
-# ====================== 1. SYSTEM & CUDA 12.8 (WSL-OPTIMISED) ======================
+# ====================== 1. SYSTEM & CUDA 12.8 ======================
 setup_fresh_system() {
   echo "→ Updating system..."
   sudo apt-get update
@@ -28,7 +28,7 @@ setup_fresh_system() {
   sudo apt-get update -qq
   sudo apt-get install -y cuda-toolkit-12-8
 
-  # Permanent CUDA environment
+  # Set CUDA environment permanently
   cat << EOF | sudo tee /etc/profile.d/cuda.sh > /dev/null
 export PATH=/usr/local/cuda-12.8/bin\${PATH:+:\${PATH}}
 export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}
@@ -41,11 +41,28 @@ EOF
   echo "✅ CUDA 12.8 ready."
 }
 
-# ====================== 2. BUILD LLAMA.CPP ONLY WHEN NEEDED ======================
+# ====================== 1b. INSTALL GCC 13 (CUDA-COMPATIBLE) ======================
+install_gcc13() {
+  echo "→ Checking GCC version..."
+  if gcc --version | head -1 | grep -qE "13\."; then
+    echo "✅ GCC 13 already default."
+    return 0
+  fi
+
+  echo "→ Installing GCC 13 (required for CUDA 12.8)..."
+  sudo apt-get install -y gcc-13 g++-13
+
+  sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+  sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+
+  echo "✅ GCC 13 set as default."
+  gcc --version
+}
+
+# ====================== 2. BUILD LLAMA.CPP (ONLY WHEN UPDATED) ======================
 build_llama() {
   cd /home/"$USER" || exit
 
-  # Clone if not exists
   if [[ ! -d "$LLAMA_DIR" ]]; then
     echo "→ Cloning llama.cpp..."
     git clone https://github.com/ggerganov/llama.cpp.git "$LLAMA_DIR"
@@ -53,14 +70,13 @@ build_llama() {
     NEED_BUILD=1
   else
     cd "$LLAMA_DIR"
-    # Check for updates
     echo "→ Checking for llama.cpp updates..."
     OLD_COMMIT=$(git rev-parse HEAD)
     git pull --ff-only
     NEW_COMMIT=$(git rev-parse HEAD)
 
     if [[ "$OLD_COMMIT" == "$NEW_COMMIT" ]] && [[ -f "build/bin/llama-server" ]]; then
-      echo "✅ llama.cpp already up-to-date (${NEW_COMMIT:0:7}). Skipping rebuild."
+      echo "✅ Already up-to-date (${NEW_COMMIT:0:7}). Skipping rebuild."
       return 0
     else
       echo "→ Update detected (${OLD_COMMIT:0:7} → ${NEW_COMMIT:0:7}). Rebuilding..."
@@ -68,13 +84,11 @@ build_llama() {
     fi
   fi
 
-  # Only rebuild if needed
   if [[ -n "${NEED_BUILD:-}" ]]; then
     rm -rf build
 
-    # Prevent Windows host CUDA from interfering (temporarily sanitize PATH)
+    # Sanitise PATH to avoid Windows CUDA interference
     SAVED_PATH="$PATH"
-    # Keep only essential Linux paths + our CUDA, remove any Windows directories
     export PATH="/usr/local/cuda-12.8/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
     cmake -B build \
@@ -87,13 +101,11 @@ build_llama() {
       -DCMAKE_CUDA_ARCHITECTURES="86" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCUDAToolkit_ROOT=/usr/local/cuda-12.8 \
-      -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc \
-      -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler"
+      -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc
 
     echo "→ Building llama.cpp (8-15 minutes)..."
     cmake --build build --config Release -j "$(nproc)"
 
-    # Restore original PATH
     export PATH="$SAVED_PATH"
     echo "✅ Build completed!"
   fi
@@ -130,12 +142,12 @@ EOF
   echo "✅ Start script created: ~/start-carnice.sh"
 }
 
-# ====================== 4. DOWNLOAD MODEL (ONE-LINER PROVIDED) ======================
+# ====================== 4. DOWNLOAD MODEL (ONE-LINER) ======================
 download_model() {
   if [[ -f "$MODELS_DIR/Carnice-9b-Q6_K.gguf" ]]; then
-    echo "✅ Model already exists at $MODELS_DIR/Carnice-9b-Q6_K.gguf"
+    echo "✅ Model already exists."
   else
-    echo "→ Model not found. Please download it manually with this command:"
+    echo "→ Please download the model manually:"
     echo ""
     echo "mkdir -p $MODELS_DIR && wget -c 'https://huggingface.co/kai-os/Carnice-9b-GGUF/resolve/main/Carnice-9b-Q6_K.gguf?download=true' -O $MODELS_DIR/Carnice-9b-Q6_K.gguf"
     echo ""
@@ -143,8 +155,9 @@ download_model() {
   fi
 }
 
-# ====================== 5. MAIN EXECUTION ======================
+# ====================== MAIN ======================
 setup_fresh_system
+install_gcc13          # <-- Critical fix for GCC compatibility
 mkdir -p "$MODELS_DIR"
 build_llama
 create_start_script
@@ -155,9 +168,9 @@ echo "========================================"
 echo "✅ Installation Ready!"
 echo ""
 echo "Next steps:"
-echo "  1. Download the model if not done yet (see above)"
-echo "  2. Start the server:   ~/start-carnice.sh"
-echo "  3. API endpoint:       http://localhost:${PORT}/v1"
+echo "  1. Download model if not done yet (see above)"
+echo "  2. Start server:   ~/start-carnice.sh"
+echo "  3. API endpoint:   http://localhost:${PORT}/v1"
 echo ""
-echo "To stop the server: Press Ctrl+C"
+echo "To stop server: Press Ctrl+C"
 echo "========================================"
