@@ -70,20 +70,23 @@ create_hermes_script() {
 #!/usr/bin/env bash
 cd ~/llama.cpp
 
-echo "🚀 Starting Carnice-9B Agent (64k context)..."
+echo "🚀 Starting Carnice-9B Agent (128k context)..."
 
 ./build/bin/llama-server \
   -m ~/llm-models/Carnice-9b-Q6_K.gguf \
   -ngl 94 \
-  -fa 1 \
+  -c 131072 \
   -b 1024 \
   -ub 512 \
-  -c 65536 \
   --cache-type-k q8_0 \
   --cache-type-v q4_0 \
+  --temp 0.7 \
+  --top-p 0.95 \
+  --repeat-penalty 1.05 \
   --host 0.0.0.0 \
   --port 8082 \
   --jinja \
+  --fa 1 \
   --no-mmap \
   --defrag-thold 0.1
 EOF
