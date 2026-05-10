@@ -9,7 +9,7 @@ echo "========================================"
 MODELS_DIR="/home/$USER/llm-models"
 LLAMA_DIR="/home/$USER/llama.cpp"
 START_SCRIPT="/home/$USER/start-carnice.sh"
-PORT="8082"
+PORT="8080"   # changed to default port 8080
 
 # ---------------------------------------------
 # 1. System & CUDA 12.6 (stable)
@@ -150,7 +150,7 @@ build_llama() {
 }
 
 # ---------------------------------------------
-# 5. Create start script for Carnice-9B (FIXED)
+# 5. Create start script for Carnice-9B (port 8080, flash-attn fixed)
 # ---------------------------------------------
 create_start_script() {
   cat > "$START_SCRIPT" << 'EOF'
@@ -159,8 +159,8 @@ cd ~/llama.cpp
 
 echo "🚀 Starting Carnice-9B Agent (128k context | optimised for RTX 3060)"
 
-# Kill any existing llama-server on port 8082
-pkill -f "llama-server.*--port 8082" || true
+# Kill any existing llama-server on port 8080
+pkill -f "llama-server.*--port 8080" || true
 sleep 1
 
 ./build/bin/llama-server \
@@ -175,7 +175,7 @@ sleep 1
   --top-p 0.95 \
   --repeat-penalty 1.05 \
   --host 0.0.0.0 \
-  --port 8082 \
+  --port 8080 \
   --jinja \
   --flash-attn on \
   --no-mmap \
