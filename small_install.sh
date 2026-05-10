@@ -150,7 +150,7 @@ build_llama() {
 }
 
 # ---------------------------------------------
-# 5. Create start script for Carnice-9B
+# 5. Create start script for Carnice-9B (FIXED)
 # ---------------------------------------------
 create_start_script() {
   cat > "$START_SCRIPT" << 'EOF'
@@ -158,6 +158,10 @@ create_start_script() {
 cd ~/llama.cpp
 
 echo "🚀 Starting Carnice-9B Agent (128k context | optimised for RTX 3060)"
+
+# Kill any existing llama-server on port 8082
+pkill -f "llama-server.*--port 8082" || true
+sleep 1
 
 ./build/bin/llama-server \
   -m ~/llm-models/Carnice-9b-Q6_K.gguf \
@@ -173,7 +177,7 @@ echo "🚀 Starting Carnice-9B Agent (128k context | optimised for RTX 3060)"
   --host 0.0.0.0 \
   --port 8082 \
   --jinja \
-  --fa 1 \
+  --flash-attn on \
   --no-mmap \
   --defrag-thold 0.1
 EOF
