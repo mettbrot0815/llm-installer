@@ -34,9 +34,9 @@ export PATH=/usr/local/cuda-12.6/bin\${PATH:+:\${PATH}}
 export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}
 EOF
 
-  # Apply to current session
-  export PATH=/usr/local/cuda-12.6/bin:$PATH
-  export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH
+  # Apply to current session (fix unbound variable)
+  export PATH="/usr/local/cuda-12.6/bin:${PATH:-}"
+  export LD_LIBRARY_PATH="/usr/local/cuda-12.6/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
   echo "✅ CUDA 12.6 ready."
 }
