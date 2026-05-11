@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "========================================"
-echo "🚀 Qwopus-GLM-18B (Q4_K_M) Installer"
+echo "🚀 Qwopus-GLM-18B (Healed Q4_K_M) Installer"
 echo "   Ubuntu 24.04 WSL2 | RTX 3060 12GB"
 echo "   Context: 64K | TurboQuant + Flash Attention"
 echo "========================================"
@@ -12,8 +12,9 @@ LLAMA_DIR="/home/$USER/turboquant-llama"
 START_SCRIPT="/home/$USER/start-qwopus.sh"
 PORT="8080"
 
-MODEL_REPO="Jackrong/Qwopus-GLM-18B-Merged-GGUF"
-MODEL_FILE="Qwopus-GLM-18B-Merged-Q4_K_M.gguf"
+# Use the Healed version from KyleHessling1
+MODEL_REPO="KyleHessling1/Qwopus-GLM-18B-Merged-GGUF"
+MODEL_FILE="Qwopus-GLM-18B-Healed-Q4_K_M.gguf"
 EXPECTED_SIZE_GB=9.2
 
 # ---------------------------------------------
@@ -193,7 +194,7 @@ setup_hfd() {
 }
 
 # ---------------------------------------------
-# 6. Download model from Jackrong
+# 6. Download Healed model from KyleHessling1
 # ---------------------------------------------
 download_model() {
   local model_path="${MODELS_DIR}/${MODEL_FILE}"
@@ -229,15 +230,14 @@ download_model() {
 }
 
 # ---------------------------------------------
-# 7. Create start script - FIXED version
-#    No inline comments after backslashes
+# 7. Create start script - uses Healed filename
 # ---------------------------------------------
 create_start_script() {
   cat > "$START_SCRIPT" << EOF
 #!/usr/bin/env bash
 cd ~/turboquant-llama
 
-echo "🚀 Starting Qwopus-GLM-18B (64K context | TurboQuant | RTX 3060 12GB)"
+echo "🚀 Starting Qwopus-GLM-18B Healed (64K context | TurboQuant | RTX 3060 12GB)"
 echo "   Model: ${MODEL_FILE}"
 echo "   Context: 65536 tokens | KV Cache: turbo4 | Flash Attention: ON"
 
@@ -273,7 +273,7 @@ EOF
 print_finish() {
   echo ""
   echo "========================================"
-  echo "✅ Qwopus-GLM-18B (Q4_K_M) installation complete!"
+  echo "✅ Qwopus-GLM-18B Healed (Q4_K_M) installation complete!"
   echo "✅ TurboQuant + Flash Attention + 64K context configured."
   echo "✅ Windows binaries & environment blocked."
   echo ""
