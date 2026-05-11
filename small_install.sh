@@ -4,12 +4,59 @@ set -euo pipefail
 echo "========================================"
 echo "🚀 Fresh Ubuntu 24.04 WSL2 + RTX 3060 12GB Installer"
 echo "   CUDA 12.6 (patched) + Carnice-9B Agent (128k Context)"
+echo "   + Windows binaries & environment blocked"
 echo "========================================"
 
 MODELS_DIR="/home/$USER/llm-models"
 LLAMA_DIR="/home/$USER/llama.cpp"
 START_SCRIPT="/home/$USER/start-carnice.sh"
-PORT="8080"   # changed to default port 8080
+PORT="8080"
+
+# ---------------------------------------------
+# 0. Sanitize PATH and Windows env vars
+# ---------------------------------------------
+sanitize_path_now() {
+  local new_path=""
+  local IFS=':'
+  for dir in $PATH; do
+    if [[ "$dir" != /mnt/* ]]; then
+      new_path="${new_path:+$new_path:}$dir"
+    fi
+  done
+  export PATH="$new_path"
+  unset WSLENV USERPROFILE APPDATA LOCALAPPDATA HOMEDRIVE HOMEPATH
+  echo "→ Windows paths & env vars removed for this session."
+}
+
+make_sanitizer_permanent() {
+  local bashrc="$HOME/.bashrc"
+  local profile="$HOME/.profile"
+  local marker="# --- WSL SANITIZER (Windows binaries & env) ---"
+
+  for rc in "$bashrc" "$profile"; do
+    if [[ -f "$rc" ]] && ! grep -qF "$marker" "$rc"; then
+      cat >> "$rc" << 'EOF'
+
+# --- WSL SANITIZER (Windows binaries & env) ---
+if [[ -n "$WSL_DISTRO_NAME" ]]; then
+  # Clean PATH
+  NEW_PATH=""
+  IFS=':' read -ra PATHS <<< "$PATH"
+  for p in "${PATHS[@]}"; do
+    if [[ "$p" != /mnt/* ]]; then
+      NEW_PATH="${NEW_PATH:+$NEW_PATH:}$p"
+    fi
+  done
+  export PATH="$NEW_PATH"
+
+  # Remove Windows-specific environment variables
+  unset WSLENV USERPROFILE APPDATA LOCALAPPDATA HOMEDRIVE HOMEPATH
+fi
+EOF
+      echo "→ Sanitizer added to $rc"
+    fi
+  done
+}
 
 # ---------------------------------------------
 # 1. System & CUDA 12.6 (stable)
@@ -19,7 +66,8 @@ setup_fresh_system() {
   sudo apt-get update
 
   echo "→ Installing dependencies..."
-  sudo apt-get install -y build-essential cmake git curl wget python3 python3-pip linux-headers-generic ninja-build
+  sudo apt-get install -y build-essential cmake git curl wget python3 python3-pip \
+                          python3-venv linux-headers-generic ninja-build
 
   echo "→ Installing CUDA 12.6 (WSL-optimised)..."
   local keyring_deb="/tmp/cuda-keyring_1.1-1_all.deb"
@@ -30,13 +78,11 @@ setup_fresh_system() {
   sudo apt-get update -qq
   sudo apt-get install -y cuda-toolkit-12-6
 
-  # Permanent environment
   cat << EOF | sudo tee /etc/profile.d/cuda.sh > /dev/null
 export PATH=/usr/local/cuda-12.6/bin\${PATH:+:\${PATH}}
 export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}
 EOF
 
-  # Apply to current session
   export PATH="/usr/local/cuda-12.6/bin:${PATH:-}"
   export LD_LIBRARY_PATH="/usr/local/cuda-12.6/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
@@ -77,7 +123,6 @@ patch_cuda_math() {
 
   echo "📁 Found CUDA math header: $math_h"
 
-  # Already patched?
   if grep -q "cospi(double x) noexcept(true)" "$math_h"; then
     echo "✅ CUDA header already patched."
     return 0
@@ -86,7 +131,6 @@ patch_cuda_math() {
   echo "🔧 Creating backup and patching..."
   sudo cp "$math_h" "${math_h}.backup"
 
-  # Add noexcept(true) to the six problematic functions
   sudo sed -i 's/\(cospi(double x)\);/\1 noexcept(true);/g' "$math_h"
   sudo sed -i 's/\(sinpi(double x)\);/\1 noexcept(true);/g' "$math_h"
   sudo sed -i 's/\(cospif(float x)\);/\1 noexcept(true);/g' "$math_h"
@@ -127,7 +171,6 @@ build_llama() {
   if [[ -n "${NEED_BUILD:-}" ]]; then
     rm -rf build
 
-    # Isolate from Windows CUDA paths
     SAVED_PATH="$PATH"
     export PATH="/usr/local/cuda-12.6/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -150,7 +193,7 @@ build_llama() {
 }
 
 # ---------------------------------------------
-# 5. Create start script for Carnice-9B (port 8080, flash-attn fixed)
+# 5. Create start script for Carnice-9B
 # ---------------------------------------------
 create_start_script() {
   cat > "$START_SCRIPT" << 'EOF'
@@ -159,7 +202,6 @@ cd ~/llama.cpp
 
 echo "🚀 Starting Carnice-9B Agent (128k context | optimised for RTX 3060)"
 
-# Kill any existing llama-server on port 8080
 pkill -f "llama-server.*--port 8080" || true
 sleep 1
 
@@ -177,7 +219,7 @@ sleep 1
   --host 0.0.0.0 \
   --port 8080 \
   --jinja \
-  --flash-attn on \
+  --flash-attn \
   --no-mmap \
   --defrag-thold 0.1
 EOF
@@ -205,6 +247,7 @@ download_model() {
 # ---------------------------------------------
 # 7. Main execution
 # ---------------------------------------------
+sanitize_path_now
 setup_fresh_system
 install_gcc13
 patch_cuda_math
@@ -212,15 +255,19 @@ mkdir -p "$MODELS_DIR"
 build_llama
 create_start_script
 download_model
+make_sanitizer_permanent
 
 echo ""
 echo "========================================"
-echo "✅ Installation complete – no more CUDA/glibc conflicts!"
+echo "✅ Installation complete – no CUDA/glibc conflicts!"
+echo "✅ Windows binaries (node, npm, python, git, ...) blocked."
+echo "✅ Windows environment variables (WSLENV, APPDATA, ...) removed."
 echo ""
 echo "Next steps:"
 echo "  1. Download the model if not yet done (see above)"
-echo "  2. Start the server:   ~/start-carnice.sh"
-echo "  3. API endpoint:       http://localhost:${PORT}/v1"
+echo "  2. Close and reopen your WSL terminal"
+echo "  3. Start the server:   ~/start-carnice.sh"
+echo "  4. API endpoint:       http://localhost:${PORT}/v1"
 echo ""
 echo "To stop: Press Ctrl+C"
 echo "========================================"
