@@ -244,13 +244,14 @@ download_model() {
   
   mkdir -p "$MODELS_DIR"
   
-  # Use hfd with aria2 backend, 16 threads
-  ~/hfd.sh "${MODEL_REPO}" --include "${MODEL_FILE}" --local-dir "$MODELS_DIR" --threads 16
+  # Correct hfd syntax:
+  # hfd <REPO_ID> --include <pattern> --local-dir <dir> -x <threads>
+  ~/hfd.sh "$MODEL_REPO" --include "$MODEL_FILE" --local-dir "$MODELS_DIR" -x 16 --tool aria2c
   
   if [[ -f "$model_path" ]]; then
     echo "✅ Model downloaded successfully!"
   else
-    echo "❌ Download failed. Trying fallback with wget..."
+    echo "❌ hfd download failed. Trying fallback with wget..."
     echo "   Fallback URL: https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}"
     wget -c "https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}" -O "$model_path"
     if [[ -f "$model_path" ]]; then
@@ -261,7 +262,6 @@ download_model() {
     fi
   fi
 }
-
 # ---------------------------------------------
 # 7. Create start script for Qwopus-GLM-18B
 #    64k context, TurboQuant turbo4, Flash Attention
