@@ -8,14 +8,13 @@ echo "   Context: 64K | TurboQuant + Flash Attention"
 echo "========================================"
 
 MODELS_DIR="/home/$USER/llm-models"
-LLAMA_DIR="/home/$USER/turboquant-llama"      # TurboQuant fork
+LLAMA_DIR="/home/$USER/turboquant-llama"
 START_SCRIPT="/home/$USER/start-qwopus.sh"
 PORT="8080"
 
-# Model details – using the Jackrong repository
 MODEL_REPO="Jackrong/Qwopus-GLM-18B-Merged-GGUF"
 MODEL_FILE="Qwopus-GLM-18B-Merged-Q4_K_M.gguf"
-EXPECTED_SIZE_GB=9.2   # ~9.2 GB for Q4_K_M quantization
+EXPECTED_SIZE_GB=9.2
 
 # ---------------------------------------------
 # 0. Sanitize PATH & Windows env vars
@@ -37,7 +36,6 @@ make_sanitizer_permanent() {
   local bashrc="$HOME/.bashrc"
   local profile="$HOME/.profile"
   local marker="# --- WSL SANITIZER (Windows binaries & env) ---"
-
   for rc in "$bashrc" "$profile"; do
     if [[ -f "$rc" ]] && ! grep -qF "$marker" "$rc"; then
       cat >> "$rc" << 'EOF'
@@ -66,28 +64,22 @@ EOF
 setup_fresh_system() {
   echo "→ Updating system..."
   sudo apt-get update
-
   echo "→ Installing dependencies..."
   sudo apt-get install -y build-essential cmake git curl wget python3 python3-pip \
                           python3-venv linux-headers-generic ninja-build aria2
-
   echo "→ Installing CUDA 12.6 (WSL-optimised)..."
   local keyring_deb="/tmp/cuda-keyring_1.1-1_all.deb"
   wget -q -O "$keyring_deb" https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
   sudo dpkg -i "$keyring_deb"
   rm -f "$keyring_deb"
-
   sudo apt-get update -qq
   sudo apt-get install -y cuda-toolkit-12-6
-
   cat << EOF | sudo tee /etc/profile.d/cuda.sh > /dev/null
 export PATH=/usr/local/cuda-12.6/bin\${PATH:+:\${PATH}}
 export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}
 EOF
-
   export PATH="/usr/local/cuda-12.6/bin:${PATH:-}"
   export LD_LIBRARY_PATH="/usr/local/cuda-12.6/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
   echo "✅ CUDA 12.6 ready."
 }
 
@@ -100,55 +92,45 @@ install_gcc13() {
     echo "✅ GCC 13 already default."
     return 0
   fi
-
   echo "→ Installing GCC 13..."
   sudo apt-get install -y gcc-13 g++-13
-
   sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
   sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
-
   echo "✅ GCC 13 set as default."
   gcc --version
 }
 
 # ---------------------------------------------
-# 3. Patch CUDA math_functions.h (noexcept fix)
+# 3. Patch CUDA math_functions.h
 # ---------------------------------------------
 patch_cuda_math() {
   local math_h
   math_h=$(find /usr/local/cuda-* -name "math_functions.h" -path "*/crt/math_functions.h" 2>/dev/null | head -1)
-
   if [[ -z "$math_h" ]]; then
     echo "⚠️  Could not find math_functions.h – skipping patch."
     return 0
   fi
-
   echo "📁 Found CUDA math header: $math_h"
-
   if grep -q "cospi(double x) noexcept(true)" "$math_h"; then
     echo "✅ CUDA header already patched."
     return 0
   fi
-
   echo "🔧 Creating backup and patching..."
   sudo cp "$math_h" "${math_h}.backup"
-
   sudo sed -i 's/\(cospi(double x)\);/\1 noexcept(true);/g' "$math_h"
   sudo sed -i 's/\(sinpi(double x)\);/\1 noexcept(true);/g' "$math_h"
   sudo sed -i 's/\(cospif(float x)\);/\1 noexcept(true);/g' "$math_h"
   sudo sed -i 's/\(sinpif(float x)\);/\1 noexcept(true);/g' "$math_h"
   sudo sed -i 's/\(rsqrt(double x)\);/\1 noexcept(true);/g' "$math_h"
   sudo sed -i 's/\(rsqrtf(float x)\);/\1 noexcept(true);/g' "$math_h"
-
   echo "✅ Patch applied successfully."
 }
 
 # ---------------------------------------------
-# 4. Build TurboQuant llama.cpp (CarapaceUDE fork)
+# 4. Build TurboQuant llama.cpp
 # ---------------------------------------------
 build_turboquant() {
   cd "/home/$USER" || exit
-
   if [[ ! -d "$LLAMA_DIR" ]]; then
     echo "→ Cloning TurboQuant fork (CarapaceUDE/turboquant-llama)..."
     git clone https://github.com/CarapaceUDE/turboquant-llama.git "$LLAMA_DIR"
@@ -161,10 +143,8 @@ build_turboquant() {
     LOCAL=$(git rev-parse @)
     REMOTE=$(git rev-parse @{u} 2>/dev/null || echo "")
     if [[ -z "$REMOTE" ]]; then
-      echo "⚠️  No upstream branch set – assuming no updates."
       REMOTE="$LOCAL"
     fi
-
     if [[ "$LOCAL" != "$REMOTE" ]]; then
       echo "→ Update available (${LOCAL:0:7} → ${REMOTE:0:7}). Pulling..."
       git pull --ff-only
@@ -177,13 +157,10 @@ build_turboquant() {
       return 0
     fi
   fi
-
   if [[ -n "${NEED_BUILD:-}" ]]; then
     rm -rf build
-
     SAVED_PATH="$PATH"
     export PATH="/usr/local/cuda-12.6/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
     cmake -B build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DGGML_CUDA=ON \
@@ -193,21 +170,18 @@ build_turboquant() {
       -DGGML_CUDA_GRAPHS=ON \
       -DGGML_NATIVE=ON \
       -DCMAKE_CUDA_ARCHITECTURES="86"
-
     echo "→ Building TurboQuant with CUDA (8‑12 minutes)..."
     cmake --build build --config Release -j "$(nproc)"
-
     export PATH="$SAVED_PATH"
     echo "✅ TurboQuant build completed!"
   fi
 }
 
 # ---------------------------------------------
-# 5. Setup hfd for fast model downloads
+# 5. Setup hfd for fast downloads
 # ---------------------------------------------
 setup_hfd() {
   local hfd_script="/home/$USER/hfd.sh"
-  
   if [[ ! -f "$hfd_script" ]]; then
     echo "→ Downloading hfd download tool..."
     wget -q https://hf-mirror.com/hfd/hfd.sh -O "$hfd_script"
@@ -219,11 +193,10 @@ setup_hfd() {
 }
 
 # ---------------------------------------------
-# 6. Download Qwopus-GLM-18B (Q4_K_M) from Jackrong
+# 6. Download model from Jackrong
 # ---------------------------------------------
 download_model() {
   local model_path="${MODELS_DIR}/${MODEL_FILE}"
-  
   if [[ -f "$model_path" ]]; then
     local actual_size=$(du -b "$model_path" | cut -f1)
     local expected_bytes=$(echo "$EXPECTED_SIZE_GB * 1024 * 1024 * 1024" | bc | cut -d. -f1)
@@ -235,24 +208,16 @@ download_model() {
       rm -f "$model_path"
     fi
   fi
-  
   echo ""
   echo "🚀 Downloading ${MODEL_FILE} using hfd (multi-threaded)..."
   echo "   Repository: ${MODEL_REPO}"
   echo "   File size: ~${EXPECTED_SIZE_GB} GB"
-  echo ""
-
   mkdir -p "$MODELS_DIR"
-  
-  # Export Hugging Face mirror for faster downloads (option but don't rely on it)
   export HF_ENDPOINT=https://hf-mirror.com
-  
-  # Use hfd with aria2 backend, max threads = 10 (hfd limit)
   if ~/hfd.sh "$MODEL_REPO" --include "$MODEL_FILE" --local-dir "$MODELS_DIR" -x 10 --tool aria2c; then
     echo "✅ Model downloaded successfully via hfd!"
   else
     echo "❌ hfd download failed. Trying fallback with wget..."
-    echo "   Fallback URL: https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}"
     wget -c "https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}" -O "$model_path"
     if [[ -f "$model_path" ]]; then
       echo "✅ Model downloaded via wget fallback."
@@ -264,8 +229,8 @@ download_model() {
 }
 
 # ---------------------------------------------
-# 7. Create start script for Qwopus-GLM-18B
-#    64k context, TurboQuant turbo4, Flash Attention
+# 7. Create start script - FIXED version
+#    No inline comments after backslashes
 # ---------------------------------------------
 create_start_script() {
   cat > "$START_SCRIPT" << EOF
@@ -281,13 +246,13 @@ sleep 1
 
 ./build/bin/llama-server \\
   -m ~/llm-models/${MODEL_FILE} \\
-  -ngl 99 \\                 # Load all layers (adjust down if OOM)
-  -c 65536 \\               # 64K context
-  -b 1024 \\                # Batch size
-  -ub 512 \\                # Micro batch
-  -ctk turbo4 \\            # TurboQuant for Key cache
-  -ctv turbo4 \\            # TurboQuant for Value cache
-  -fa on \\                 # Flash Attention
+  -ngl 99 \\
+  -c 65536 \\
+  -b 1024 \\
+  -ub 512 \\
+  -ctk turbo4 \\
+  -ctv turbo4 \\
+  -fa on \\
   --temp 0.7 \\
   --top-p 0.95 \\
   --repeat-penalty 1.05 \\
@@ -303,7 +268,7 @@ EOF
 }
 
 # ---------------------------------------------
-# 8. Print post-install instructions
+# 8. Finish
 # ---------------------------------------------
 print_finish() {
   echo ""
@@ -326,7 +291,7 @@ print_finish() {
 }
 
 # ---------------------------------------------
-# Main execution
+# Main
 # ---------------------------------------------
 sanitize_path_now
 setup_fresh_system
