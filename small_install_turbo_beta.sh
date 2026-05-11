@@ -64,7 +64,7 @@ setup_fresh_system() {
 
   echo "→ Installing dependencies..."
   sudo apt-get install -y build-essential cmake git curl wget python3 python3-pip \
-                          python3-venv linux-headers-generic ninja-build
+                          python3-venv linux-headers-generic ninja-build aria2
 
   echo "→ Installing CUDA 12.6 (WSL-optimised)..."
   local keyring_deb="/tmp/cuda-keyring_1.1-1_all.deb"
@@ -200,7 +200,23 @@ build_turboquant() {
 }
 
 # ---------------------------------------------
-# 5. Create start script for Harmonic-Hermes-9B
+# 5. Setup hfd for fast model downloads
+# ---------------------------------------------
+setup_hfd() {
+  local hfd_script="/home/$USER/hfd.sh"
+  
+  if [[ ! -f "$hfd_script" ]]; then
+    echo "→ Downloading hfd download tool..."
+    wget -q https://hf-mirror.com/hfd/hfd.sh -O "$hfd_script"
+    chmod a+x "$hfd_script"
+    echo "✅ hfd installed."
+  else
+    echo "✅ hfd already installed."
+  fi
+}
+
+# ---------------------------------------------
+# 6. Create start script for Harmonic-Hermes-9B
 #    Using TurboQuant KV cache (turbo4) + Flash Attention
 # ---------------------------------------------
 create_start_script() {
@@ -237,23 +253,36 @@ EOF
 }
 
 # ---------------------------------------------
-# 6. Model download instruction
+# 7. Download model with hfd (multi-threaded)
 # ---------------------------------------------
 download_model() {
-  if [[ -f "$MODELS_DIR/Harmonic-Hermes-9B-Q5_K_M.gguf" ]]; then
-    echo "✅ Model already exists."
+  local model_path="${MODELS_DIR}/Harmonic-Hermes-9B-Q5_K_M.gguf"
+  
+  if [[ -f "$model_path" ]]; then
+    echo "✅ Model already exists at $model_path"
+    return 0
+  fi
+  
+  echo ""
+  echo "🚀 Downloading Harmonic-Hermes-9B-Q5_K_M.gguf using hfd (multi-threaded)..."
+  echo "   This will be much faster than a regular wget download."
+  echo ""
+  
+  # Use hfd with aria2 backend
+  ~/hfd.sh QuantFactory/Harmonic-Hermes-9B-GGUF --include "Harmonic-Hermes-9B-Q5_K_M.gguf" --local-dir "$MODELS_DIR" --threads 16
+  
+  if [[ -f "$model_path" ]]; then
+    echo "✅ Model downloaded successfully!"
   else
-    echo ""
-    echo "📥 Download the Harmonic-Hermes-9B-Q5_K_M model with:"
-    echo ""
-    echo "mkdir -p $MODELS_DIR && wget -c 'https://huggingface.co/QuantFactory/Harmonic-Hermes-9B-GGUF/resolve/main/Harmonic-Hermes-9B-Q5_K_M.gguf' -O $MODELS_DIR/Harmonic-Hermes-9B-Q5_K_M.gguf"
-    echo ""
-    read -rp "Press Enter after downloading (or Ctrl+C to exit)..."
+    echo "❌ Download failed. Please check your network connection and try again."
+    echo "   You can also try downloading manually with:"
+    echo "   huggingface-cli download QuantFactory/Harmonic-Hermes-9B-GGUF Harmonic-Hermes-9B-Q5_K_M.gguf --local-dir $MODELS_DIR"
+    exit 1
   fi
 }
 
 # ---------------------------------------------
-# 7. Main execution
+# 8. Main execution
 # ---------------------------------------------
 sanitize_path_now
 setup_fresh_system
@@ -261,6 +290,7 @@ install_gcc13
 patch_cuda_math
 mkdir -p "$MODELS_DIR"
 build_turboquant
+setup_hfd
 create_start_script
 download_model
 make_sanitizer_permanent
@@ -270,12 +300,12 @@ echo "========================================"
 echo "✅ TurboQuant + Harmonic-Hermes-9B ready!"
 echo "✅ Windows binaries & env vars blocked."
 echo "✅ TurboQuant KV cache (turbo4) + Flash Attention active."
+echo "✅ Fast downloads enabled via hfd + aria2."
 echo ""
 echo "Next steps:"
-echo "  1. Download the model if not yet done (see above)"
-echo "  2. Close and reopen your WSL terminal"
-echo "  3. Start the server:   ~/start-harmonic.sh"
-echo "  4. API endpoint:       http://localhost:${PORT}/v1"
+echo "  1. Close and reopen your WSL terminal"
+echo "  2. Start the server:   ~/start-harmonic.sh"
+echo "  3. API endpoint:       http://localhost:${PORT}/v1"
 echo ""
 echo "To stop: Press Ctrl+C"
 echo "========================================"
