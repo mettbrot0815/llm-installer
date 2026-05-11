@@ -5,6 +5,7 @@ echo "========================================"
 echo "🚀 Fresh Ubuntu 24.04 WSL2 + RTX 3060 12GB Installer"
 echo "   CUDA 12.6 (patched) + Carnice-9B Agent (128k Context)"
 echo "   + Windows binaries & environment blocked"
+echo "   + llama.cpp rebuilds only on updates"
 echo "========================================"
 
 MODELS_DIR="/home/$USER/llm-models"
@@ -155,22 +156,32 @@ build_llama() {
   else
     cd "$LLAMA_DIR"
     echo "→ Checking for updates..."
-    OLD_COMMIT=$(git rev-parse HEAD)
-    git pull --ff-only
-    NEW_COMMIT=$(git rev-parse HEAD)
+    # Fetch latest without merging (to compare)
+    git fetch --prune
+    LOCAL=$(git rev-parse @)
+    REMOTE=$(git rev-parse @{u} 2>/dev/null || echo "")
+    if [[ -z "$REMOTE" ]]; then
+      echo "⚠️  No upstream branch set – assuming no updates."
+      REMOTE="$LOCAL"
+    fi
 
-    if [[ "$OLD_COMMIT" == "$NEW_COMMIT" ]] && [[ -f "build/bin/llama-server" ]]; then
-      echo "✅ Already up‑to‑date (${NEW_COMMIT:0:7}). Skipping rebuild."
-      return 0
-    else
-      echo "→ Update detected (${OLD_COMMIT:0:7} → ${NEW_COMMIT:0:7}). Rebuilding..."
+    if [[ "$LOCAL" != "$REMOTE" ]]; then
+      echo "→ Update available (${LOCAL:0:7} → ${REMOTE:0:7}). Pulling..."
+      git pull --ff-only
       NEED_BUILD=1
+    elif [[ ! -f "build/bin/llama-server" ]]; then
+      echo "→ Build directory exists but binary missing – rebuilding..."
+      NEED_BUILD=1
+    else
+      echo "✅ Already up‑to‑date (${LOCAL:0:7}). Skipping rebuild."
+      return 0
     fi
   fi
 
   if [[ -n "${NEED_BUILD:-}" ]]; then
     rm -rf build
 
+    # Isolate from Windows paths during build
     SAVED_PATH="$PATH"
     export PATH="/usr/local/cuda-12.6/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -262,6 +273,7 @@ echo "========================================"
 echo "✅ Installation complete – no CUDA/glibc conflicts!"
 echo "✅ Windows binaries (node, npm, python, git, ...) blocked."
 echo "✅ Windows environment variables (WSLENV, APPDATA, ...) removed."
+echo "✅ llama.cpp rebuilds ONLY when 'git pull' fetches new commits."
 echo ""
 echo "Next steps:"
 echo "  1. Download the model if not yet done (see above)"
