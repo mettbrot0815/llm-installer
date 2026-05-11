@@ -12,10 +12,10 @@ LLAMA_DIR="/home/$USER/turboquant-llama"      # TurboQuant fork
 START_SCRIPT="/home/$USER/start-qwopus.sh"
 PORT="8080"
 
-# Model details
-MODEL_REPO="KyleHessling1/Qwopus-GLM-18B-Merged-GGUF"
+# Model details – using the Jackrong repository
+MODEL_REPO="Jackrong/Qwopus-GLM-18B-Merged-GGUF"
 MODEL_FILE="Qwopus-GLM-18B-Merged-Q4_K_M.gguf"
-EXPECTED_SIZE_GB=9.2   # approximate
+EXPECTED_SIZE_GB=9.2   # ~9.2 GB for Q4_K_M quantization
 
 # ---------------------------------------------
 # 0. Sanitize PATH & Windows env vars
@@ -219,7 +219,7 @@ setup_hfd() {
 }
 
 # ---------------------------------------------
-# 6. Download Qwopus-GLM-18B (Q4_K_M)
+# 6. Download Qwopus-GLM-18B (Q4_K_M) from Jackrong
 # ---------------------------------------------
 download_model() {
   local model_path="${MODELS_DIR}/${MODEL_FILE}"
@@ -241,15 +241,15 @@ download_model() {
   echo "   Repository: ${MODEL_REPO}"
   echo "   File size: ~${EXPECTED_SIZE_GB} GB"
   echo ""
-  
+
   mkdir -p "$MODELS_DIR"
   
-  # Correct hfd syntax:
-  # hfd <REPO_ID> --include <pattern> --local-dir <dir> -x <threads>
-  ~/hfd.sh "$MODEL_REPO" --include "$MODEL_FILE" --local-dir "$MODELS_DIR" -x 16 --tool aria2c
+  # Export Hugging Face mirror for faster downloads (option but don't rely on it)
+  export HF_ENDPOINT=https://hf-mirror.com
   
-  if [[ -f "$model_path" ]]; then
-    echo "✅ Model downloaded successfully!"
+  # Use hfd with aria2 backend, max threads = 10 (hfd limit)
+  if ~/hfd.sh "$MODEL_REPO" --include "$MODEL_FILE" --local-dir "$MODELS_DIR" -x 10 --tool aria2c; then
+    echo "✅ Model downloaded successfully via hfd!"
   else
     echo "❌ hfd download failed. Trying fallback with wget..."
     echo "   Fallback URL: https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}"
@@ -262,6 +262,7 @@ download_model() {
     fi
   fi
 }
+
 # ---------------------------------------------
 # 7. Create start script for Qwopus-GLM-18B
 #    64k context, TurboQuant turbo4, Flash Attention
