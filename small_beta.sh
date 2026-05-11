@@ -2,15 +2,20 @@
 set -euo pipefail
 
 echo "========================================"
-echo "🚀 TurboQuant + Harmonic-Hermes-9B Installer"
+echo "🚀 Qwopus-GLM-18B (Q4_K_M) Installer"
 echo "   Ubuntu 24.04 WSL2 | RTX 3060 12GB"
-echo "   Context: 128k | Model: Q5_K_M"
+echo "   Context: 64K | TurboQuant + Flash Attention"
 echo "========================================"
 
 MODELS_DIR="/home/$USER/llm-models"
-LLAMA_DIR="/home/$USER/turboquant-llama"   # Using TurboQuant fork
-START_SCRIPT="/home/$USER/start-harmonic.sh"
+LLAMA_DIR="/home/$USER/turboquant-llama"      # TurboQuant fork
+START_SCRIPT="/home/$USER/start-qwopus.sh"
 PORT="8080"
+
+# Model details
+MODEL_REPO="KyleHessling1/Qwopus-GLM-18B-Merged-GGUF"
+MODEL_FILE="Qwopus-GLM-18B-Merged-Q4_K_M.gguf"
+EXPECTED_SIZE_GB=9.2   # approximate
 
 # ---------------------------------------------
 # 0. Sanitize PATH & Windows env vars
@@ -140,7 +145,6 @@ patch_cuda_math() {
 
 # ---------------------------------------------
 # 4. Build TurboQuant llama.cpp (CarapaceUDE fork)
-#    Rebuilds only on updates or missing binary
 # ---------------------------------------------
 build_turboquant() {
   cd "/home/$USER" || exit
@@ -177,7 +181,6 @@ build_turboquant() {
   if [[ -n "${NEED_BUILD:-}" ]]; then
     rm -rf build
 
-    # Clean PATH for build isolation
     SAVED_PATH="$PATH"
     export PATH="/usr/local/cuda-12.6/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -216,73 +219,113 @@ setup_hfd() {
 }
 
 # ---------------------------------------------
-# 6. Create start script for Harmonic-Hermes-9B
-#    Using TurboQuant KV cache (turbo4) + Flash Attention
-# ---------------------------------------------
-create_start_script() {
-  cat > "$START_SCRIPT" << 'EOF'
-#!/usr/bin/env bash
-cd ~/turboquant-llama
-
-echo "🚀 Starting Harmonic-Hermes-9B (128k context | TurboQuant | RTX 3060)"
-
-pkill -f "llama-server.*--port 8080" || true
-sleep 1
-
-./build/bin/llama-server \
-  -m ~/llm-models/Harmonic-Hermes-9B-Q5_K_M.gguf \
-  -ngl 94 \
-  -c 131072 \
-  -b 1024 \
-  -ub 512 \
-  -ctk turbo4 \
-  -ctv turbo4 \
-  -fa on \
-  --temp 0.7 \
-  --top-p 0.95 \
-  --repeat-penalty 1.05 \
-  --host 0.0.0.0 \
-  --port 8080 \
-  --jinja \
-  --no-mmap \
-  --defrag-thold 0.1
-EOF
-
-  chmod +x "$START_SCRIPT"
-  echo "✅ Start script created: ~/start-harmonic.sh"
-}
-
-# ---------------------------------------------
-# 7. Download model with hfd (multi-threaded)
+# 6. Download Qwopus-GLM-18B (Q4_K_M)
 # ---------------------------------------------
 download_model() {
-  local model_path="${MODELS_DIR}/Harmonic-Hermes-9B-Q5_K_M.gguf"
+  local model_path="${MODELS_DIR}/${MODEL_FILE}"
   
   if [[ -f "$model_path" ]]; then
-    echo "✅ Model already exists at $model_path"
-    return 0
+    local actual_size=$(du -b "$model_path" | cut -f1)
+    local expected_bytes=$(echo "$EXPECTED_SIZE_GB * 1024 * 1024 * 1024" | bc | cut -d. -f1)
+    if [[ $actual_size -gt $((expected_bytes - 500*1024*1024)) ]]; then
+      echo "✅ Model already exists and appears complete: $model_path"
+      return 0
+    else
+      echo "⚠️  Existing model file seems incomplete. Removing and re-downloading."
+      rm -f "$model_path"
+    fi
   fi
   
   echo ""
-  echo "🚀 Downloading Harmonic-Hermes-9B-Q5_K_M.gguf using hfd (multi-threaded)..."
-  echo "   This will be much faster than a regular wget download."
+  echo "🚀 Downloading ${MODEL_FILE} using hfd (multi-threaded)..."
+  echo "   Repository: ${MODEL_REPO}"
+  echo "   File size: ~${EXPECTED_SIZE_GB} GB"
   echo ""
   
-  # Use hfd with aria2 backend
-  ~/hfd.sh QuantFactory/Harmonic-Hermes-9B-GGUF --include "Harmonic-Hermes-9B-Q5_K_M.gguf" --local-dir "$MODELS_DIR" --threads 16
+  mkdir -p "$MODELS_DIR"
+  
+  # Use hfd with aria2 backend, 16 threads
+  ~/hfd.sh "${MODEL_REPO}" --include "${MODEL_FILE}" --local-dir "$MODELS_DIR" --threads 16
   
   if [[ -f "$model_path" ]]; then
     echo "✅ Model downloaded successfully!"
   else
-    echo "❌ Download failed. Please check your network connection and try again."
-    echo "   You can also try downloading manually with:"
-    echo "   huggingface-cli download QuantFactory/Harmonic-Hermes-9B-GGUF Harmonic-Hermes-9B-Q5_K_M.gguf --local-dir $MODELS_DIR"
-    exit 1
+    echo "❌ Download failed. Trying fallback with wget..."
+    echo "   Fallback URL: https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}"
+    wget -c "https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}" -O "$model_path"
+    if [[ -f "$model_path" ]]; then
+      echo "✅ Model downloaded via wget fallback."
+    else
+      echo "❌ Download failed. Please check your network and try again."
+      exit 1
+    fi
   fi
 }
 
 # ---------------------------------------------
-# 8. Main execution
+# 7. Create start script for Qwopus-GLM-18B
+#    64k context, TurboQuant turbo4, Flash Attention
+# ---------------------------------------------
+create_start_script() {
+  cat > "$START_SCRIPT" << EOF
+#!/usr/bin/env bash
+cd ~/turboquant-llama
+
+echo "🚀 Starting Qwopus-GLM-18B (64K context | TurboQuant | RTX 3060 12GB)"
+echo "   Model: ${MODEL_FILE}"
+echo "   Context: 65536 tokens | KV Cache: turbo4 | Flash Attention: ON"
+
+pkill -f "llama-server.*--port ${PORT}" || true
+sleep 1
+
+./build/bin/llama-server \\
+  -m ~/llm-models/${MODEL_FILE} \\
+  -ngl 99 \\                 # Load all layers (adjust down if OOM)
+  -c 65536 \\               # 64K context
+  -b 1024 \\                # Batch size
+  -ub 512 \\                # Micro batch
+  -ctk turbo4 \\            # TurboQuant for Key cache
+  -ctv turbo4 \\            # TurboQuant for Value cache
+  -fa on \\                 # Flash Attention
+  --temp 0.7 \\
+  --top-p 0.95 \\
+  --repeat-penalty 1.05 \\
+  --host 0.0.0.0 \\
+  --port ${PORT} \\
+  --jinja \\
+  --no-mmap \\
+  --defrag-thold 0.1
+EOF
+
+  chmod +x "$START_SCRIPT"
+  echo "✅ Start script created: ~/start-qwopus.sh"
+}
+
+# ---------------------------------------------
+# 8. Print post-install instructions
+# ---------------------------------------------
+print_finish() {
+  echo ""
+  echo "========================================"
+  echo "✅ Qwopus-GLM-18B (Q4_K_M) installation complete!"
+  echo "✅ TurboQuant + Flash Attention + 64K context configured."
+  echo "✅ Windows binaries & environment blocked."
+  echo ""
+  echo "📦 Model location: ${MODELS_DIR}/${MODEL_FILE}"
+  echo "🚀 Start server:    ~/start-qwopus.sh"
+  echo "🌐 API endpoint:    http://localhost:${PORT}/v1"
+  echo ""
+  echo "💡 Tips:"
+  echo "   - If you hit out-of-memory, reduce -c to 32768 or lower -ngl (e.g., -ngl 90)."
+  echo "   - Monitor VRAM with: nvidia-smi"
+  echo "   - For maximum context, close other GPU apps."
+  echo ""
+  echo "To stop server: Press Ctrl+C"
+  echo "========================================"
+}
+
+# ---------------------------------------------
+# Main execution
 # ---------------------------------------------
 sanitize_path_now
 setup_fresh_system
@@ -291,21 +334,7 @@ patch_cuda_math
 mkdir -p "$MODELS_DIR"
 build_turboquant
 setup_hfd
-create_start_script
 download_model
+create_start_script
 make_sanitizer_permanent
-
-echo ""
-echo "========================================"
-echo "✅ TurboQuant + Harmonic-Hermes-9B ready!"
-echo "✅ Windows binaries & env vars blocked."
-echo "✅ TurboQuant KV cache (turbo4) + Flash Attention active."
-echo "✅ Fast downloads enabled via hfd + aria2."
-echo ""
-echo "Next steps:"
-echo "  1. Close and reopen your WSL terminal"
-echo "  2. Start the server:   ~/start-harmonic.sh"
-echo "  3. API endpoint:       http://localhost:${PORT}/v1"
-echo ""
-echo "To stop: Press Ctrl+C"
-echo "========================================"
+print_finish
