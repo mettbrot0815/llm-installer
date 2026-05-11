@@ -12,13 +12,13 @@ LLAMA_DIR="/home/$USER/turboquant-llama"
 START_SCRIPT="/home/$USER/start-qwopus.sh"
 PORT="8080"
 
-# Use the Healed version from KyleHessling1
+# Healed model from KyleHessling1
 MODEL_REPO="KyleHessling1/Qwopus-GLM-18B-Merged-GGUF"
 MODEL_FILE="Qwopus-GLM-18B-Healed-Q4_K_M.gguf"
 EXPECTED_SIZE_GB=9.2
 
 # ---------------------------------------------
-# 0. Sanitize PATH & Windows env vars
+# 0. Sanitize PATH & Windows env vars (current session + permanent)
 # ---------------------------------------------
 sanitize_path_now() {
   local new_path=""
@@ -65,20 +65,25 @@ EOF
 setup_fresh_system() {
   echo "→ Updating system..."
   sudo apt-get update
+
   echo "→ Installing dependencies..."
   sudo apt-get install -y build-essential cmake git curl wget python3 python3-pip \
                           python3-venv linux-headers-generic ninja-build aria2
+
   echo "→ Installing CUDA 12.6 (WSL-optimised)..."
   local keyring_deb="/tmp/cuda-keyring_1.1-1_all.deb"
   wget -q -O "$keyring_deb" https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
   sudo dpkg -i "$keyring_deb"
   rm -f "$keyring_deb"
+
   sudo apt-get update -qq
   sudo apt-get install -y cuda-toolkit-12-6
+
   cat << EOF | sudo tee /etc/profile.d/cuda.sh > /dev/null
 export PATH=/usr/local/cuda-12.6/bin\${PATH:+:\${PATH}}
 export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64\${LD_LIBRARY_PATH:+:\${LD_LIBRARY_PATH}}
 EOF
+
   export PATH="/usr/local/cuda-12.6/bin:${PATH:-}"
   export LD_LIBRARY_PATH="/usr/local/cuda-12.6/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   echo "✅ CUDA 12.6 ready."
@@ -102,7 +107,7 @@ install_gcc13() {
 }
 
 # ---------------------------------------------
-# 3. Patch CUDA math_functions.h
+# 3. Patch CUDA math_functions.h (noexcept fix)
 # ---------------------------------------------
 patch_cuda_math() {
   local math_h
@@ -128,7 +133,8 @@ patch_cuda_math() {
 }
 
 # ---------------------------------------------
-# 4. Build TurboQuant llama.cpp
+# 4. Build TurboQuant llama.cpp (CarapaceUDE fork)
+#    Only rebuilds on updates or missing binary
 # ---------------------------------------------
 build_turboquant() {
   cd "/home/$USER" || exit
@@ -179,7 +185,7 @@ build_turboquant() {
 }
 
 # ---------------------------------------------
-# 5. Setup hfd for fast downloads
+# 5. Setup hfd for fast model downloads
 # ---------------------------------------------
 setup_hfd() {
   local hfd_script="/home/$USER/hfd.sh"
@@ -194,7 +200,7 @@ setup_hfd() {
 }
 
 # ---------------------------------------------
-# 6. Download Healed model from KyleHessling1
+# 6. Download Healed model (fallback to wget if hfd fails)
 # ---------------------------------------------
 download_model() {
   local model_path="${MODELS_DIR}/${MODEL_FILE}"
@@ -230,7 +236,8 @@ download_model() {
 }
 
 # ---------------------------------------------
-# 7. Create start script - uses Healed filename
+# 7. Create start script with robust port killing
+#    Uses ss (standard) to kill any process on PORT
 # ---------------------------------------------
 create_start_script() {
   cat > "$START_SCRIPT" << EOF
@@ -241,7 +248,23 @@ echo "🚀 Starting Qwopus-GLM-18B Healed (64K context | TurboQuant | RTX 3060 1
 echo "   Model: ${MODEL_FILE}"
 echo "   Context: 65536 tokens | KV Cache: turbo4 | Flash Attention: ON"
 
-pkill -f "llama-server.*--port ${PORT}" || true
+PORT=${PORT}
+# Kill any process listening on TCP port \$PORT
+if command -v ss &> /dev/null; then
+    PIDS=\$(ss -tlnp | grep ":\$PORT" | grep -oP 'pid=\K[0-9]+' 2>/dev/null)
+    if [ -n "\$PIDS" ]; then
+        echo "Killing process(es) using port \$PORT: \$PIDS"
+        echo "\$PIDS" | xargs -r sudo kill -9
+    fi
+elif command -v lsof &> /dev/null; then
+    PIDS=\$(lsof -ti:\$PORT 2>/dev/null)
+    if [ -n "\$PIDS" ]; then
+        echo "Killing process(es) using port \$PORT: \$PIDS"
+        echo "\$PIDS" | xargs -r sudo kill -9
+    fi
+else
+    echo "⚠️  Neither ss nor lsof found. Cannot verify port \$PORT."
+fi
 sleep 1
 
 ./build/bin/llama-server \\
@@ -268,7 +291,7 @@ EOF
 }
 
 # ---------------------------------------------
-# 8. Finish
+# 8. Print final instructions
 # ---------------------------------------------
 print_finish() {
   echo ""
@@ -284,14 +307,14 @@ print_finish() {
   echo "💡 Tips:"
   echo "   - If you hit out-of-memory, reduce -c to 32768 or lower -ngl (e.g., -ngl 90)."
   echo "   - Monitor VRAM with: nvidia-smi"
-  echo "   - For maximum context, close other GPU apps."
+  echo "   - The start script automatically kills any process on port ${PORT}."
   echo ""
   echo "To stop server: Press Ctrl+C"
   echo "========================================"
 }
 
 # ---------------------------------------------
-# Main
+# Main execution
 # ---------------------------------------------
 sanitize_path_now
 setup_fresh_system
